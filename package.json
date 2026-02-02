@@ -1,0 +1,10 @@
+{
+  "name": "dzzenos",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "lint": "echo TODO",
+    "dev": "echo Use per-app dev scripts",
+    "build": "echo TODO"
+  }
+}
