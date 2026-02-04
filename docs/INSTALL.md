@@ -42,3 +42,8 @@ Open:
 - This method does **not** expose public ports.
 - It does **not** require VPN/Tailscale.
 - For local-first use on a laptop, install OpenClaw + DzzenOS locally instead (future guide).
+
+
+## Agent-driven install
+
+If you want to trigger installation from chat (agent runs the commands and replies with the link), see: `docs/AGENT-INSTALL.md`.

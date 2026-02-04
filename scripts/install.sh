@@ -1,66 +1,89 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# DzzenOS-OpenClaw installer (remote/server friendly)
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+
 REPO_URL_DEFAULT="https://github.com/Dzzen-com/DzzenOS-OpenClaw.git"
 REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/dzzenos-openclaw}"
 
-OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
+OPENCLAW_CONFIG_PATH_DEFAULT="$HOME/.openclaw/openclaw.json"
+OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_CONFIG_PATH_DEFAULT}"
 OPENCLAW_STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 
-log() { echo "[dzzenos-install] $*"; }
+HOST_DEFAULT="127.0.0.1"
+GATEWAY_PORT_DEFAULT="18789"
+HOST="${HOST:-$HOST_DEFAULT}"
+GATEWAY_PORT="${GATEWAY_PORT:-$GATEWAY_PORT_DEFAULT}"
 
-if ! command -v git >/dev/null 2>&1; then
-  log "git is required"; exit 1
-fi
-if ! command -v node >/dev/null 2>&1; then
-  log "node is required (>=22 recommended)"; exit 1
-fi
-if ! command -v corepack >/dev/null 2>&1; then
-  log "corepack is required (ships with node)."; exit 1
+# --- pretty printing ---
+if [ -t 1 ]; then
+  BOLD='\033[1m'; DIM='\033[2m'; RED='\033[31m'; GRN='\033[32m'; YLW='\033[33m'; BLU='\033[34m'; RST='\033[0m'
+else
+  BOLD=''; DIM=''; RED=''; GRN=''; YLW=''; BLU=''; RST=''
 fi
 
-log "Cloning repo into: $INSTALL_DIR"
+step() { echo -e "${BOLD}${BLU}==>${RST} ${BOLD}$*${RST}"; }
+info() { echo -e "${DIM} • $*${RST}"; }
+ok()   { echo -e "${GRN}✔${RST} $*"; }
+warn() { echo -e "${YLW}!${RST} $*"; }
+err()  { echo -e "${RED}✖${RST} $*"; }
+
+die() { err "$*"; exit 1; }
+
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+step "DzzenOS-OpenClaw installer"
+info "repo:   $REPO_URL"
+info "target: $INSTALL_DIR"
+
+need_cmd git
+need_cmd node
+need_cmd corepack
+
+step "1/4 Clone or update"
 if [ -d "$INSTALL_DIR/.git" ]; then
+  info "Existing repo found — pulling latest"
   (cd "$INSTALL_DIR" && git pull --rebase)
 else
   git clone "$REPO_URL" "$INSTALL_DIR"
 fi
+ok "Repo ready"
 
 cd "$INSTALL_DIR"
 
-log "Enabling corepack"
+step "2/4 Enable Corepack + install dependencies"
 corepack enable >/dev/null 2>&1 || true
-
-log "Installing dependencies"
 corepack pnpm install --frozen-lockfile
+ok "Dependencies installed"
 
-log "Publishing DzzenOS UI to OpenClaw Canvas host"
-# If OPENCLAW_STATE_DIR is set, publish-canvas will use it.
+step "3/4 Build UI + publish to OpenClaw Canvas host"
 export OPENCLAW_STATE_DIR
 corepack pnpm dzzenos:canvas:publish
+ok "UI published to Canvas"
 
-log "Done."
-
-# Print open URLs
+step "4/4 How to open (secure)"
 TOKEN=""
 if [ -f "$OPENCLAW_CONFIG_PATH" ]; then
-  TOKEN=$(node -e 'try{const j=require(process.env.OPENCLAW_CONFIG_PATH||"'$OPENCLAW_CONFIG_PATH'");console.log(j?.gateway?.auth?.token||"");}catch(e){process.exit(0)}')
+  TOKEN=$(node -e 'try{const j=require(process.env.OPENCLAW_CONFIG_PATH||"'$OPENCLAW_CONFIG_PATH'");process.stdout.write(j?.gateway?.auth?.token||"");}catch(e){process.exit(0)}')
 fi
 
-CONTROL_URL="http://localhost:18789/"
-DZZENOS_URL="http://localhost:18789/__openclaw__/canvas/dzzenos/"
+CONTROL_URL="http://localhost:${GATEWAY_PORT}/"
+DZZENOS_URL="http://localhost:${GATEWAY_PORT}/__openclaw__/canvas/dzzenos/"
 
-log "Next: create an SSH tunnel to your gateway host (if remote):"
-log "  ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>"
+info "If OpenClaw runs on a remote server, create an SSH tunnel from your laptop:" 
+info "  ssh -N -L ${GATEWAY_PORT}:${HOST}:${GATEWAY_PORT} root@<server-ip>"
 
 if [ -n "$TOKEN" ]; then
-  log "Open Control UI: ${CONTROL_URL}?token=${TOKEN}"
-  log "Open DzzenOS UI : ${DZZENOS_URL}?token=${TOKEN}"
+  ok "Open Control UI: ${CONTROL_URL}?token=${TOKEN}"
+  ok "Open DzzenOS UI : ${DZZENOS_URL}?token=${TOKEN}"
 else
-  log "Open Control UI: ${CONTROL_URL}"
-  log "Open DzzenOS UI : ${DZZENOS_URL}"
-  log "(If your gateway requires a token, append ?token=...)")
+  ok "Open Control UI: ${CONTROL_URL}"
+  ok "Open DzzenOS UI : ${DZZENOS_URL}"
+  warn "If your gateway requires a token, append ?token=..."
 fi
 
-log "If you installed via an agent, paste the DzzenOS link into the chat and pin it." 
+echo
+ok "Install complete."
