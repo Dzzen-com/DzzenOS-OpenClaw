@@ -3,7 +3,9 @@
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "dev": "pnpm -C apps/ui dev",
+    "dev": "node scripts/dev.mjs",
+    "dev:ui": "pnpm -C apps/ui dev",
+    "dev:api": "pnpm dzzenos:api",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "dzzenos:migrate": "node --experimental-strip-types skills/dzzenos/db/migrate.ts",
