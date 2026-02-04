@@ -2,7 +2,8 @@
 
 This folder is the **English** spec for the first open-source release.
 
-Specs are stored in `./spec/`.
+- Main specs: `./spec/`
+- Optional Russian duplicates (for the website): `./spec-ru/`
 
 Recommended reading order:
 - `spec/INDEX.md`
