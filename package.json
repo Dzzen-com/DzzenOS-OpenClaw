@@ -1,10 +1,10 @@
 {
-  "name": "dzzenos",
+  "name": "dzzenos-openclaw",
   "private": true,
   "packageManager": "pnpm@9.15.0",
   "scripts": {
-    "lint": "echo TODO",
-    "dev": "echo Use per-app dev scripts",
-    "build": "echo TODO"
+    "dev": "pnpm -C apps/ui dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint"
   }
 }

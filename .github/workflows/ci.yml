@@ -14,21 +14,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: pnpm
 
-      - name: Install (only if lockfile exists)
-        run: |
-          if [ -f pnpm-lock.yaml ]; then
-            pnpm install --frozen-lockfile
-          else
-            echo "No pnpm-lock.yaml yet; skipping install."
-          fi
-
-      - name: Lint / Test / Build (optional)
-        run: |
-          if [ -f pnpm-lock.yaml ]; then
-            pnpm -r lint || true
-            pnpm -r test || true
-            pnpm -r build || true
-          else
-            echo "Skipping JS checks until we add a pnpm workspace + lockfile."
-          fi
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r lint || true
+      - run: pnpm -r test || true
+      - run: pnpm -r build || true
