@@ -1,27 +1,49 @@
 # DzzenOS
 
-DzzenOS — платформа Dzzen для соло‑фаундеров/файндеров: проекты, агенты, задачи, метрики, доходы.
+DzzenOS is a **local-first OS layer for founders** that runs **natively inside OpenClaw**.
 
-## Архитектура (коротко)
+It provides:
+- Boards (Kanban + list views) — **Linear-like UX**
+- Task cards with **agent chat sessions**, runs, artifacts, approvals
+- Docs / Memory (Obsidian-lite)
+- Automations (n8n-like): cron / webhooks / manual triggers
+- Curated marketplace: **Official / Verified / Community** skills + agent packs
 
-## Secrets/Env
-- Secrets (DB/Redis, OAuth secrets, Directus token) are **server-only** env vars.
-- Any env var prefixed with `NEXT_PUBLIC_` is public and must not contain secrets.
-- Use `.env.example` as a template.
+## Quick start (dev / testers)
 
-- **Web**: Next.js (apps/web)
-- **API**: сервисный слой (apps/api) — бизнес‑логика + RBAC, доступ к Postgres/Redis
-- **Worker**: фоновые джобы (apps/worker)
-- **Backoffice**: Directus (отдельно, подключен к той же Postgres)
-- **DB**: Postgres
-- **Cache/Queue**: Redis
+### 1) Clone
+```bash
+git clone https://github.com/Dzzen-com/DzzenOS.git
+cd DzzenOS
+```
 
-Подробно — в Obsidian: `obsidian/remote-kb/DzzenOS/`.
+### 2) Install DzzenOS skill into your OpenClaw workspace
+Until we publish to ClawHub, install from source:
 
-## Репозиторий (monorepo)
-- `apps/web` — UI
-- `apps/api` — backend API
-- `apps/worker` — background jobs
-- `packages/shared` — общие типы/утилиты
-- `docs` — документация (будем переносить/дублировать ключевое из Obsidian)
-- `infra` — локалка/деплой
+```bash
+# from your OpenClaw workspace root
+mkdir -p skills
+cp -R /path/to/DzzenOS/skills/dzzenos ./skills/dzzenos
+
+# restart OpenClaw session so it picks up the new skill
+```
+
+## Logging / Debugging
+We will ship a **built-in logs panel** in the UI.
+
+When filing bugs, include:
+- DzzenOS version
+- OpenClaw version (`openclaw status`)
+- reproduction steps
+- relevant DzzenOS logs (redact secrets)
+
+## Roadmap (OpenClaw Native)
+See docs:
+- `/docs/openclaw-native/` (English)
+
+## Contributing
+- English-only issues and PRs.
+- Please use the issue templates.
+
+## License
+TBD (we will pick a permissive OSS license for the core).
