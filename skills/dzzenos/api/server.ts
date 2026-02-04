@@ -27,6 +27,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 
 import { migrate } from '../db/migrate.ts';
+import {
+  defaultAuthFile,
+  loadAuthConfig,
+  parseCookies,
+  signSessionCookie,
+  verifyPassword,
+  verifySessionCookie,
+} from './auth.ts';
 
 type Options = {
   port: number;
@@ -48,13 +56,13 @@ function parseArgs(argv: string[]): Partial<Options> {
 }
 
 function isAllowedOrigin(origin: string): boolean {
-  // Allow local UI dev servers.
-  // Example: http://localhost:5173, http://127.0.0.1:3000
+  // Allow local UI dev servers and same-origin deployments.
+  // Example: http://localhost:5173, http://127.0.0.1:3000, https://dzzenos.example.com
   try {
     const u = new URL(origin);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
     const host = u.hostname;
-    return host === 'localhost' || host === '127.0.0.1';
+    return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost') || host.includes('.');
   } catch {
     return false;
   }
@@ -143,6 +151,9 @@ function main() {
   const port = Number(args.port ?? process.env.PORT ?? 8787);
   const host = String(args.host ?? process.env.HOST ?? '127.0.0.1');
 
+  const authFile = String(process.env.DZZENOS_AUTH_FILE ?? defaultAuthFile(repoRoot));
+  const auth = loadAuthConfig(authFile);
+
   migrate({ dbPath, migrationsDir });
 
   const db = new DatabaseSync(dbPath);
@@ -171,6 +182,143 @@ function main() {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
     try {
+      // --- Auth (for domain / reverse-proxy installs) ---
+      // This API can act as a Caddy `forward_auth` target.
+      // If no auth config exists, we keep auth endpoints usable but do not block API calls here.
+      if (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) {
+        if (!auth) {
+          return sendText(
+            res,
+            200,
+            'DzzenOS API is running. Auth is not configured (missing auth file).',
+            corsHeaders
+          );
+        }
+
+        const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DzzenOS — Sign in</title>
+  <style>
+    :root{
+      --bg:#0b0f14;--card:#0f1621;--muted:#8aa0b5;--text:#e6eef8;--border:#1f2a3a;
+      --accent:#4f8cff;--accent2:#7c3aed;
+      --shadow:0 18px 60px rgba(0,0,0,.45);
+      --radius:16px;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:radial-gradient(1200px 700px at 20% 10%, rgba(79,140,255,.22), transparent 60%),
+      radial-gradient(1200px 700px at 80% 30%, rgba(124,58,237,.18), transparent 60%),
+      var(--bg);color:var(--text);display:flex;align-items:center;justify-content:center;padding:28px;}
+    .wrap{width:100%;max-width:420px}
+    .brand{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+    .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:var(--shadow)}
+    .title{font-weight:700;letter-spacing:.2px}
+    .subtitle{color:var(--muted);font-size:14px;margin-top:2px}
+    .card{border:1px solid var(--border);background:linear-gradient(180deg, rgba(255,255,255,.02), transparent 60%), var(--card);
+      border-radius:var(--radius);padding:18px 18px 16px;box-shadow:var(--shadow)}
+    label{display:block;font-size:13px;color:var(--muted);margin:12px 0 6px}
+    input{width:100%;padding:12px 12px;border-radius:12px;border:1px solid var(--border);background:#0c121b;color:var(--text);outline:none}
+    input:focus{border-color:rgba(79,140,255,.7);box-shadow:0 0 0 4px rgba(79,140,255,.15)}
+    button{margin-top:14px;width:100%;padding:12px 14px;border-radius:12px;border:1px solid rgba(79,140,255,.35);
+      background:linear-gradient(135deg, rgba(79,140,255,.9), rgba(124,58,237,.85));color:#07101a;font-weight:700;cursor:pointer}
+    button:hover{filter:brightness(1.02)}
+    .hint{margin-top:12px;color:var(--muted);font-size:12px;line-height:1.45}
+    .err{margin-top:10px;color:#ffb4b4;font-size:13px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo" aria-hidden="true"></div>
+      <div>
+        <div class="title">DzzenOS</div>
+        <div class="subtitle">Sign in to your dashboard</div>
+      </div>
+    </div>
+    <div class="card">
+      <form method="POST" action="/auth/login">
+        <label for="username">Username</label>
+        <input id="username" name="username" autocomplete="username" required />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <button type="submit">Sign in</button>
+      </form>
+      ${url.searchParams.get('error') ? `<div class="err">Invalid username or password</div>` : ''}
+      <div class="hint">Tip: If you lost credentials, re-run the installer to reset them (server-side).</div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+        res.writeHead(200, {
+          ...corsHeaders,
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(html);
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/auth/verify') {
+        if (!auth) return sendText(res, 500, 'Auth is not configured', corsHeaders);
+
+        const cookies = parseCookies(req.headers.cookie as string | undefined);
+        const v = cookies[auth.cookie.name];
+        const ok = v ? verifySessionCookie(auth, v) : null;
+
+        if (!ok) {
+          // Caddy forward_auth expects 2xx for OK, anything else = not authorized.
+          // We also set a header with the login URL for convenience.
+          return sendText(res, 401, 'unauthorized', { ...corsHeaders, 'x-auth-login': '/login' });
+        }
+
+        return sendText(res, 200, 'ok', {
+          ...corsHeaders,
+          'x-auth-user': ok.username,
+        });
+      }
+
+      if (req.method === 'POST' && url.pathname === '/auth/login') {
+        if (!auth) return sendText(res, 500, 'Auth is not configured', corsHeaders);
+
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const bodyRaw = Buffer.concat(chunks).toString('utf8');
+        const form = new URLSearchParams(bodyRaw);
+        const username = String(form.get('username') ?? '').trim();
+        const password = String(form.get('password') ?? '');
+
+        if (username !== auth.username || !verifyPassword(auth, password)) {
+          res.writeHead(302, { location: '/login?error=1', ...corsHeaders });
+          res.end();
+          return;
+        }
+
+        const s = signSessionCookie(auth, username);
+        const cookie = `${auth.cookie.name}=${encodeURIComponent(s.value)}; Path=/; HttpOnly; SameSite=Lax; Secure; Expires=${new Date(s.expiresAtMs).toUTCString()}`;
+
+        res.writeHead(302, {
+          ...corsHeaders,
+          'set-cookie': cookie,
+          location: '/',
+        });
+        res.end();
+        return;
+      }
+
+      if (req.method === 'POST' && url.pathname === '/auth/logout') {
+        if (!auth) return sendText(res, 200, 'ok', corsHeaders);
+        const cookie = `${auth.cookie.name}=; Path=/; HttpOnly; SameSite=Lax; Secure; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+        res.writeHead(302, { ...corsHeaders, 'set-cookie': cookie, location: '/login' });
+        res.end();
+        return;
+      }
+
+      // --- API ---
       if (req.method === 'GET' && url.pathname === '/runs') {
         const status = url.searchParams.get('status');
         const stuckMinutesRaw = url.searchParams.get('stuckMinutes');

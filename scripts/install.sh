@@ -66,12 +66,52 @@ corepack enable >/dev/null 2>&1 || true
 corepack pnpm install --frozen-lockfile
 ok "Dependencies installed"
 
-step "3/4 Build UI + publish to OpenClaw Canvas host"
+step "3/5 Build UI + publish to OpenClaw Canvas host"
 export OPENCLAW_STATE_DIR
+
+# Optional interactive setup for server domain access
+SETUP_DOMAIN=0
+DOMAIN=""
+DOMAIN_EMAIL=""
+AUTH_USERNAME=""
+AUTH_PASSWORD=""
+
+if [ $JSON_MODE -eq 0 ]; then
+  echo
+  echo -e "${BOLD}Where is your OpenClaw Gateway running?${RST}"
+  echo "  1) local machine (no domain)"
+  echo "  2) server/VPS (optionally with domain)"
+  read -r -p "> " WHERE
+  if [ "${WHERE:-}" = "2" ]; then
+    read -r -p "Set up secure domain access (Caddy + TLS + login page)? [y/N] " ANS
+    if [[ "${ANS:-}" =~ ^[Yy]$ ]]; then
+      SETUP_DOMAIN=1
+      read -r -p "Domain (e.g. dzzenos.example.com): " DOMAIN
+      read -r -p "Email for Let's Encrypt (optional): " DOMAIN_EMAIL
+      read -r -p "Login username: " AUTH_USERNAME
+      read -r -s -p "Login password: " AUTH_PASSWORD
+      echo
+    fi
+  fi
+fi
+
+if [ $SETUP_DOMAIN -eq 1 ]; then
+  export DZZENOS_API_BASE="/dzzenos-api"
+fi
+
 corepack pnpm dzzenos:canvas:publish
 ok "UI published to Canvas"
 
-step "4/4 How to open (secure)"
+if [ $SETUP_DOMAIN -eq 1 ]; then
+  step "4/5 Setup domain reverse proxy + auth"
+  sudo -n true 2>/dev/null || warn "May prompt for sudo password (to install Caddy + systemd units)."
+  DOMAIN="$DOMAIN" EMAIL="$DOMAIN_EMAIL" USERNAME="$AUTH_USERNAME" PASSWORD="$AUTH_PASSWORD" \
+    OPENCLAW_CONFIG_PATH="$OPENCLAW_CONFIG_PATH" GATEWAY_PORT="$GATEWAY_PORT" REPO_DIR="$INSTALL_DIR" \
+    sudo -E bash "$INSTALL_DIR/scripts/setup-domain.sh"
+  ok "Domain setup complete"
+fi
+
+step "5/5 How to open (secure)"
 TOKEN=""
 if [ -f "$OPENCLAW_CONFIG_PATH" ]; then
   TOKEN=$(node -e 'try{const j=require(process.env.OPENCLAW_CONFIG_PATH||"'$OPENCLAW_CONFIG_PATH'");process.stdout.write(j?.gateway?.auth?.token||"");}catch(e){process.exit(0)}')

@@ -27,8 +27,10 @@ function copyDir(src, dst) {
   }
 }
 
+const apiBase = process.env.DZZENOS_API_BASE ?? process.env.VITE_API_BASE ?? 'http://127.0.0.1:8787';
+
 console.log('[canvas] building UI...');
-execSync('corepack pnpm -C apps/ui build', { stdio: 'inherit' });
+execSync(`VITE_API_BASE=${JSON.stringify(apiBase)} corepack pnpm -C apps/ui build`, { stdio: 'inherit' });
 
 if (!fs.existsSync(distDir)) {
   throw new Error(`UI dist not found at ${distDir}. Build failed?`);
