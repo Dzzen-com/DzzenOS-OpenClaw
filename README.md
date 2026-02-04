@@ -46,4 +46,10 @@ See docs:
 - Please use the issue templates.
 
 ## License
-TBD (we will pick a permissive OSS license for the core).
+
+This project is **source-available** under the **Business Source License 1.1 (BUSL-1.1)**.
+
+- Free production use for organizations with **Annual Gross Revenue < USD 1,000,000** (see the Additional Use Grant in `LICENSE`).
+- For companies ≥ $1M revenue and/or prohibited use-cases (hosted/managed service, resale/rebrand), a commercial license is required.
+
+See: `LICENSE`, `docs/licensing.md`, and `TRADEMARKS.md`.
