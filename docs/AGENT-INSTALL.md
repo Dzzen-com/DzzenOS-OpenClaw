@@ -52,4 +52,20 @@ Open:
 ## Notes
 
 - This works best when the agent has permission to run shell commands on the gateway host.
+- If the agent is configured to require approvals for shell commands, it **will ask you to approve each step** (safe default).
+- If you want the agent to be interactive, explicitly tell it: “Ask before you run anything that changes firewall/ports/Caddy config.”
 - If the agent can’t run commands, do the manual install from `docs/INSTALL.md`.
+
+## Domain mode (Caddy + TLS + login)
+
+If you want access from anywhere via a custom domain, the installer can set up:
+- Caddy reverse proxy (TLS certificate auto-issued)
+- DzzenOS login page + cookie session
+- Secure caching defaults
+
+In chat, tell the agent:
+- your domain (subdomain)
+- that DNS A record is already pointing to the server IP
+- what SSH port is used (if not 22)
+
+Then ask it to run the same installer and choose domain mode.

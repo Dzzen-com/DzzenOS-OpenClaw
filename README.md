@@ -72,14 +72,14 @@ HOST=127.0.0.1 API_PORT=8787 UI_PORT=5173 pnpm dev
 
 ## Install
 
-### Remote (server)
+### Option A — Remote (server) via SSH tunnel (fastest)
 
 **1) On your laptop: create an SSH tunnel**
 ```bash
 ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
 ```
 
-**2) On your server: install DzzenOS-OpenClaw**
+**2) On your server: run installer**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
@@ -87,6 +87,16 @@ curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scr
 **3) Open in your browser**
 - DzzenOS UI: `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if required)
 - Control UI: `http://localhost:18789/` (append `?token=...` if required)
+
+### Option B — Domain (Caddy + TLS + login) (best UX)
+
+This gives you access from anywhere (phone/laptop) at:
+- `https://<your-domain>/login`
+- `https://<your-domain>/__openclaw__/canvas/dzzenos/`
+
+Run the same installer and choose **server/VPS** → **domain mode**.
+
+Docs: `docs/DOMAIN-ACCESS.md`
 
 ### Agent-driven install (chat → install → reply)
 
