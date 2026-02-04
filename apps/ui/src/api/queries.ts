@@ -5,6 +5,7 @@ import type {
   AgentRunStatus,
   Approval,
   ApprovalStatus,
+  Automation,
   Board,
   Task,
   TaskStatus,
@@ -54,4 +55,32 @@ export function listApprovals(input?: { status?: ApprovalStatus }): Promise<Appr
   if (input?.status) qs.set('status', input.status);
   const suf = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/approvals${suf}`);
+}
+
+// --- Automations ---
+
+export function listAutomations(): Promise<Automation[]> {
+  return apiFetch('/automations');
+}
+
+export function getAutomation(id: string): Promise<Automation> {
+  return apiFetch(`/automations/${encodeURIComponent(id)}`);
+}
+
+export function createAutomation(input: { name: string; description?: string | null; graph: any }): Promise<Automation> {
+  return apiFetch('/automations', {
+    method: 'POST',
+    body: JSON.stringify({ name: input.name, description: input.description ?? null, graph: input.graph }),
+  });
+}
+
+export function updateAutomation(id: string, patch: { name?: string; description?: string | null; graph?: any }): Promise<Automation> {
+  return apiFetch(`/automations/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ ...patch, graph: patch.graph }),
+  });
+}
+
+export function runAutomation(id: string): Promise<{ runId: string }> {
+  return apiFetch(`/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
 }

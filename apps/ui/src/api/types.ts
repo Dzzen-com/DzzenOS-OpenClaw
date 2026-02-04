@@ -80,3 +80,12 @@ export type Approval = {
   board_id: string | null;
   task_title: string | null;
 };
+
+export type Automation = {
+  id: string;
+  name: string;
+  description: string | null;
+  graph_json?: string; // present on GET /automations/:id
+  created_at: string;
+  updated_at: string;
+};

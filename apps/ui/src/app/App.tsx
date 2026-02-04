@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Sidebar } from '../components/Sidebar/Sidebar';
 import { TopBar } from '../components/TopBar/TopBar';
 import { Dashboard } from '../components/Dashboard/Dashboard';
+import { AutomationsPage } from '../components/Automations/AutomationsPage';
 import { TaskTable } from '../components/Tasks/TaskTable';
 import { TaskDrawer } from '../components/Tasks/TaskDrawer';
 import { NewTask } from '../components/Tasks/NewTask';
@@ -17,7 +18,7 @@ import { createTask, listTasks } from '../api/queries';
 export function App() {
   const qc = useQueryClient();
 
-  const [page, setPage] = useState<'dashboard' | 'tasks'>('dashboard');
+  const [page, setPage] = useState<'dashboard' | 'tasks' | 'automations'>('dashboard');
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
@@ -58,8 +59,8 @@ export function App() {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <TopBar
-            title={page === 'dashboard' ? 'Dashboard' : 'Tasks'}
-            subtitle={page === 'dashboard' ? 'Progress overview' : 'All tasks'}
+            title={page === 'dashboard' ? 'Dashboard' : page === 'automations' ? 'Automations' : 'Tasks'}
+            subtitle={page === 'dashboard' ? 'Progress overview' : page === 'automations' ? 'Build & run flows' : 'All tasks'}
           />
 
           <main className="min-w-0 flex-1 p-4 sm:p-6">
@@ -72,6 +73,10 @@ export function App() {
                   queueMicrotask(() => setSelectedTaskId(taskId));
                 }}
               />
+            ) : page === 'automations' ? (
+              <div className="mx-auto w-full max-w-6xl">
+                <AutomationsPage />
+              </div>
             ) : (
               <div className="mx-auto w-full max-w-6xl">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">

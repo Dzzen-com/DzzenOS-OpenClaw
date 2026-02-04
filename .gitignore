@@ -8,6 +8,10 @@ node_modules
 .dist
 coverage
 
+# Build outputs
+apps/ui/dist
+*.tsbuildinfo
+
 # Local-first sqlite db files
 /data/*.db
 /data/*.db-*

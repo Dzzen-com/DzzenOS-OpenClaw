@@ -151,7 +151,7 @@ function main() {
   const server = http.createServer(async (req, res) => {
     const origin = (req.headers.origin as string | undefined) ?? '';
     const corsHeaders: Record<string, string> = {
-      'access-control-allow-methods': 'GET,POST,PATCH,OPTIONS',
+      'access-control-allow-methods': 'GET,POST,PATCH,PUT,OPTIONS',
       'access-control-allow-headers': 'content-type',
     };
     if (origin && isAllowedOrigin(origin)) {
@@ -268,6 +268,139 @@ function main() {
           .all(...params);
 
         return sendJson(res, 200, approvals, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/automations') {
+        const rows = db
+          .prepare('SELECT id, name, description, created_at, updated_at FROM automations ORDER BY created_at DESC')
+          .all();
+        return sendJson(res, 200, rows, corsHeaders);
+      }
+
+      const automationGetMatch = req.method === 'GET' ? url.pathname.match(/^\/automations\/([^/]+)$/) : null;
+      if (automationGetMatch) {
+        const id = decodeURIComponent(automationGetMatch[1]);
+        const row = rowOrNull<any>(
+          db
+            .prepare('SELECT id, name, description, graph_json, created_at, updated_at FROM automations WHERE id = ?')
+            .all(id) as any
+        );
+        if (!row) return sendJson(res, 404, { error: 'Automation not found' }, corsHeaders);
+        return sendJson(res, 200, row, corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/automations') {
+        const body = await readJson(req);
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        const description = typeof body?.description === 'string' ? body.description : null;
+
+        const graph = body?.graph ?? body?.graph_json ?? body?.graphJson;
+        const graphJson =
+          typeof graph === 'string'
+            ? graph
+            : graph && typeof graph === 'object'
+              ? JSON.stringify(graph)
+              : JSON.stringify({ nodes: [], edges: [] });
+
+        const id = randomUUID();
+        db.prepare('INSERT INTO automations(id, name, description, graph_json) VALUES (?, ?, ?, ?)').run(
+          id,
+          name || 'Untitled automation',
+          description,
+          graphJson
+        );
+
+        const row = rowOrNull<any>(
+          db
+            .prepare('SELECT id, name, description, graph_json, created_at, updated_at FROM automations WHERE id = ?')
+            .all(id) as any
+        );
+        return sendJson(res, 201, row, corsHeaders);
+      }
+
+      const automationPutMatch = req.method === 'PUT' ? url.pathname.match(/^\/automations\/([^/]+)$/) : null;
+      if (automationPutMatch) {
+        const id = decodeURIComponent(automationPutMatch[1]);
+        const body = await readJson(req);
+
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.name !== undefined) {
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name) return sendJson(res, 400, { error: 'name must be a non-empty string' }, corsHeaders);
+          updates.push('name = ?');
+          params.push(name);
+        }
+
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+
+        if (body?.graph !== undefined || body?.graph_json !== undefined || body?.graphJson !== undefined) {
+          const graph = body?.graph ?? body?.graph_json ?? body?.graphJson;
+          const graphJson =
+            typeof graph === 'string'
+              ? graph
+              : graph && typeof graph === 'object'
+                ? JSON.stringify(graph)
+                : undefined;
+          if (graphJson === undefined) return sendJson(res, 400, { error: 'graph must be a JSON object or string' }, corsHeaders);
+          updates.push('graph_json = ?');
+          params.push(graphJson);
+        }
+
+        if (updates.length === 0) {
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/graph)' }, corsHeaders);
+        }
+
+        params.push(id);
+        const info = db.prepare(`UPDATE automations SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Automation not found' }, corsHeaders);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare('SELECT id, name, description, graph_json, created_at, updated_at FROM automations WHERE id = ?')
+            .all(id) as any
+        );
+        return sendJson(res, 200, row, corsHeaders);
+      }
+
+      // Optional stub: create an agent_run + steps for an automation (dev-only)
+      const automationRunMatch = req.method === 'POST' ? url.pathname.match(/^\/automations\/([^/]+)\/run$/) : null;
+      if (automationRunMatch) {
+        const id = decodeURIComponent(automationRunMatch[1]);
+        const a = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM automations WHERE id = ?').all(id) as any);
+        if (!a) return sendJson(res, 404, { error: 'Automation not found' }, corsHeaders);
+
+        const workspaceId = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any)?.id;
+        if (!workspaceId) return sendJson(res, 400, { error: 'No workspace exists' }, corsHeaders);
+
+        const runId = randomUUID();
+        const stepIds = [randomUUID(), randomUUID()];
+
+        db.exec('BEGIN');
+        try {
+          db.prepare(
+            'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, NULL, NULL, ?, ?)'
+          ).run(runId, workspaceId, `automation:${id}`, 'running');
+
+          const ins = db.prepare(
+            'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          );
+          ins.run(stepIds[0], runId, 0, 'automation.plan', 'succeeded', JSON.stringify({ automationId: id }), null);
+          ins.run(stepIds[1], runId, 1, 'automation.run', 'running', JSON.stringify({ automationId: id }), null);
+
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        return sendJson(res, 201, { runId }, corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/boards') {
