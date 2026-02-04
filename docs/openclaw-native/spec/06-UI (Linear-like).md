@@ -1,0 +1,63 @@
+# DzzenOS (OpenClaw Native) — UI (Linear-like)
+
+Цель: единый визуальный стиль и UX по аналогии с **Linear**:
+- быстрый
+- минималистичный
+- keyboard-first
+- отличный канбан/листы
+- удобные детали карточки + сайдбар
+
+---
+
+## 1) Принципы интерфейса
+1) **Speed**: мгновенная навигация, минимальные перерисовки.
+2) **Keyboard-first**: быстрые хоткеи для создания/поиска/движения карточек.
+3) **Drawer for details**: карточка открывается справа (или full page на мобиле).
+4) **Сохранённые views**: фильтры как first-class.
+5) **Стабильный визуальный язык**: статусы, теги, приоритеты, домены.
+
+---
+
+## 2) Основные экраны
+- Workspace switcher
+- Board (kanban + list view)
+- Task drawer (brief + chat + runs/artifacts)
+- Docs (workspace/board)
+- Automations builder (graph editor)
+- Agent library (profiles/packs)
+- Settings (policy/skills)
+
+---
+
+## 3) Компоненты (референс)
+- Command palette (Ctrl+K)
+- Quick add task
+- Status pill
+- Domain/priority chips
+- Activity / run timeline
+- Artifact preview (markdown/diff)
+- Approval banner (approve/reject)
+
+---
+
+## 4) Технические решения (чтобы было "как Linear")
+- UI: React + Tailwind (или CSS variables) + Radix UI
+- Состояние: query cache (tanstack-query)
+- Виртуализация списков (react-virtual)
+- Горячие клавиши (react-hotkeys)
+
+---
+
+## 5) Важное про чат агента в карточке
+- чат как отдельная "сессия" по task
+- быстрые пресеты промптов (Ask / Refine / Generate / Validate)
+- кнопка Start создаёт run и фиксирует input snapshot
+
+---
+
+## 6) Совместимость с OpenClaw
+UI может жить:
+- как локальный webapp (localhost) с ссылкой из OpenClaw dashboard
+- либо как страница внутри OpenClaw UI (если плагин‑точки позволяют)
+
+MVP: локальный webapp.
