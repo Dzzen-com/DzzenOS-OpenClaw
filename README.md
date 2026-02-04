@@ -1,49 +1,110 @@
-# DzzenOS
+# DzzenOS-OpenClaw
 
-DzzenOS is a **local-first OS layer for founders** that runs **natively inside OpenClaw**.
+<p align="center">
+  <img src="./assets/hero-placeholder.svg" alt="DzzenOS-OpenClaw hero" width="900" />
+</p>
+
+<p align="center">
+  <b>A local-first OS layer for solo founders — running natively inside OpenClaw.</b>
+  <br/>
+  Boards • Tasks • Agents • Approvals • Automations • Marketplace
+</p>
+
+---
+
+## Why this exists (the pain)
+
+If you’re building as a solo founder, you’re constantly fighting:
+
+- **Fragmented execution**: notes in one app, tasks in another, automation in a third.
+- **No reliable “agent ops”**: you can run agents, but you can’t easily see what’s running, what’s stuck, and what needs approval.
+- **Tooling overhead**: SaaS control planes add complexity, latency, and lock-in.
+
+**DzzenOS-OpenClaw** turns OpenClaw into a **founder OS**: a single, local-first workspace where agent work becomes visible, reviewable, and repeatable.
+
+## What it is
+
+DzzenOS-OpenClaw is a **skill + UI + local database** that runs on your hardware (local-first).
 
 It provides:
-- Boards (Kanban + list views) — **Linear-like UX**
-- Task cards with **agent chat sessions**, runs, artifacts, approvals
-- Docs / Memory (Obsidian-lite)
-- Automations (n8n-like): cron / webhooks / manual triggers
-- Curated marketplace: **Official / Verified / Community** skills + agent packs
+- **Boards & tasks** (Kanban + lists) with a **Linear-like UX**
+- **Task cards** with agent sessions, runs, artifacts, approvals
+- **Docs / Memory** (Obsidian-lite)
+- **Automations** (n8n-like): cron / webhooks / manual triggers
+- **Curated marketplace** for skills + **agent packs**
 
-## Quick start (dev / testers)
+## What it is NOT
+- Not a hosted SaaS control plane.
+- Not a fork of n8n.
+- Not trying to replace OpenClaw — it’s an OS layer **inside** OpenClaw.
+
+---
+
+## Install (alpha)
+
+Until we publish to ClawHub, install from source.
 
 ### 1) Clone
 ```bash
-git clone https://github.com/Dzzen-com/DzzenOS.git
-cd DzzenOS
+git clone https://github.com/Dzzen-com/DzzenOS-OpenClaw.git
+cd DzzenOS-OpenClaw
 ```
 
-### 2) Install DzzenOS skill into your OpenClaw workspace
-Until we publish to ClawHub, install from source:
-
+### 2) Copy the DzzenOS skill into your OpenClaw workspace
 ```bash
 # from your OpenClaw workspace root
 mkdir -p skills
-cp -R /path/to/DzzenOS/skills/dzzenos ./skills/dzzenos
+cp -R /path/to/DzzenOS-OpenClaw/skills/dzzenos ./skills/dzzenos
 
-# restart OpenClaw session so it picks up the new skill
+# restart OpenClaw so it picks up the new skill
 ```
 
-## Logging / Debugging
-We will ship a **built-in logs panel** in the UI.
+---
+
+## Docs
+
+- OpenClaw Native specs (EN): `docs/openclaw-native/spec/`
+- Optional RU duplicates (for the website): `docs/openclaw-native/spec-ru/`
+
+Start here: `docs/openclaw-native/README.md`
+
+## Logging / debugging
+
+We plan to ship a **built-in logs panel** in the UI.
 
 When filing bugs, include:
-- DzzenOS version
+- DzzenOS-OpenClaw version (commit SHA is ok)
 - OpenClaw version (`openclaw status`)
 - reproduction steps
 - relevant DzzenOS logs (redact secrets)
 
-## Roadmap (OpenClaw Native)
-See docs:
-- `/docs/openclaw-native/` (English)
+---
+
+## Roadmap
+
+See `docs/openclaw-native/spec/10-Roadmap (v1 vs later).md`.
+
+We track work in GitHub Issues + Project Board.
+
+---
 
 ## Contributing
-- English-only issues and PRs.
-- Please use the issue templates.
+
+- **English-only** issues and PRs.
+- Use the issue templates.
+
+See `CONTRIBUTING.md`.
+
+---
+
+## Brand
+
+DzzenOS-OpenClaw is part of **Dzzen** — a unified space for solo founders.
+
+If you fork this project, you must follow the trademark policy:
+- `TRADEMARKS.md`
+
+---
 
 ## License
 
