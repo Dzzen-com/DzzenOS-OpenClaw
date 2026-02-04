@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "pnpm -C apps/ui dev",
     "build": "pnpm -r build",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "dzzenos:migrate": "node --experimental-strip-types skills/dzzenos/db/migrate.ts",
+    "dzzenos:api": "node --experimental-strip-types skills/dzzenos/api/server.ts"
   }
 }
