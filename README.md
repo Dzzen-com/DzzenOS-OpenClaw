@@ -92,6 +92,24 @@ cp -R /path/to/DzzenOS-OpenClaw/skills/dzzenos ./skills/dzzenos
 
 ## Docs
 
+## Remote access (server → laptop)
+
+If you run OpenClaw on a remote server, use an SSH tunnel:
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+```
+
+DzzenOS UI can be served via OpenClaw Canvas host:
+
+```bash
+corepack pnpm dzzenos:canvas:publish
+```
+
+Open:
+- `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if your gateway requires it)
+
+
 - OpenClaw Native specs (EN): `docs/openclaw-native/spec/`
 - Optional RU duplicates (for the website): `docs/openclaw-native/spec-ru/`
 

@@ -9,6 +9,8 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "dzzenos:migrate": "node --experimental-strip-types skills/dzzenos/db/migrate.ts",
-    "dzzenos:api": "node --experimental-strip-types skills/dzzenos/api/server.ts"
+    "dzzenos:api": "node --experimental-strip-types skills/dzzenos/api/server.ts",
+    "dzzenos:ui:build": "corepack pnpm -C apps/ui build",
+    "dzzenos:canvas:publish": "node scripts/publish-canvas.mjs"
   }
 }
