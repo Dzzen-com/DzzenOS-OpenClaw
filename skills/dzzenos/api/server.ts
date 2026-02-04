@@ -5,8 +5,10 @@
  * Endpoints:
  *   GET   /boards
  *   GET   /tasks?boardId=
- *   POST  /tasks            { title, description?, boardId? }
- *   PATCH /tasks/:id        { status?, title?, description? }
+ *   POST  /tasks                   { title, description?, boardId? }
+ *   PATCH /tasks/:id               { status?, title?, description? }
+ *   POST  /tasks/:id/simulate-run  (create run + steps; auto-advance)
+ *   GET   /tasks/:id/runs          (runs + steps)
  *
  * Usage:
  *   node --experimental-strip-types skills/dzzenos/api/server.ts
@@ -81,6 +83,10 @@ async function readJson(req: http.IncomingMessage): Promise<any> {
 
 function rowOrNull<T>(rows: T[]): T | null {
   return rows.length ? rows[0] : null;
+}
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function seedIfEmpty(db: DatabaseSync) {
@@ -206,6 +212,111 @@ function main() {
           ).all(id) as any
         );
         return sendJson(res, 201, task, corsHeaders);
+      }
+
+      const simulateMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/simulate-run$/) : null;
+      if (simulateMatch) {
+        const taskId = simulateMatch[1];
+
+        const taskRow = rowOrNull<{ id: string; board_id: string; workspace_id: string }>(
+          db.prepare(
+            `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id
+             FROM tasks t
+             JOIN boards b ON b.id = t.board_id
+             WHERE t.id = ?`
+          ).all(taskId) as any
+        );
+        if (!taskRow) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        const runId = randomUUID();
+        const stepIds = [randomUUID(), randomUUID(), randomUUID()];
+
+        db.exec('BEGIN');
+        try {
+          db.prepare(
+            'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, ?, ?, ?, ?)'
+          ).run(runId, taskRow.workspace_id, taskRow.board_id, taskRow.id, 'simulator', 'running');
+
+          const ins = db.prepare(
+            'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          );
+
+          ins.run(stepIds[0], runId, 0, 'plan', 'running', JSON.stringify({ prompt: 'Plan' }), null);
+          ins.run(stepIds[1], runId, 1, 'act', 'running', JSON.stringify({ prompt: 'Act' }), null);
+          ins.run(stepIds[2], runId, 2, 'report', 'running', JSON.stringify({ prompt: 'Report' }), null);
+
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        // Best-effort in-process advancement (dev-only simulation).
+        (async () => {
+          try {
+            for (const stepId of stepIds) {
+              await sleep(250);
+              db.prepare(
+                "UPDATE run_steps SET status = 'succeeded', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+              ).run(stepId);
+            }
+            await sleep(100);
+            db.prepare(
+              "UPDATE agent_runs SET status = 'succeeded', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+            ).run(runId);
+          } catch (e) {
+            console.error('[dzzenos-api] simulate-run advance failed', e);
+          }
+        })();
+
+        return sendJson(res, 201, { runId }, corsHeaders);
+      }
+
+      const runsMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/runs$/) : null;
+      if (runsMatch) {
+        const taskId = runsMatch[1];
+        const stuckMinutes = Number(url.searchParams.get('stuckMinutes') ?? 5);
+
+        const runs = db
+          .prepare(
+            `SELECT id, workspace_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
+                    CASE
+                      WHEN status = 'running' AND julianday(created_at) < julianday('now') - (? / 1440.0) THEN 1
+                      ELSE 0
+                    END as is_stuck
+             FROM agent_runs
+             WHERE task_id = ?
+             ORDER BY created_at DESC`
+          )
+          .all(stuckMinutes, taskId) as any[];
+
+        const runIds = runs.map((r) => r.id);
+        const stepsByRun = new Map<string, any[]>();
+        if (runIds.length) {
+          const placeholders = runIds.map(() => '?').join(',');
+          const steps = db
+            .prepare(
+              `SELECT id, run_id, step_index, kind, status, input_json, output_json, started_at, finished_at, created_at, updated_at
+               FROM run_steps
+               WHERE run_id IN (${placeholders})
+               ORDER BY run_id, step_index ASC`
+            )
+            .all(...runIds) as any[];
+
+          for (const s of steps) {
+            const list = stepsByRun.get(s.run_id) ?? [];
+            list.push(s);
+            stepsByRun.set(s.run_id, list);
+          }
+        }
+
+        const payload = runs.map((r) => ({
+          ...r,
+          is_stuck: Boolean(r.is_stuck),
+          steps: stepsByRun.get(r.id) ?? [],
+        }));
+
+        return sendJson(res, 200, payload, corsHeaders);
       }
 
       const patchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
