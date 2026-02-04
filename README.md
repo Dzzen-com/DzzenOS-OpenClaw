@@ -4,6 +4,7 @@
 [![Stars](https://img.shields.io/github/stars/Dzzen-com/DzzenOS-OpenClaw?style=flat)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/stargazers)
 [![Issues](https://img.shields.io/github/issues/Dzzen-com/DzzenOS-OpenClaw)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues)
 [![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](./LICENSE)
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-native-111827)](https://github.com/openclaw/openclaw)
 
 <p align="center">
   <img src="./assets/hero-placeholder.svg" alt="DzzenOS-OpenClaw hero" width="900" />
