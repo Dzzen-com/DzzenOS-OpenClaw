@@ -31,6 +31,24 @@ The installer will:
 - install and start a `dzzenos-api` systemd service
 - install Caddy + write `/etc/caddy/Caddyfile`
 
+## Caching (browser + Cloudflare)
+
+Default policy (recommended for fast iteration + fewer “stale UI” bugs):
+
+- **Auth + HTML**: `Cache-Control: no-store`
+- **Static hashed assets** (`/__openclaw__/canvas/dzzenos/assets/*`): `Cache-Control: public, max-age=31536000, immutable`
+
+### Cloudflare recommendation
+
+- If you use Cloudflare in front of the server:
+  - Set cache mode to **Respect Existing Headers** (recommended).
+  - Do **NOT** enable “Cache Everything” globally.
+  - If you create rules:
+    - Bypass cache for `/login*` and `/auth/*`
+    - Allow caching for `*/assets/*` and `*/__openclaw__/canvas/dzzenos/assets/*`
+
+This keeps the UI snappy but prevents login/session pages from being cached.
+
 ## Operations
 
 ### Logout

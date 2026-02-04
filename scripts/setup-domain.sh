@@ -15,6 +15,17 @@ AUTH_FILE="${AUTH_FILE:-/etc/dzzenos/auth.json}"
 USERNAME="${USERNAME:-}"
 PASSWORD="${PASSWORD:-}"
 
+# HSTS: off | on | auto
+# - auto: enable only after HTTPS works (certificate issued)
+HSTS_MODE="${HSTS_MODE:-auto}"
+HSTS_INCLUDE_SUBDOMAINS="${HSTS_INCLUDE_SUBDOMAINS:-1}"
+HSTS_PRELOAD="${HSTS_PRELOAD:-0}"
+
+# Cache policy
+# - We default to no-store for HTML/auth (avoid stale shell during fast iteration)
+# - We cache hashed static assets for speed.
+CACHE_STATIC_MAX_AGE="${CACHE_STATIC_MAX_AGE:-31536000}"
+
 if [ -z "$DOMAIN" ]; then echo "DOMAIN is required" >&2; exit 2; fi
 if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then echo "USERNAME and PASSWORD are required" >&2; exit 2; fi
 
@@ -79,7 +90,25 @@ if [ -n "$EMAIL" ]; then
   CADDY_TLS="tls $EMAIL"
 fi
 
-cat >/etc/caddy/Caddyfile <<CADDY
+hsts_header_value() {
+  local v="max-age=31536000"
+  if [ "${HSTS_INCLUDE_SUBDOMAINS}" = "1" ]; then
+    v="$v; includeSubDomains"
+  fi
+  if [ "${HSTS_PRELOAD}" = "1" ]; then
+    v="$v; preload"
+  fi
+  echo "$v"
+}
+
+write_caddyfile() {
+  local hsts_enabled="$1" # 0|1
+  local HSTS_LINE=""
+  if [ "$hsts_enabled" = "1" ]; then
+    HSTS_LINE="Strict-Transport-Security \"$(hsts_header_value)\""
+  fi
+
+  cat >/etc/caddy/Caddyfile <<CADDY
 $DOMAIN {
   $CADDY_TLS
 
@@ -87,7 +116,7 @@ $DOMAIN {
 
   # Security headers (baseline hardening)
   header {
-    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    $HSTS_LINE
     X-Content-Type-Options "nosniff"
     X-Frame-Options "DENY"
     Referrer-Policy "no-referrer"
@@ -95,14 +124,29 @@ $DOMAIN {
     # CSP is intentionally minimal to avoid breaking OpenClaw UI.
   }
 
+  # Cache policy
+  # - No-store for auth and HTML (avoid stale UI during rapid iteration)
+  # - Cache hashed assets for speed
+  @auth path /login /login/* /auth/*
+  header @auth Cache-Control "no-store"
+
+  @static path /__openclaw__/canvas/dzzenos/assets/*
+  header @static Cache-Control "public, max-age=${CACHE_STATIC_MAX_AGE}, immutable"
+
+  # If OpenClaw serves other hashed assets, cache them too.
+  @static2 path /assets/*
+  header @static2 Cache-Control "public, max-age=${CACHE_STATIC_MAX_AGE}, immutable"
+
+  # Default: don't cache (safe)
+  header Cache-Control "no-store"
+
   # Limit request body size (helps against abuse)
   request_body {
     max_size 10MB
   }
 
   # Public endpoints (login)
-  @login path /login /login/* /auth/*
-  handle @login {
+  handle @auth {
     reverse_proxy $API_HOST:$API_PORT
   }
 
@@ -136,12 +180,44 @@ $DOMAIN {
   }
 }
 CADDY
+}
+
+echo "[dzzenos] writing Caddyfile (HSTS=off initially)"
+write_caddyfile 0
 
 caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy || systemctl restart caddy
 
+echo "[dzzenos] waiting for TLS certificate issuance (Caddy)"
+# Try HTTPS a few times (DNS/ACME can take a moment)
+HTTPS_OK=0
+for i in 1 2 3 4 5; do
+  if curl -fsS --max-time 5 "https://$DOMAIN/login" >/dev/null 2>&1; then
+    HTTPS_OK=1
+    break
+  fi
+  sleep 2
+done
+
+if [ "$HTTPS_OK" != "1" ]; then
+  echo "WARN: HTTPS check failed. TLS cert may not be ready yet." >&2
+  echo "- Ensure: DNS A/AAAA points to this server" >&2
+  echo "- Ensure: inbound ports 80/443 are open" >&2
+  echo "- Watch logs: journalctl -u caddy -f" >&2
+else
+  echo "[dzzenos] HTTPS OK"
+
+  if [ "$HSTS_MODE" = "on" ] || [ "$HSTS_MODE" = "auto" ]; then
+    echo "[dzzenos] enabling HSTS (mode=$HSTS_MODE)"
+    write_caddyfile 1
+    caddy validate --config /etc/caddy/Caddyfile
+    systemctl reload caddy || systemctl restart caddy
+  fi
+fi
+
 echo "OK"
 echo "Domain: https://$DOMAIN/"
+echo "Login:  https://$DOMAIN/login"
 echo "DzzenOS: https://$DOMAIN/__openclaw__/canvas/dzzenos/"
 echo "OpenClaw Control UI: https://$DOMAIN/"
 echo "Logs: journalctl -u caddy -f ; journalctl -u dzzenos-api -f"
