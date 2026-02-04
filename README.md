@@ -42,11 +42,12 @@ It provides:
 
 ## 3-minute quickstart (local demo)
 
-**Prereqs:** Node.js (>= 20), `pnpm`.
+**Prereqs:** Node.js (>= 22 recommended). We use **Corepack** to provide pnpm.
 
 ```bash
-pnpm install
-pnpm dev
+corepack enable
+corepack pnpm install
+corepack pnpm dev
 ```
 
 Then open the UI printed in the console (default: `http://127.0.0.1:5173`).
@@ -71,7 +72,30 @@ HOST=127.0.0.1 API_PORT=8787 UI_PORT=5173 pnpm dev
 
 ## Install
 
-- Remote server (SSH tunnel): see `docs/INSTALL.md`
+### Remote (server)
+
+**1) On your laptop: create an SSH tunnel**
+```bash
+ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+```
+
+**2) On your server: install DzzenOS-OpenClaw**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+```
+
+**3) Open in your browser**
+- DzzenOS UI: `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if required)
+- Control UI: `http://localhost:18789/` (append `?token=...` if required)
+
+### Agent-driven install (chat → install → reply)
+
+See: `docs/AGENT-INSTALL.md`
+
+### More details
+
+- `docs/INSTALL.md`
+- `docs/remote-access.md`
 
 ## Install (alpha)
 
