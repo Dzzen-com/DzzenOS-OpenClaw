@@ -7,6 +7,9 @@
  *   GET   /tasks?boardId=
  *   GET   /runs?status=running|failed|...&stuckMinutes=
  *   GET   /approvals?status=pending|approved|rejected
+ *   POST  /approvals/:id/approve   { decidedBy?, reason? }
+ *   POST  /approvals/:id/reject    { decidedBy?, reason? }
+ *   POST  /tasks/:id/request-approval (stub) { title?, body?, stepId? }
  *   POST  /tasks                   { title, description?, boardId? }
  *   PATCH /tasks/:id               { status?, title?, description? }
  *   POST  /tasks/:id/simulate-run  (create run + steps; auto-advance)
@@ -267,7 +270,71 @@ function main() {
           )
           .all(...params);
 
+
         return sendJson(res, 200, approvals, corsHeaders);
+      }
+
+      const approvalDecideMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/approvals\/([^/]+)\/(approve|reject)$/)
+        : null;
+      if (approvalDecideMatch) {
+        const id = decodeURIComponent(approvalDecideMatch[1]);
+        const action = approvalDecideMatch[2];
+
+        const body = await readJson(req);
+        const decidedBy = typeof body?.decidedBy === 'string' ? body.decidedBy.trim() : null;
+        const reason = typeof body?.reason === 'string' ? body.reason : null;
+
+        const existing = rowOrNull<{ id: string; status: string }>(
+          db.prepare('SELECT id, status FROM approvals WHERE id = ?').all(id) as any
+        );
+        if (!existing) return sendJson(res, 404, { error: 'Approval not found' }, corsHeaders);
+        if (existing.status !== 'pending') {
+          return sendJson(res, 409, { error: `Approval already decided (${existing.status})` }, corsHeaders);
+        }
+
+        const nextStatus = action === 'approve' ? 'approved' : 'rejected';
+        const info = db
+          .prepare(
+            `UPDATE approvals
+             SET status = ?,
+                 decided_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                 decided_by = ?,
+                 decision_reason = ?
+             WHERE id = ? AND status = 'pending'`
+          )
+          .run(nextStatus, decidedBy, reason, id);
+        if (info.changes === 0) {
+          return sendJson(res, 409, { error: 'Approval already decided' }, corsHeaders);
+        }
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 a.id,
+                 a.run_id,
+                 a.step_id,
+                 a.status,
+                 a.request_title,
+                 a.request_body,
+                 a.requested_at,
+                 a.decided_at,
+                 a.decided_by,
+                 a.decision_reason,
+                 a.created_at,
+                 a.updated_at,
+                 r.task_id as task_id,
+                 r.board_id as board_id,
+                 t.title as task_title
+               FROM approvals a
+               JOIN agent_runs r ON r.id = a.run_id
+               LEFT JOIN tasks t ON t.id = r.task_id
+               WHERE a.id = ?`
+            )
+            .all(id) as any
+        );
+        return sendJson(res, 200, row, corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/automations') {
@@ -449,6 +516,84 @@ function main() {
           ).all(id) as any
         );
         return sendJson(res, 201, task, corsHeaders);
+      }
+
+      const requestApprovalMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/tasks\/([^/]+)\/request-approval$/)
+        : null;
+      if (requestApprovalMatch) {
+        const taskId = decodeURIComponent(requestApprovalMatch[1]);
+        const body = await readJson(req);
+
+        const taskRow = rowOrNull<{ id: string; board_id: string; workspace_id: string; title: string }>(
+          db.prepare(
+            `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id, t.title as title
+             FROM tasks t
+             JOIN boards b ON b.id = t.board_id
+             WHERE t.id = ?`
+          ).all(taskId) as any
+        );
+        if (!taskRow) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        const title = typeof body?.title === 'string' ? body.title.trim() : '';
+        const requestTitle = title || `Approval requested for: ${taskRow.title}`;
+        const requestBody = typeof body?.body === 'string' ? body.body : null;
+        const stepId = typeof body?.stepId === 'string' ? body.stepId : null;
+
+        // Find latest run for task; if none, create a placeholder run.
+        let runId = rowOrNull<{ id: string }>(
+          db
+            .prepare('SELECT id FROM agent_runs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1')
+            .all(taskId) as any
+        )?.id;
+
+        db.exec('BEGIN');
+        try {
+          if (!runId) {
+            runId = randomUUID();
+            db.prepare(
+              'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, ?, ?, ?, ?)'
+            ).run(runId, taskRow.workspace_id, taskRow.board_id, taskRow.id, 'user', 'running');
+          }
+
+          const approvalId = randomUUID();
+          db.prepare(
+            'INSERT INTO approvals(id, run_id, step_id, status, request_title, request_body) VALUES (?, ?, ?, ?, ?, ?)'
+          ).run(approvalId, runId, stepId, 'pending', requestTitle, requestBody);
+
+          db.exec('COMMIT');
+
+          const row = rowOrNull<any>(
+            db
+              .prepare(
+                `SELECT
+                   a.id,
+                   a.run_id,
+                   a.step_id,
+                   a.status,
+                   a.request_title,
+                   a.request_body,
+                   a.requested_at,
+                   a.decided_at,
+                   a.decided_by,
+                   a.decision_reason,
+                   a.created_at,
+                   a.updated_at,
+                   r.task_id as task_id,
+                   r.board_id as board_id,
+                   t.title as task_title
+                 FROM approvals a
+                 JOIN agent_runs r ON r.id = a.run_id
+                 LEFT JOIN tasks t ON t.id = r.task_id
+                 WHERE a.id = ?`
+              )
+              .all(approvalId) as any
+          );
+          return sendJson(res, 201, row, corsHeaders);
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
       }
 
       const simulateMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/simulate-run$/) : null;
