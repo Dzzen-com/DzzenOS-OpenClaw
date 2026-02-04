@@ -64,10 +64,11 @@ async function main() {
     ])
   );
 
+  // Use corepack to ensure pnpm exists on fresh machines.
   children.push(
     run(
-      'pnpm',
-      ['-C', 'apps/ui', 'dev', '--', '--host', HOST, '--port', String(uiPort), '--strictPort'],
+      'corepack',
+      ['pnpm', '-C', 'apps/ui', 'dev', '--', '--host', HOST, '--port', String(uiPort), '--strictPort'],
       { env: { VITE_API_BASE: apiBase } }
     )
   );
