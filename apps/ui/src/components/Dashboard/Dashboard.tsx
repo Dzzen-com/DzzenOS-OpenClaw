@@ -1,11 +1,12 @@
 import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { listApprovals, listRuns } from '../../api/queries';
+import { approveApproval, listApprovals, listRuns, rejectApproval } from '../../api/queries';
 import type { AgentRunListItem, Approval } from '../../api/types';
 
 import { InlineAlert } from '../ui/InlineAlert';
 import { Spinner } from '../ui/Spinner';
+import { Button } from '../ui/Button';
 
 function withinLastHours(iso: string, hours: number) {
   const t = Date.parse(iso);
@@ -31,6 +32,22 @@ export function Dashboard({
   const approvalsQ = useQuery({
     queryKey: ['approvals', 'pending'],
     queryFn: () => listApprovals({ status: 'pending' }),
+  });
+
+  const qc = useQueryClient();
+
+  const approveM = useMutation({
+    mutationFn: async (id: string) => approveApproval(id, { decidedBy: 'ui' }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+    },
+  });
+
+  const rejectM = useMutation({
+    mutationFn: async (id: string) => rejectApproval(id, { decidedBy: 'ui' }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+    },
   });
 
   const failedLast24h = useMemo(() => {
@@ -75,6 +92,9 @@ export function Dashboard({
             q={approvalsQ}
             approvals={approvalsQ.data ?? []}
             emptyLabel="No pending approvals."
+            deciding={approveM.isPending || rejectM.isPending}
+            onApprove={(a) => approveM.mutate(a.id)}
+            onReject={(a) => rejectM.mutate(a.id)}
             onClick={(a) => {
               if (!a.task_id || !a.board_id) return;
               onSelectTask({ boardId: a.board_id, taskId: a.task_id });
@@ -159,11 +179,17 @@ function ApprovalList({
   q,
   approvals,
   emptyLabel,
+  deciding,
+  onApprove,
+  onReject,
   onClick,
 }: {
   q: { isLoading: boolean; isError: boolean; error: unknown };
   approvals: Approval[];
   emptyLabel: string;
+  deciding: boolean;
+  onApprove: (a: Approval) => void;
+  onReject: (a: Approval) => void;
   onClick: (a: Approval) => void;
 }) {
   if (q.isLoading) return <div className="p-3"><Spinner label="Loading…" /></div>;
@@ -172,15 +198,43 @@ function ApprovalList({
 
   return (
     <div className="flex flex-col gap-2 p-2">
-      {approvals.slice(0, 20).map((a) => (
-        <RowButton
-          key={a.id}
-          title={a.request_title ?? a.task_title ?? a.task_id ?? a.id}
-          subtitle={`pending • ${new Date(a.requested_at).toLocaleString()}`}
-          disabled={!a.task_id || !a.board_id}
-          onClick={() => onClick(a)}
-        />
-      ))}
+      {approvals.slice(0, 20).map((a) => {
+        const disabled = !a.task_id || !a.board_id;
+        return (
+          <div key={a.id} className="flex items-stretch gap-2">
+            <RowButton
+              title={a.request_title ?? a.task_title ?? a.task_id ?? a.id}
+              subtitle={`pending • ${new Date(a.requested_at).toLocaleString()}`}
+              disabled={disabled}
+              onClick={() => onClick(a)}
+            />
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={disabled || deciding}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onApprove(a);
+                }}
+              >
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={disabled || deciding}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReject(a);
+                }}
+              >
+                Reject
+              </Button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

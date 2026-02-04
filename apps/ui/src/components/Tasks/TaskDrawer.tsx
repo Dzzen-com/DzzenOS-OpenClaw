@@ -1,8 +1,8 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import type { ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Task, TaskStatus } from '../../api/types';
-import { listTaskRuns, patchTask, simulateRun } from '../../api/queries';
+import type { Approval, Task, TaskStatus } from '../../api/types';
+import { listApprovals, listTaskRuns, patchTask, requestTaskApproval, simulateRun } from '../../api/queries';
 import { statusLabel } from './status';
 import { shortId } from './taskId';
 import { formatUpdatedAt } from './taskTime';
@@ -40,10 +40,30 @@ export function TaskDrawer({
     },
   });
 
+  const approvalsQ = useQuery({
+    queryKey: ['approvals', 'task', task?.id],
+    queryFn: () => listApprovals(),
+    enabled: open && !!task?.id,
+  });
+
+  const approvalsForTask: Approval[] = useMemo(() => {
+    if (!task?.id) return [];
+    const all = approvalsQ.data ?? [];
+    return all.filter((a) => a.task_id === task.id).slice(0, 50);
+  }, [approvalsQ.data, task?.id]);
+
   const simulateM = useMutation({
     mutationFn: async (id: string) => simulateRun(id),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
+    },
+  });
+
+  const requestApprovalM = useMutation({
+    mutationFn: async () => requestTaskApproval(task!.id, { title: `Approve task: ${task!.title}` }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+      await qc.invalidateQueries({ queryKey: ['approvals', 'task', task?.id] });
     },
   });
 
@@ -106,6 +126,50 @@ export function TaskDrawer({
             <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground">
               {task?.description?.trim() ? task.description : '—'}
             </p>
+          </div>
+
+          <div className="mt-6 rounded-xl border border-border/70 bg-muted/20 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Approvals</div>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!task || requestApprovalM.isPending}
+                onClick={() => {
+                  if (!task) return;
+                  requestApprovalM.mutate();
+                }}
+              >
+                Request approval (stub)
+              </Button>
+            </div>
+
+            {approvalsQ.isLoading ? (
+              <div className="mt-3 text-sm text-muted-foreground">Loading…</div>
+            ) : approvalsQ.isError ? (
+              <div className="mt-3">
+                <InlineAlert>{String(approvalsQ.error)}</InlineAlert>
+              </div>
+            ) : approvalsForTask.length ? (
+              <div className="mt-3 grid gap-2">
+                {approvalsForTask.map((a) => (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background/40 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm text-foreground">{a.request_title ?? `Approval ${a.id.slice(0, 8)}`}</div>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {a.status} • {new Date(a.requested_at).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-xs text-muted-foreground">{a.id.slice(0, 8)}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 text-sm text-muted-foreground">No approvals for this task.</div>
+            )}
           </div>
 
           <div className="mt-6 text-xs text-muted-foreground">PATCH /tasks/:id (status)</div>

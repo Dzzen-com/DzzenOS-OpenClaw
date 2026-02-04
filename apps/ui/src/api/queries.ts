@@ -57,6 +57,30 @@ export function listApprovals(input?: { status?: ApprovalStatus }): Promise<Appr
   return apiFetch(`/approvals${suf}`);
 }
 
+export function approveApproval(id: string, input?: { decidedBy?: string; reason?: string }): Promise<Approval> {
+  return apiFetch(`/approvals/${encodeURIComponent(id)}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ decidedBy: input?.decidedBy ?? null, reason: input?.reason ?? null }),
+  });
+}
+
+export function rejectApproval(id: string, input?: { decidedBy?: string; reason?: string }): Promise<Approval> {
+  return apiFetch(`/approvals/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ decidedBy: input?.decidedBy ?? null, reason: input?.reason ?? null }),
+  });
+}
+
+export function requestTaskApproval(
+  taskId: string,
+  input?: { title?: string; body?: string; stepId?: string }
+): Promise<Approval> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/request-approval`, {
+    method: 'POST',
+    body: JSON.stringify({ title: input?.title ?? null, body: input?.body ?? null, stepId: input?.stepId ?? null }),
+  });
+}
+
 // --- Automations ---
 
 export function listAutomations(): Promise<Automation[]> {
