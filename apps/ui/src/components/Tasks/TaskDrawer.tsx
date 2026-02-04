@@ -7,6 +7,7 @@ import { statusLabel } from './status';
 import { shortId } from './taskId';
 import { formatUpdatedAt } from './taskTime';
 import { InlineAlert } from '../ui/InlineAlert';
+import { Button } from '../ui/Button';
 
 const STATUS: TaskStatus[] = ['todo', 'doing', 'blocked', 'done'];
 
@@ -49,9 +50,9 @@ export function TaskDrawer({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/40 backdrop-blur-sm" />
+        <Dialog.Overlay className="fixed inset-0 bg-black/45 backdrop-blur-sm" />
         <Dialog.Content
-          className="fixed right-0 top-0 h-dvh w-full max-w-xl border-l border-white/10 bg-[#0a1020] p-6 shadow-2xl outline-none"
+          className="fixed right-0 top-0 h-dvh w-full max-w-xl border-l border-border/70 bg-card p-6 shadow-popover outline-none"
           aria-describedby={undefined}
         >
           <div className="flex items-start justify-between gap-4">
@@ -59,13 +60,10 @@ export function TaskDrawer({
               <Dialog.Title className="truncate text-base font-semibold tracking-tight">
                 {task ? `${shortId(task.id)} · ${task.title}` : 'Task'}
               </Dialog.Title>
-              <div className="mt-1 text-sm text-slate-400">Local task</div>
+              <div className="mt-1 text-sm text-muted-foreground">Local task</div>
             </div>
-            <Dialog.Close
-              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-200 hover:bg-white/10"
-              aria-label="Close"
-            >
-              Close
+            <Dialog.Close asChild aria-label="Close">
+              <Button variant="secondary">Close</Button>
             </Dialog.Close>
           </div>
 
@@ -84,7 +82,7 @@ export function TaskDrawer({
                   if (!task) return;
                   patchM.mutate({ id: task.id, status: e.target.value as TaskStatus });
                 }}
-                className="rounded-lg border border-white/10 bg-[#0a1020] px-2 py-1.5 text-sm text-slate-100 outline-none focus:border-white/20"
+                className="h-9 rounded-md border border-input bg-background/40 px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 {STATUS.map((s) => (
                   <option key={s} value={s}>
@@ -95,22 +93,22 @@ export function TaskDrawer({
             </Row>
 
             <Row label="Updated">
-              <div className="text-sm text-slate-200">{task ? formatUpdatedAt(task.updated_at) : '—'}</div>
+              <div className="text-sm text-foreground">{task ? formatUpdatedAt(task.updated_at) : '—'}</div>
             </Row>
 
             <Row label="Created">
-              <div className="text-sm text-slate-200">{task ? formatUpdatedAt(task.created_at) : '—'}</div>
+              <div className="text-sm text-foreground">{task ? formatUpdatedAt(task.created_at) : '—'}</div>
             </Row>
           </div>
 
-          <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
-            <div className="text-xs font-medium uppercase tracking-wider text-slate-500">Description</div>
-            <p className="mt-2 whitespace-pre-wrap leading-relaxed text-slate-200">
+          <div className="mt-6 rounded-xl border border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Description</div>
+            <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground">
               {task?.description?.trim() ? task.description : '—'}
             </p>
           </div>
 
-          <div className="mt-6 text-xs text-slate-500">PATCH /tasks/:id (status)</div>
+          <div className="mt-6 text-xs text-muted-foreground">PATCH /tasks/:id (status)</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -119,8 +117,8 @@ export function TaskDrawer({
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2">
-      <div className="text-xs font-medium uppercase tracking-wider text-slate-500">{label}</div>
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
     </div>
   );
