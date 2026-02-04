@@ -45,7 +45,7 @@ export function App() {
   }, [selectedBoardId]);
 
   return (
-    <div className="min-h-dvh bg-[#0b1220] text-slate-100">
+    <div className="min-h-dvh bg-background text-foreground">
       <div className="flex min-h-dvh">
         <Sidebar selectedBoardId={selectedBoardId} onSelectBoard={(id) => setSelectedBoardId(id)} />
 
@@ -57,7 +57,7 @@ export function App() {
               <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <h1 className="text-lg font-semibold tracking-tight">Tasks</h1>
-                  <p className="mt-1 text-sm text-slate-400">Local API-backed list.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Local API-backed list.</p>
                 </div>
 
                 <div className="w-full sm:max-w-md">
@@ -80,7 +80,7 @@ export function App() {
                 {!selectedBoardId ? (
                   <EmptyState title="Select a board" subtitle="Boards are loaded from GET /boards." />
                 ) : tasksQ.isLoading ? (
-                  <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                  <div className="rounded-xl border border-border/70 bg-card p-4 shadow-panel">
                     <Spinner label="Loading tasks…" />
                   </div>
                 ) : tasksQ.isError ? (
@@ -88,12 +88,8 @@ export function App() {
                 ) : tasks.length === 0 ? (
                   <EmptyState title="No tasks yet" subtitle="Create one with the input above." />
                 ) : (
-                  <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur">
-                    <TaskTable
-                      tasks={tasks}
-                      selectedTaskId={selectedTaskId}
-                      onSelectTask={(id) => setSelectedTaskId(id)}
-                    />
+                  <div className="rounded-xl border border-border/70 bg-card shadow-panel">
+                    <TaskTable tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={(id) => setSelectedTaskId(id)} />
                   </div>
                 )}
               </div>
