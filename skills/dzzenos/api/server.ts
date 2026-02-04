@@ -5,6 +5,8 @@
  * Endpoints:
  *   GET   /boards
  *   GET   /tasks?boardId=
+ *   GET   /runs?status=running|failed|...&stuckMinutes=
+ *   GET   /approvals?status=pending|approved|rejected
  *   POST  /tasks                   { title, description?, boardId? }
  *   PATCH /tasks/:id               { status?, title?, description? }
  *   POST  /tasks/:id/simulate-run  (create run + steps; auto-advance)
@@ -166,6 +168,108 @@ function main() {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
     try {
+      if (req.method === 'GET' && url.pathname === '/runs') {
+        const status = url.searchParams.get('status');
+        const stuckMinutesRaw = url.searchParams.get('stuckMinutes');
+        const stuckMinutes = stuckMinutesRaw == null ? null : Number(stuckMinutesRaw);
+
+        const allowedStatus = new Set(['running', 'succeeded', 'failed', 'cancelled']);
+        if (status && !allowedStatus.has(status)) {
+          return sendJson(res, 400, { error: 'status must be one of: running, succeeded, failed, cancelled' }, corsHeaders);
+        }
+        if (stuckMinutesRaw != null && (!Number.isFinite(stuckMinutes) || stuckMinutes < 0)) {
+          return sendJson(res, 400, { error: 'stuckMinutes must be a non-negative number' }, corsHeaders);
+        }
+
+        const where: string[] = [];
+        const params: any[] = [];
+
+        if (status) {
+          where.push('r.status = ?');
+          params.push(status);
+        }
+
+        // If stuckMinutes is provided, return only stuck running runs older than N minutes.
+        if (stuckMinutes != null) {
+          where.push("r.status = 'running'");
+          where.push("julianday(r.created_at) < julianday('now') - (? / 1440.0)");
+          params.push(stuckMinutes);
+        }
+
+        const sql = `
+          SELECT
+            r.id,
+            r.workspace_id,
+            r.board_id,
+            r.task_id,
+            r.agent_name,
+            r.status,
+            r.started_at,
+            r.finished_at,
+            r.created_at,
+            r.updated_at,
+            t.title as task_title,
+            CASE
+              WHEN r.status = 'running' AND julianday(r.created_at) < julianday('now') - (? / 1440.0) THEN 1
+              ELSE 0
+            END as is_stuck
+          FROM agent_runs r
+          LEFT JOIN tasks t ON t.id = r.task_id
+          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+          ORDER BY r.created_at DESC
+          LIMIT 200
+        `;
+
+        const isStuckMinutes = stuckMinutes != null ? stuckMinutes : 5;
+        const rows = db.prepare(sql).all(...params, isStuckMinutes) as any[];
+        const payload = rows.map((r) => ({ ...r, is_stuck: Boolean(r.is_stuck) }));
+        return sendJson(res, 200, payload, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/approvals') {
+        const status = url.searchParams.get('status');
+        const allowed = new Set(['pending', 'approved', 'rejected']);
+        if (status && !allowed.has(status)) {
+          return sendJson(res, 400, { error: 'status must be one of: pending, approved, rejected' }, corsHeaders);
+        }
+
+        const where: string[] = [];
+        const params: any[] = [];
+        if (status) {
+          where.push('a.status = ?');
+          params.push(status);
+        }
+
+        const approvals = db
+          .prepare(
+            `SELECT
+               a.id,
+               a.run_id,
+               a.step_id,
+               a.status,
+               a.request_title,
+               a.request_body,
+               a.requested_at,
+               a.decided_at,
+               a.decided_by,
+               a.decision_reason,
+               a.created_at,
+               a.updated_at,
+               r.task_id as task_id,
+               r.board_id as board_id,
+               t.title as task_title
+             FROM approvals a
+             JOIN agent_runs r ON r.id = a.run_id
+             LEFT JOIN tasks t ON t.id = r.task_id
+             ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY a.requested_at DESC
+             LIMIT 200`
+          )
+          .all(...params);
+
+        return sendJson(res, 200, approvals, corsHeaders);
+      }
+
       if (req.method === 'GET' && url.pathname === '/boards') {
         const boards = db
           .prepare(

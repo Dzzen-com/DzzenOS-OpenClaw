@@ -36,6 +36,11 @@ export function Sidebar({
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+        <SectionTitle>Overview</SectionTitle>
+        <NavItem active={selectedPage === 'dashboard'} onClick={() => onSelectPage('dashboard')}>
+          Dashboard
+        </NavItem>
+
         <SectionTitle>Boards</SectionTitle>
 
         {boardsQ.isLoading ? (
@@ -50,7 +55,14 @@ export function Sidebar({
         ) : null}
 
         {(boardsQ.data ?? []).map((b) => (
-          <NavItem key={b.id} active={b.id === selectedBoardId} onClick={() => onSelectBoard(b.id)}>
+          <NavItem
+            key={b.id}
+            active={selectedPage === 'tasks' && b.id === selectedBoardId}
+            onClick={() => {
+              onSelectBoard(b.id);
+              onSelectPage('tasks');
+            }}
+          >
             {b.name}
           </NavItem>
         ))}

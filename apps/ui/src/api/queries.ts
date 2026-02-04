@@ -1,5 +1,14 @@
 import { apiFetch } from './client';
-import type { AgentRun, Board, Task, TaskStatus } from './types';
+import type {
+  AgentRun,
+  AgentRunListItem,
+  AgentRunStatus,
+  Approval,
+  ApprovalStatus,
+  Board,
+  Task,
+  TaskStatus,
+} from './types';
 
 export function listBoards(): Promise<Board[]> {
   return apiFetch('/boards');
@@ -30,4 +39,19 @@ export function simulateRun(taskId: string): Promise<{ runId: string }> {
 
 export function listTaskRuns(taskId: string): Promise<AgentRun[]> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/runs`);
+}
+
+export function listRuns(input?: { status?: AgentRunStatus; stuckMinutes?: number }): Promise<AgentRunListItem[]> {
+  const qs = new URLSearchParams();
+  if (input?.status) qs.set('status', input.status);
+  if (input?.stuckMinutes != null) qs.set('stuckMinutes', String(input.stuckMinutes));
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/runs${suf}`);
+}
+
+export function listApprovals(input?: { status?: ApprovalStatus }): Promise<Approval[]> {
+  const qs = new URLSearchParams();
+  if (input?.status) qs.set('status', input.status);
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/approvals${suf}`);
 }

@@ -54,3 +54,29 @@ export type AgentRun = {
   is_stuck: boolean;
   steps: RunStep[];
 };
+
+// Dashboard list items (no steps).
+export type AgentRunListItem = Omit<AgentRun, 'steps'> & {
+  task_title: string | null;
+};
+
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export type Approval = {
+  id: string;
+  run_id: string;
+  step_id: string | null;
+  status: ApprovalStatus;
+  request_title: string | null;
+  request_body: string | null;
+  requested_at: string;
+  decided_at: string | null;
+  decided_by: string | null;
+  decision_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined for dashboard linking.
+  task_id: string | null;
+  board_id: string | null;
+  task_title: string | null;
+};
