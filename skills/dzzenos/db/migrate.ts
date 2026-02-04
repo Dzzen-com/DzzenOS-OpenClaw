@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-type Options = {
+export type Options = {
   dbPath: string;
   migrationsDir: string;
 };
@@ -34,17 +34,9 @@ function ensureDirForFile(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function main() {
-  const args = parseArgs(process.argv.slice(2));
-
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
-  const repoRoot = path.resolve(__dirname, '../../..');
-
-  const migrationsDir = path.resolve(
-    args.migrationsDir ?? path.join(repoRoot, 'skills/dzzenos/db/migrations')
-  );
-  const dbPath = path.resolve(args.dbPath ?? path.join(repoRoot, 'data/dzzenos.db'));
+export function migrate(opts: Options) {
+  const migrationsDir = path.resolve(opts.migrationsDir);
+  const dbPath = path.resolve(opts.dbPath);
 
   ensureDirForFile(dbPath);
 
@@ -92,6 +84,21 @@ function main() {
   }
 
   console.log(`[migrate] done (db=${dbPath}, ran=${ran}, total=${files.length})`);
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2));
+
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const repoRoot = path.resolve(__dirname, '../../..');
+
+  const migrationsDir = path.resolve(
+    args.migrationsDir ?? path.join(repoRoot, 'skills/dzzenos/db/migrations')
+  );
+  const dbPath = path.resolve(args.dbPath ?? path.join(repoRoot, 'data/dzzenos.db'));
+
+  migrate({ dbPath, migrationsDir });
 }
 
 main();
