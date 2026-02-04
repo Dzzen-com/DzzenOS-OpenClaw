@@ -17,7 +17,12 @@ Send **exactly this** to your OpenClaw agent:
 Install (or update) DzzenOS-OpenClaw on the gateway host you are running on.
 
 Run this command on the host:
+
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+
+If you want machine-readable output, you may use:
+
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --json
 
 After it finishes, reply to me with:
 1) "DzzenOS installed ✅" (or "DzzenOS updated ✅")

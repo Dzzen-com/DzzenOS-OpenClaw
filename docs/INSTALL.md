@@ -24,6 +24,12 @@ SSH into the server and run:
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
 
+Machine-readable output (for automation):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --json
+```
+
 What it does:
 - clones/updates the repo
 - installs deps

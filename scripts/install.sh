@@ -18,18 +18,25 @@ GATEWAY_PORT_DEFAULT="18789"
 HOST="${HOST:-$HOST_DEFAULT}"
 GATEWAY_PORT="${GATEWAY_PORT:-$GATEWAY_PORT_DEFAULT}"
 
+JSON_MODE=0
+for arg in "$@"; do
+  if [ "$arg" = "--json" ]; then
+    JSON_MODE=1
+  fi
+done
+
 # --- pretty printing ---
-if [ -t 1 ]; then
+if [ $JSON_MODE -eq 0 ] && [ -t 1 ]; then
   BOLD='\033[1m'; DIM='\033[2m'; RED='\033[31m'; GRN='\033[32m'; YLW='\033[33m'; BLU='\033[34m'; RST='\033[0m'
 else
   BOLD=''; DIM=''; RED=''; GRN=''; YLW=''; BLU=''; RST=''
 fi
 
-step() { echo -e "${BOLD}${BLU}==>${RST} ${BOLD}$*${RST}"; }
-info() { echo -e "${DIM} • $*${RST}"; }
-ok()   { echo -e "${GRN}✔${RST} $*"; }
-warn() { echo -e "${YLW}!${RST} $*"; }
-err()  { echo -e "${RED}✖${RST} $*"; }
+step() { [ $JSON_MODE -eq 1 ] || echo -e "${BOLD}${BLU}==>${RST} ${BOLD}$*${RST}"; }
+info() { [ $JSON_MODE -eq 1 ] || echo -e "${DIM} • $*${RST}"; }
+ok()   { [ $JSON_MODE -eq 1 ] || echo -e "${GRN}✔${RST} $*"; }
+warn() { [ $JSON_MODE -eq 1 ] || echo -e "${YLW}!${RST} $*"; }
+err()  { [ $JSON_MODE -eq 1 ] || echo -e "${RED}✖${RST} $*"; }
 
 die() { err "$*"; exit 1; }
 
@@ -72,9 +79,36 @@ fi
 
 CONTROL_URL="http://localhost:${GATEWAY_PORT}/"
 DZZENOS_URL="http://localhost:${GATEWAY_PORT}/__openclaw__/canvas/dzzenos/"
+SSH_TUNNEL_CMD="ssh -N -L ${GATEWAY_PORT}:${HOST}:${GATEWAY_PORT} root@<server-ip>"
+
+if [ $JSON_MODE -eq 1 ]; then
+  # Minimal JSON (no secrets beyond what OpenClaw already stores locally).
+  # Note: token may be present locally; we include it so an agent can return exact URLs.
+  node - <<'NODE'
+const token = process.env.TOKEN || '';
+const control = process.env.CONTROL_URL;
+const dzzenos = process.env.DZZENOS_URL;
+const ssh = process.env.SSH_TUNNEL_CMD;
+const out = {
+  ok: true,
+  installDir: process.env.INSTALL_DIR,
+  repoUrl: process.env.REPO_URL,
+  gateway: {
+    host: process.env.HOST,
+    port: Number(process.env.GATEWAY_PORT || '18789'),
+    controlUrl: token ? `${control}?token=${token}` : control,
+    dzzenosUrl: token ? `${dzzenos}?token=${token}` : dzzenos,
+    tokenPresent: Boolean(token)
+  },
+  sshTunnelCommand: ssh
+};
+process.stdout.write(JSON.stringify(out, null, 2));
+NODE
+  exit 0
+fi
 
 info "If OpenClaw runs on a remote server, create an SSH tunnel from your laptop:" 
-info "  ssh -N -L ${GATEWAY_PORT}:${HOST}:${GATEWAY_PORT} root@<server-ip>"
+info "  ${SSH_TUNNEL_CMD}"
 
 if [ -n "$TOKEN" ]; then
   ok "Open Control UI: ${CONTROL_URL}?token=${TOKEN}"
