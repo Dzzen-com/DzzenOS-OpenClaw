@@ -1,0 +1,28 @@
+name: Release Skill Bundle
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create dzzenos skill bundle
+        run: |
+          mkdir -p dist
+          cd skills
+          zip -r ../dist/dzzenos-skill.zip dzzenos
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dzzenos-skill
+          path: dist/dzzenos-skill.zip
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/dzzenos-skill.zip
