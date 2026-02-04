@@ -6,8 +6,9 @@ This guide enables **secure access from anywhere** (phone, laptop) via a custom 
 
 - `https://<your-domain>/login` — a DzzenOS-themed login page
 - After login:
-  - DzzenOS dashboard (Canvas): `https://<your-domain>/__openclaw__/canvas/dzzenos/`
-  - OpenClaw Control UI: `https://<your-domain>/`
+  - DzzenOS dashboard (nice URL): `https://<your-domain>/dashboard` (redirects to Canvas)
+  - DzzenOS dashboard (Canvas path): `https://<your-domain>/__openclaw__/canvas/dzzenos/`
+  - OpenClaw Control UI: `https://<your-domain>/openclaw`
 
 ## Security model
 

@@ -157,6 +157,20 @@ $DOMAIN {
       copy_headers X-Auth-User
     }
 
+    # Nice routes
+    redir / /dashboard 302
+    redir /dashboard /__openclaw__/canvas/dzzenos/ 302
+
+    # Keep OpenClaw UI under /openclaw
+    @openclaw path /openclaw*
+    handle @openclaw {
+      uri strip_prefix /openclaw
+      reverse_proxy $API_HOST:$GATEWAY_PORT {
+        header_up Authorization "Bearer $GATEWAY_TOKEN"
+        header_down -Server
+      }
+    }
+
     # DzzenOS API (behind auth)
     @api path /dzzenos-api/*
     handle @api {
@@ -164,7 +178,7 @@ $DOMAIN {
       reverse_proxy $API_HOST:$API_PORT
     }
 
-    # OpenClaw Gateway (token stays server-side)
+    # Default: OpenClaw at root paths (for compatibility)
     reverse_proxy $API_HOST:$GATEWAY_PORT {
       header_up Authorization "Bearer $GATEWAY_TOKEN"
 
@@ -216,8 +230,9 @@ else
 fi
 
 echo "OK"
-echo "Domain: https://$DOMAIN/"
-echo "Login:  https://$DOMAIN/login"
-echo "DzzenOS: https://$DOMAIN/__openclaw__/canvas/dzzenos/"
-echo "OpenClaw Control UI: https://$DOMAIN/"
+echo "Domain:    https://$DOMAIN/"
+echo "Login:     https://$DOMAIN/login"
+echo "Dashboard: https://$DOMAIN/dashboard"
+echo "DzzenOS:   https://$DOMAIN/__openclaw__/canvas/dzzenos/"
+echo "OpenClaw:  https://$DOMAIN/openclaw"
 echo "Logs: journalctl -u caddy -f ; journalctl -u dzzenos-api -f"

@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scr
 
 This gives you access from anywhere (phone/laptop) at:
 - `https://<your-domain>/login`
-- `https://<your-domain>/__openclaw__/canvas/dzzenos/`
+- `https://<your-domain>/dashboard`
 
 Run the same installer and choose **server/VPS** → **domain mode**.
 
