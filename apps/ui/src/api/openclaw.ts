@@ -1,18 +1,13 @@
 export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
 
-const OPENCLAW_BASE = (import.meta as any).env?.VITE_OPENCLAW_BASE ?? '/__openclaw__';
-const OPENRESPONSES_BASE =
-  (import.meta as any).env?.VITE_OPENRESPONSES_BASE ?? `${OPENCLAW_BASE.replace(/\/$/, '')}/openresponses`;
+const OPENRESPONSES_URL =
+  (import.meta as any).env?.VITE_OPENRESPONSES_URL ?? '/v1/responses';
 
-function withToken(url: string) {
+function getTokenFromUrl() {
   try {
-    const t = new URLSearchParams(window.location.search).get('token');
-    if (!t) return url;
-    const u = new URL(url, window.location.origin);
-    if (!u.searchParams.get('token')) u.searchParams.set('token', t);
-    return u.toString();
+    return new URLSearchParams(window.location.search).get('token') ?? '';
   } catch {
-    return url;
+    return '';
   }
 }
 
@@ -26,12 +21,14 @@ async function parseJsonSafe(res: Response) {
   }
 }
 
-export async function openclawFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = OPENRESPONSES_BASE;
-  const url = withToken(path.startsWith('http') ? path : `${base}${path.startsWith('/') ? '' : '/'}${path}`);
-
+export async function openclawFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as any) };
   if (init?.body && !headers['content-type']) headers['content-type'] = 'application/json';
+
+  const token = getTokenFromUrl();
+  if (token && !headers.authorization) {
+    headers.authorization = `Bearer ${token}`;
+  }
 
   const res = await fetch(url, { ...init, headers });
   if (!res.ok) {
@@ -40,7 +37,7 @@ export async function openclawFetch<T>(path: string, init?: RequestInit): Promis
       typeof body === 'string'
         ? body
         : body && typeof body === 'object' && 'error' in body
-          ? String((body as any).error)
+          ? String((body as any).error?.message ?? (body as any).error)
           : `HTTP ${res.status}`;
     throw new Error(msg);
   }
@@ -49,29 +46,55 @@ export async function openclawFetch<T>(path: string, init?: RequestInit): Promis
 }
 
 /**
- * Minimal OpenAI-compatible Chat Completions call via OpenClaw OpenResponses.
+ * OpenClaw OpenResponses call.
  *
- * NOTE: This assumes the gateway exposes an OpenAI-compatible endpoint at:
- *   /__openclaw__/openresponses/v1/chat/completions
+ * Docs: https://docs.openclaw.ai/gateway/openresponses-http-api
  */
-export async function createChatCompletion(input: {
+export async function createResponse(input: {
+  sessionKey: string;
+  text: string;
+  agentId?: string;
   model?: string;
-  messages: ChatMessage[];
-  temperature?: number;
 }): Promise<string> {
-  const model =
-    input.model ?? (import.meta as any).env?.VITE_OPENRESPONSES_MODEL ?? 'gpt-4.1-mini';
+  const model = input.model ?? 'openclaw:main';
 
-  const data = await openclawFetch<any>('/v1/chat/completions', {
+  const data = await openclawFetch<any>(OPENRESPONSES_URL, {
     method: 'POST',
+    headers: {
+      'x-openclaw-session-key': input.sessionKey,
+      ...(input.agentId ? { 'x-openclaw-agent-id': input.agentId } : {}),
+    },
     body: JSON.stringify({
       model,
-      messages: input.messages,
-      temperature: input.temperature ?? 0.2,
+      input: input.text,
     }),
   });
 
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') throw new Error('OpenResponses: unexpected response shape');
-  return content;
+  // Best-effort: try to extract assistant text from the OpenResponses output.
+  // If shape changes, we fall back to stringifying.
+  const output = data?.output;
+  if (typeof output === 'string') return output;
+
+  // Some gateways may return { output_text: "..." }
+  if (typeof data?.output_text === 'string') return data.output_text;
+
+  // OpenResponses item stream may include output_text parts
+  try {
+    const items = Array.isArray(output) ? output : [];
+    const texts: string[] = [];
+    for (const it of items) {
+      const content = it?.content;
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          if (c?.type === 'output_text' && typeof c?.text === 'string') texts.push(c.text);
+          if (c?.type === 'text' && typeof c?.text === 'string') texts.push(c.text);
+        }
+      }
+    }
+    if (texts.length) return texts.join('');
+  } catch {
+    // ignore
+  }
+
+  throw new Error('OpenResponses: unexpected response shape');
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createChatCompletion, type ChatMessage } from '../../api/openclaw';
+import { createResponse, type ChatMessage } from '../../api/openclaw';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 
@@ -70,13 +70,13 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
     setMsgs((m) => [...m, userMsg]);
 
     try {
-      const reply = await createChatCompletion({ messages: [...chatMessages, { role: 'user', content: text }] });
+      const reply = await createResponse({ sessionKey: key, text });
       const a: UiMsg = { id: nowId(), role: 'assistant', content: reply.trim(), ts: Date.now() };
       setMsgs((m) => [...m, a]);
     } catch (e: any) {
       setErr(
         String(e?.message ?? e) ||
-          'Failed to reach OpenClaw OpenResponses endpoint. See docs: enable /__openclaw__/openresponses OpenAI-compatible API.',
+          'Failed to reach OpenClaw OpenResponses endpoint. See docs: enable gateway.http.endpoints.responses.enabled and use /v1/responses.',
       );
     } finally {
       setBusy(false);
