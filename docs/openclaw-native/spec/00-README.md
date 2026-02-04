@@ -26,5 +26,5 @@ OpenClaw быстро растёт, потому что:
 - `12-Chat Bindings (Telegram Topics + Slack Threads).md` — привязка досок к чат‑тредам для управления и отчётов
 
 ## Важное
-Старые документы DzzenOS (SaaS control plane + Directus) остаются как историческая ветка/референс.
+Документы в этой папке описывают **OpenClaw-native, local-first** DzzenOS. Старый Directus/SaaS-контур удалён из репозитория, чтобы не путать пользователей.
 Дальше развиваем **OpenClaw Native** как основной вектор.

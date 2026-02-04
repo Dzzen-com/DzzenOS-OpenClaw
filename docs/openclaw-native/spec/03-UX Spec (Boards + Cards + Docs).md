@@ -37,7 +37,7 @@
 Важно сделать сохранённые представления:
 - Founder Ops view (Domain=Founder Ops)
 - Content pipeline view (Domain=Content)
-- Directus/Schema view (Domain=Directus)
+- (Removed) Directus/Schema view
 
 ---
 

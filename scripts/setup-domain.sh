@@ -85,6 +85,21 @@ $DOMAIN {
 
   encode zstd gzip
 
+  # Security headers (baseline hardening)
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    # CSP is intentionally minimal to avoid breaking OpenClaw UI.
+  }
+
+  # Limit request body size (helps against abuse)
+  request_body {
+    max_size 10MB
+  }
+
   # Public endpoints (login)
   @login path /login /login/* /auth/*
   handle @login {
@@ -108,6 +123,9 @@ $DOMAIN {
     # OpenClaw Gateway (token stays server-side)
     reverse_proxy $API_HOST:$GATEWAY_PORT {
       header_up Authorization "Bearer $GATEWAY_TOKEN"
+
+      # Don't leak anything sensitive via downstream headers
+      header_down -Server
     }
   }
 

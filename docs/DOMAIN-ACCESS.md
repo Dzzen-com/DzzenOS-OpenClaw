@@ -15,6 +15,10 @@ This guide enables **secure access from anywhere** (phone, laptop) via a custom 
 - Caddy is the only public entry point (ports **80/443**).
 - Your OpenClaw token is kept **server-side** in `/etc/caddy/Caddyfile` and is injected as an `Authorization: Bearer ...` header.
 - Users authenticate via a **cookie session** (username/password) handled by DzzenOS API (`/auth/*`).
+- Hardening included:
+  - strict security headers (HSTS, nosniff, etc.)
+  - request body size limit
+  - basic brute-force protection on login (rate limit + temporary IP block)
 
 ## Install (recommended)
 

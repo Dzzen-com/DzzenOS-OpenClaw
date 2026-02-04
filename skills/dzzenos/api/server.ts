@@ -285,6 +285,32 @@ function main() {
       if (req.method === 'POST' && url.pathname === '/auth/login') {
         if (!auth) return sendText(res, 500, 'Auth is not configured', corsHeaders);
 
+        // Basic brute-force protection (no deps): per-IP rolling window.
+        // Note: behind Caddy, we rely on X-Forwarded-For.
+        const ipRaw = String((req.headers['x-forwarded-for'] ?? req.socket.remoteAddress ?? '') as any);
+        const ip = ipRaw.split(',')[0]?.trim() || 'unknown';
+
+        // In-memory map: good enough for single-host deployments.
+        // If process restarts, counters reset.
+        (globalThis as any).__dzzenosAuthAttempts ??= new Map();
+        const attempts: Map<string, { firstAt: number; count: number; blockedUntil: number }> = (globalThis as any)
+          .__dzzenosAuthAttempts;
+        const now = Date.now();
+        const windowMs = 10 * 60 * 1000;
+        const maxAttempts = 20;
+        const blockMs = 20 * 60 * 1000;
+        const cur = attempts.get(ip) ?? { firstAt: now, count: 0, blockedUntil: 0 };
+        if (cur.blockedUntil > now) {
+          return sendText(res, 429, 'Too many attempts. Try later.', {
+            ...corsHeaders,
+            'retry-after': String(Math.ceil((cur.blockedUntil - now) / 1000)),
+          });
+        }
+        if (now - cur.firstAt > windowMs) {
+          cur.firstAt = now;
+          cur.count = 0;
+        }
+
         const chunks: Buffer[] = [];
         for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         const bodyRaw = Buffer.concat(chunks).toString('utf8');
@@ -292,11 +318,24 @@ function main() {
         const username = String(form.get('username') ?? '').trim();
         const password = String(form.get('password') ?? '');
 
-        if (username !== auth.username || !verifyPassword(auth, password)) {
+        const ok = username === auth.username && verifyPassword(auth, password);
+        if (!ok) {
+          cur.count += 1;
+          if (cur.count >= maxAttempts) {
+            cur.blockedUntil = now + blockMs;
+          }
+          attempts.set(ip, cur);
+
+          // Small constant delay to make brute force harder.
+          await sleep(250);
+
           res.writeHead(302, { location: '/login?error=1', ...corsHeaders });
           res.end();
           return;
         }
+
+        // Successful login: reset attempts for IP.
+        attempts.delete(ip);
 
         const s = signSessionCookie(auth, username);
         const cookie = `${auth.cookie.name}=${encodeURIComponent(s.value)}; Path=/; HttpOnly; SameSite=Lax; Secure; Expires=${new Date(s.expiresAtMs).toUTCString()}`;
