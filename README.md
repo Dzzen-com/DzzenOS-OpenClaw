@@ -40,6 +40,35 @@ It provides:
 
 ---
 
+## 3-minute quickstart (local demo)
+
+**Prereqs:** Node.js (>= 20), `pnpm`.
+
+```bash
+pnpm install
+pnpm dev
+```
+
+Then open the UI printed in the console (default: `http://127.0.0.1:5173`).
+
+What you can try in ~1 minute:
+1. Create a task.
+2. Click **Simulate run** (dev-only) to create a run + steps.
+3. Refresh the task to see the run advance.
+
+### Ports / collisions
+- API defaults to `127.0.0.1:8787`
+- UI defaults to `127.0.0.1:5173`
+
+If a default port is already in use, `pnpm dev` will automatically pick the next free port and print it.
+
+You can override:
+```bash
+HOST=127.0.0.1 API_PORT=8787 UI_PORT=5173 pnpm dev
+```
+
+---
+
 ## Install (alpha)
 
 Until we publish to ClawHub, install from source.
