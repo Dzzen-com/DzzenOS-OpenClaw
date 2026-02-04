@@ -69,6 +69,10 @@ HOST=127.0.0.1 API_PORT=8787 UI_PORT=5173 pnpm dev
 
 ---
 
+## Install
+
+- Remote server (SSH tunnel): see `docs/INSTALL.md`
+
 ## Install (alpha)
 
 Until we publish to ClawHub, install from source.
