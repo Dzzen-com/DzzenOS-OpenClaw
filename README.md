@@ -107,58 +107,14 @@ See: `docs/AGENT-INSTALL.md`
 - `docs/INSTALL.md`
 - `docs/remote-access.md`
 
-## Install (alpha)
-
-Until we publish to ClawHub, install from source.
-
-### 1) Clone
-```bash
-git clone https://github.com/Dzzen-com/DzzenOS-OpenClaw.git
-cd DzzenOS-OpenClaw
-```
-
-### 2) Copy the DzzenOS skill into your OpenClaw workspace
-```bash
-# from your OpenClaw workspace root
-mkdir -p skills
-cp -R /path/to/DzzenOS-OpenClaw/skills/dzzenos ./skills/dzzenos
-
-# restart OpenClaw so it picks up the new skill
-```
-
 ---
 
 ## Docs
 
-## Remote access (server → laptop)
-
-### Option A — SSH tunnel (no domain)
-
-If you run OpenClaw on a remote server, use an SSH tunnel:
-
-```bash
-ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
-```
-
-DzzenOS UI can be served via OpenClaw Canvas host:
-
-```bash
-corepack pnpm dzzenos:canvas:publish
-```
-
-Open:
-- `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if your gateway requires it)
-
-### Option B — Domain (Caddy + TLS + login)
-
-If you want to access from anywhere (phone/laptop) via a custom domain:
-
-- Use the installer and enable **domain access**.
-- You'll need a DNS **A record** pointing your subdomain to the server public IP.
-
-Docs:
-- `docs/DOMAIN-ACCESS.md`
-
+- Install (SSH tunnel): `docs/INSTALL.md`
+- Domain mode (Caddy + TLS + login + caching): `docs/DOMAIN-ACCESS.md`
+- Agent-driven install: `docs/AGENT-INSTALL.md`
+- Remote access notes: `docs/remote-access.md`
 
 - OpenClaw Native specs (EN): `docs/openclaw-native/spec/`
 - Optional RU duplicates (for the website): `docs/openclaw-native/spec-ru/`
