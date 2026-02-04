@@ -49,6 +49,14 @@ Open:
 - It does **not** require VPN/Tailscale.
 - For local-first use on a laptop, install OpenClaw + DzzenOS locally instead (future guide).
 
+### Task Chat MVP
+
+The Task Drawer **Chat** tab uses the OpenClaw Gateway as the backend and expects an OpenAI-compatible OpenResponses endpoint at:
+
+- `/__openclaw__/openresponses/v1/chat/completions`
+
+If your gateway doesn’t expose this endpoint, the Chat tab will show an error.
+
 
 ## Agent-driven install
 
