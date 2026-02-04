@@ -10,8 +10,8 @@ export function Sidebar({
   selectedBoardId,
   onSelectBoard,
 }: {
-  selectedPage: 'dashboard' | 'tasks';
-  onSelectPage: (p: 'dashboard' | 'tasks') => void;
+  selectedPage: 'dashboard' | 'tasks' | 'automations';
+  onSelectPage: (p: 'dashboard' | 'tasks' | 'automations') => void;
   selectedBoardId: string | null;
   onSelectBoard: (id: string) => void;
 }) {
@@ -39,6 +39,9 @@ export function Sidebar({
         <SectionTitle>Overview</SectionTitle>
         <NavItem active={selectedPage === 'dashboard'} onClick={() => onSelectPage('dashboard')}>
           Dashboard
+        </NavItem>
+        <NavItem active={selectedPage === 'automations'} onClick={() => onSelectPage('automations')}>
+          Automations
         </NavItem>
 
         <SectionTitle>Boards</SectionTitle>
@@ -69,7 +72,8 @@ export function Sidebar({
       </nav>
 
       <div className="mt-auto border-t border-border/70 p-3 text-xs text-muted-foreground">
-        API: <span className="text-foreground/80">/boards</span> • <span className="text-foreground/80">/tasks</span>
+        API: <span className="text-foreground/80">/boards</span> • <span className="text-foreground/80">/tasks</span> •{' '}
+        <span className="text-foreground/80">/automations</span>
       </div>
     </aside>
   );
