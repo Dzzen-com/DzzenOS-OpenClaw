@@ -1,11 +1,3 @@
-export type TaskStatus = 'Backlog' | 'Planned' | 'In Progress' | 'Done';
-export type TaskPriority = 'Low' | 'Medium' | 'High';
-
-export type Task = {
-  id: string;
-  title: string;
-  status: TaskStatus;
-  priority: TaskPriority;
-  assignee: string;
-  updatedAt: string;
-};
+// Legacy placeholder types kept for backward compatibility.
+// The real app types live in src/api/types.
+export type { Task, TaskStatus } from '../../api/types';

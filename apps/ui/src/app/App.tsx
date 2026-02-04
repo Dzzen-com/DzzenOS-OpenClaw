@@ -1,75 +1,101 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
 import { Sidebar } from '../components/Sidebar/Sidebar';
 import { TopBar } from '../components/TopBar/TopBar';
 import { TaskTable } from '../components/Tasks/TaskTable';
 import { TaskDrawer } from '../components/Tasks/TaskDrawer';
-import type { Task } from '../components/Tasks/types';
+import { NewTask } from '../components/Tasks/NewTask';
+import { EmptyState } from '../components/ui/EmptyState';
+import { InlineAlert } from '../components/ui/InlineAlert';
+import { Spinner } from '../components/ui/Spinner';
+
+import type { Task } from '../api/types';
+import { createTask, listTasks } from '../api/queries';
 
 export function App() {
-  const tasks = useMemo<Task[]>(
-    () => [
-      {
-        id: 'DZ-7',
-        title: 'UI shell (Linear-like) – sidebar + list + drawer',
-        status: 'In Progress',
-        priority: 'High',
-        assignee: 'OpenClaw',
-        updatedAt: 'Today',
-      },
-      {
-        id: 'DZ-12',
-        title: 'Add task filtering + search',
-        status: 'Backlog',
-        priority: 'Medium',
-        assignee: '—',
-        updatedAt: '2d',
-      },
-      {
-        id: 'DZ-18',
-        title: 'Wire tasks to API (react-query)',
-        status: 'Backlog',
-        priority: 'Medium',
-        assignee: '—',
-        updatedAt: '1w',
-      },
-      {
-        id: 'DZ-21',
-        title: 'Board view (kanban)',
-        status: 'Planned',
-        priority: 'Low',
-        assignee: '—',
-        updatedAt: '1w',
-      },
-    ],
-    []
-  );
+  const qc = useQueryClient();
 
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(tasks[0]?.id ?? null);
-  const selectedTask = tasks.find((t) => t.id === selectedTaskId) ?? null;
+  const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+
+  const tasksQ = useQuery({
+    queryKey: ['tasks', selectedBoardId],
+    queryFn: () => {
+      if (!selectedBoardId) return Promise.resolve([] as Task[]);
+      return listTasks(selectedBoardId);
+    },
+    enabled: !!selectedBoardId,
+  });
+
+  const createM = useMutation({
+    mutationFn: async (vars: { boardId: string; title: string }) => createTask({ boardId: vars.boardId, title: vars.title }),
+    onSuccess: async (t) => {
+      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+      setSelectedTaskId(t.id);
+    },
+  });
+
+  const tasks = tasksQ.data ?? [];
+  const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
+
+  // If board changes, clear the selected task.
+  useEffect(() => {
+    setSelectedTaskId(null);
+  }, [selectedBoardId]);
 
   return (
     <div className="min-h-dvh bg-[#0b1220] text-slate-100">
       <div className="flex min-h-dvh">
-        <Sidebar />
+        <Sidebar selectedBoardId={selectedBoardId} onSelectBoard={(id) => setSelectedBoardId(id)} />
 
         <div className="flex min-w-0 flex-1 flex-col">
           <TopBar />
 
           <main className="min-w-0 flex-1 p-4 sm:p-6">
             <div className="mx-auto w-full max-w-6xl">
-              <div className="flex items-end justify-between gap-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                 <div>
                   <h1 className="text-lg font-semibold tracking-tight">Tasks</h1>
-                  <p className="mt-1 text-sm text-slate-400">Placeholder list (Issue #7 UI shell).</p>
+                  <p className="mt-1 text-sm text-slate-400">Local API-backed list.</p>
+                </div>
+
+                <div className="w-full sm:max-w-md">
+                  <NewTask
+                    onCreate={async (title) => {
+                      if (!selectedBoardId) return;
+                      await createM.mutateAsync({ boardId: selectedBoardId, title });
+                    }}
+                  />
                 </div>
               </div>
 
-              <div className="mt-4 rounded-xl border border-white/10 bg-white/5 backdrop-blur">
-                <TaskTable
-                  tasks={tasks}
-                  selectedTaskId={selectedTaskId}
-                  onSelectTask={(id) => setSelectedTaskId(id)}
-                />
+              {createM.isError ? (
+                <div className="mt-3">
+                  <InlineAlert>{String(createM.error)}</InlineAlert>
+                </div>
+              ) : null}
+
+              <div className="mt-4">
+                {!selectedBoardId ? (
+                  <EmptyState title="Select a board" subtitle="Boards are loaded from GET /boards." />
+                ) : tasksQ.isLoading ? (
+                  <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+                    <Spinner label="Loading tasks…" />
+                  </div>
+                ) : tasksQ.isError ? (
+                  <InlineAlert>{String(tasksQ.error)}</InlineAlert>
+                ) : tasks.length === 0 ? (
+                  <EmptyState title="No tasks yet" subtitle="Create one with the input above." />
+                ) : (
+                  <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur">
+                    <TaskTable
+                      tasks={tasks}
+                      selectedTaskId={selectedTaskId}
+                      onSelectTask={(id) => setSelectedTaskId(id)}
+                    />
+                  </div>
+                )}
               </div>
             </div>
           </main>

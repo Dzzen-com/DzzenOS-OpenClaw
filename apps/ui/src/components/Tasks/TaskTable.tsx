@@ -1,4 +1,8 @@
-import type { Task } from './types';
+import type { ReactNode } from 'react';
+import type { Task } from '../../api/types';
+import { statusLabel } from './status';
+import { shortId } from './taskId';
+import { formatUpdatedAt } from './taskTime';
 
 export function TaskTable({
   tasks,
@@ -16,8 +20,6 @@ export function TaskTable({
           <tr className="text-left text-xs font-medium uppercase tracking-wider text-slate-500">
             <Th>Task</Th>
             <Th>Status</Th>
-            <Th>Priority</Th>
-            <Th>Assignee</Th>
             <Th>Updated</Th>
           </tr>
         </thead>
@@ -35,20 +37,19 @@ export function TaskTable({
               >
                 <Td>
                   <div className="flex items-center gap-3">
-                    <span className="inline-flex h-5 w-12 items-center justify-center rounded-md border border-white/10 bg-white/5 text-[11px] font-semibold text-slate-300">
-                      {t.id}
+                    <span className="inline-flex h-5 w-14 items-center justify-center rounded-md border border-white/10 bg-white/5 text-[11px] font-semibold text-slate-300">
+                      {shortId(t.id)}
                     </span>
-                    <span className="line-clamp-1">{t.title}</span>
+                    <div className="min-w-0">
+                      <div className="line-clamp-1">{t.title}</div>
+                      {t.description ? <div className="mt-0.5 line-clamp-1 text-xs text-slate-500">{t.description}</div> : null}
+                    </div>
                   </div>
                 </Td>
                 <Td>
                   <StatusPill status={t.status} />
                 </Td>
-                <Td>
-                  <PriorityPill priority={t.priority} />
-                </Td>
-                <Td className="text-slate-300">{t.assignee}</Td>
-                <Td className="text-slate-400">{t.updatedAt}</Td>
+                <Td className="text-slate-400">{formatUpdatedAt(t.updated_at)}</Td>
               </tr>
             );
           })}
@@ -62,34 +63,23 @@ function Th({ children }: { children: string }) {
   return <th className="border-b border-white/10 px-4 py-3">{children}</th>;
 }
 
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
+function Td({ children, className }: { children: ReactNode; className?: string }) {
   return <td className={'border-b border-white/10 px-4 py-3 ' + (className ?? '')}>{children}</td>;
 }
 
 function StatusPill({ status }: { status: Task['status'] }) {
   const cls =
-    status === 'Done'
+    status === 'done'
       ? 'border-emerald-400/20 bg-emerald-400/10 text-emerald-200'
-      : status === 'In Progress'
+      : status === 'doing'
         ? 'border-indigo-400/20 bg-indigo-400/10 text-indigo-200'
-        : status === 'Planned'
-          ? 'border-cyan-400/20 bg-cyan-400/10 text-cyan-200'
+        : status === 'blocked'
+          ? 'border-rose-400/20 bg-rose-400/10 text-rose-200'
           : 'border-white/10 bg-white/5 text-slate-300';
 
   return (
-    <span className={'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ' + cls}>{status}</span>
-  );
-}
-
-function PriorityPill({ priority }: { priority: Task['priority'] }) {
-  const cls =
-    priority === 'High'
-      ? 'border-rose-400/20 bg-rose-400/10 text-rose-200'
-      : priority === 'Medium'
-        ? 'border-amber-400/20 bg-amber-400/10 text-amber-200'
-        : 'border-white/10 bg-white/5 text-slate-300';
-
-  return (
-    <span className={'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ' + cls}>{priority}</span>
+    <span className={'inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ' + cls}>
+      {statusLabel(status)}
+    </span>
   );
 }
