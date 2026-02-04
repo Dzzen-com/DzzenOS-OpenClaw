@@ -1,5 +1,10 @@
 # DzzenOS-OpenClaw
 
+[![Release](https://img.shields.io/github/v/release/Dzzen-com/DzzenOS-OpenClaw?include_prereleases&sort=semver)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/releases)
+[![Stars](https://img.shields.io/github/stars/Dzzen-com/DzzenOS-OpenClaw?style=flat)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/stargazers)
+[![Issues](https://img.shields.io/github/issues/Dzzen-com/DzzenOS-OpenClaw)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues)
+[![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](./LICENSE)
+
 <p align="center">
   <img src="./assets/hero-placeholder.svg" alt="DzzenOS-OpenClaw hero" width="900" />
 </p>
@@ -111,15 +116,14 @@ See: `docs/AGENT-INSTALL.md`
 
 ## Docs
 
-- Install (SSH tunnel): `docs/INSTALL.md`
-- Domain mode (Caddy + TLS + login + caching): `docs/DOMAIN-ACCESS.md`
-- Agent-driven install: `docs/AGENT-INSTALL.md`
-- Remote access notes: `docs/remote-access.md`
+- Install (SSH tunnel): [docs/INSTALL.md](docs/INSTALL.md)
+- Domain mode (Caddy + TLS + login + caching): [docs/DOMAIN-ACCESS.md](docs/DOMAIN-ACCESS.md)
+- Agent-driven install: [docs/AGENT-INSTALL.md](docs/AGENT-INSTALL.md)
+- Remote access notes: [docs/remote-access.md](docs/remote-access.md)
 
-- OpenClaw Native specs (EN): `docs/openclaw-native/spec/`
-- Optional RU duplicates (for the website): `docs/openclaw-native/spec-ru/`
+- OpenClaw Native specs (EN): [docs/openclaw-native/spec/](docs/openclaw-native/spec/)
 
-Start here: `docs/openclaw-native/README.md`
+Start here: [docs/openclaw-native/README.md](docs/openclaw-native/README.md)
 
 ## Logging / debugging
 
