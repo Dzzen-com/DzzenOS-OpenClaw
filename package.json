@@ -12,5 +12,10 @@
     "dzzenos:api": "node --experimental-strip-types skills/dzzenos/api/server.ts",
     "dzzenos:ui:build": "corepack pnpm -C apps/ui build",
     "dzzenos:canvas:publish": "node scripts/publish-canvas.mjs"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "^0.25.0"
+    }
   }
 }
