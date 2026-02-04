@@ -9,23 +9,39 @@ Goal: a user can message their OpenClaw agent something like:
 2) publish the UI to the OpenClaw Canvas host
 3) reply with a ready-to-click URL (and SSH tunnel instructions if remote)
 
-## Recommended agent instruction (copy/paste)
+## Copy/paste message (send to your agent)
 
-Use this message to your agent:
+Send **exactly this** to your OpenClaw agent:
 
+```text
+Install (or update) DzzenOS-OpenClaw on the gateway host you are running on.
+
+Run this command on the host:
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+
+After it finishes, reply to me with:
+1) "DzzenOS installed ✅" (or "DzzenOS updated ✅")
+2) The SSH tunnel command I should run on my laptop if the gateway is remote:
+   ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+3) The exact URLs to open:
+   - OpenClaw Control UI: http://localhost:18789/ (append ?token=... if required)
+   - DzzenOS UI: http://localhost:18789/__openclaw__/canvas/dzzenos/ (append ?token=... if required)
+
+Do NOT expose the gateway publicly (no --bind 0.0.0.0).
+Do NOT print secrets/tokens unless they are already present in the URL I provided.
 ```
-Install DzzenOS-OpenClaw on this host.
 
-Steps:
-1) Run:
-   curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
-2) After it finishes, reply with:
-   - "DzzenOS installed ✅"
-   - The URL to open DzzenOS via OpenClaw Canvas host:
-     http://localhost:18789/__openclaw__/canvas/dzzenos/ (append ?token=... if required)
-   - If this gateway is remote: also include the SSH tunnel command.
+### What “good” looks like (expected reply format)
 
-Do not expose the gateway publicly.
+```text
+DzzenOS installed ✅
+
+If your OpenClaw gateway is remote, run on your laptop:
+ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+
+Open:
+- Control UI: http://localhost:18789/?token=...
+- DzzenOS UI:  http://localhost:18789/__openclaw__/canvas/dzzenos/?token=...
 ```
 
 ## Notes
