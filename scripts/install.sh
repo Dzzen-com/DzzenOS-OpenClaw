@@ -91,6 +91,21 @@ if [ $JSON_MODE -eq 0 ]; then
       read -r -p "Login username: " AUTH_USERNAME
       read -r -s -p "Login password: " AUTH_PASSWORD
       echo
+
+      echo -e "${BOLD}DNS setup (required)${RST}"
+      info "1) Create an A record: ${DOMAIN} -> <your-server-public-ip>"
+      info "2) Wait for DNS propagation (can take a few minutes)"
+      SERVER_IP=""
+      if command -v curl >/dev/null 2>&1; then
+        SERVER_IP=$(curl -4fsS https://api.ipify.org 2>/dev/null || true)
+      fi
+      if [ -n "$SERVER_IP" ]; then
+        ok "Detected public IP: $SERVER_IP"
+        info "Set: ${DOMAIN} A $SERVER_IP"
+      else
+        warn "Could not auto-detect public IP (curl missing or blocked)."
+      fi
+      echo
     fi
   fi
 fi
@@ -105,10 +120,20 @@ ok "UI published to Canvas"
 if [ $SETUP_DOMAIN -eq 1 ]; then
   step "4/5 Setup domain reverse proxy + auth"
   sudo -n true 2>/dev/null || warn "May prompt for sudo password (to install Caddy + systemd units)."
+  if command -v getent >/dev/null 2>&1; then
+    info "DNS check: resolving $DOMAIN..."
+    getent ahosts "$DOMAIN" | head -n 3 || true
+  fi
+
   DOMAIN="$DOMAIN" EMAIL="$DOMAIN_EMAIL" USERNAME="$AUTH_USERNAME" PASSWORD="$AUTH_PASSWORD" \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CONFIG_PATH" GATEWAY_PORT="$GATEWAY_PORT" REPO_DIR="$INSTALL_DIR" \
     sudo -E bash "$INSTALL_DIR/scripts/setup-domain.sh"
   ok "Domain setup complete"
+
+  echo
+  ok "Open: https://$DOMAIN/login"
+  ok "DzzenOS: https://$DOMAIN/__openclaw__/canvas/dzzenos/"
+  ok "OpenClaw Control UI: https://$DOMAIN/"
 fi
 
 step "5/5 How to open (secure)"

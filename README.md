@@ -122,6 +122,8 @@ cp -R /path/to/DzzenOS-OpenClaw/skills/dzzenos ./skills/dzzenos
 
 ## Remote access (server → laptop)
 
+### Option A — SSH tunnel (no domain)
+
 If you run OpenClaw on a remote server, use an SSH tunnel:
 
 ```bash
@@ -136,6 +138,16 @@ corepack pnpm dzzenos:canvas:publish
 
 Open:
 - `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if your gateway requires it)
+
+### Option B — Domain (Caddy + TLS + login)
+
+If you want to access from anywhere (phone/laptop) via a custom domain:
+
+- Use the installer and enable **domain access**.
+- You'll need a DNS **A record** pointing your subdomain to the server public IP.
+
+Docs:
+- `docs/DOMAIN-ACCESS.md`
 
 
 - OpenClaw Native specs (EN): `docs/openclaw-native/spec/`

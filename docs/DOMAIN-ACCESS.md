@@ -29,6 +29,11 @@ The installer will:
 
 ## Operations
 
+### Logout
+
+If you want a logout button, DzzenOS UI shows it automatically in domain mode.
+It clears the cookie and redirects to `/login`.
+
 ### View logs
 
 ```bash

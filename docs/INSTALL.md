@@ -24,6 +24,10 @@ SSH into the server and run:
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
 
+During install you can choose:
+- **SSH tunnel mode** (this guide)
+- **Domain mode** (Caddy + TLS + login page) — see `docs/DOMAIN-ACCESS.md`
+
 Machine-readable output (for automation):
 
 ```bash
