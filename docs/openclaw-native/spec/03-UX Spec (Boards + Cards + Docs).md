@@ -12,17 +12,17 @@
 
 ## 1) Информационная архитектура
 
-### Левое меню (глобально)
-- Workspaces (переключатель)
-- Boards (список)
-- Docs (workspace)
-- Agent Library (профили/пакеты)
-- Settings (policy/budgets/integrations)
+### Left menu (global)
+- Workspace switcher (future)
+- **Sidebar-first navigation**: Dashboard / Kanban / Automations / Agents / Docs
+- **OpenClaw Settings** entry in sidebar menu
+- **Settings dropdown** at the bottom of the sidebar
 
-### Глобальный layout
-- Sidebar + Top bar + **минимальный footer**
-- Footer показывает API и realtime статус, плюс ссылку на Docs
-- Login page стилистически совпадает с Kanban (темная тема, фирменная карточка входа)
+### Global layout
+- **Sidebar-first layout** (no global Top bar / Footer)
+- **Local PageHeader** per screen (title + subtitle + actions)
+- **Mobile hybrid nav**: bottom tabs + sidebar drawer
+- Login page matches Kanban style (dark gradient, brand card)
 
 ### Внутри Workspace
 - Boards: Founder Ops, Content, Custom…
@@ -34,9 +34,11 @@
 
 ## 2) Board UI
 
-### 2.1 Основной вид: Kanban
-Колонки по Status:
-- Inbox / Backlog / Next / In Progress / Review / Blocked / Done
+### 2.1 Main view: Kanban
+**Landing flow**: Boards grid → select a board → TaskBoard.
+
+Status columns:
+- Ideas / To do / In progress / Review / Release / Done / Archived
 
 ### 2.2 Views (фильтры)
 Важно сделать сохранённые представления:
