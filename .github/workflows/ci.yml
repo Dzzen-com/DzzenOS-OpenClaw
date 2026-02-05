@@ -9,14 +9,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm -r lint || true
-      - run: pnpm -r test || true
-      - run: pnpm -r build || true
+      - run: pnpm -r --if-present lint
+      - run: pnpm -r --if-present test
+      - run: pnpm -r --if-present build

@@ -49,6 +49,14 @@ type Options = {
   migrationsDir: string;
 };
 
+class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 function parseArgs(argv: string[]): Partial<Options> {
   const out: Partial<Options> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -61,14 +69,51 @@ function parseArgs(argv: string[]): Partial<Options> {
   return out;
 }
 
-function isAllowedOrigin(origin: string): boolean {
-  // Allow local UI dev servers and same-origin deployments.
-  // Example: http://localhost:5173, http://127.0.0.1:3000, https://dzzenos.example.com
+type AllowedOrigins = {
+  origins: Set<string>;
+  hosts: Set<string>;
+  hostPorts: Set<string>;
+};
+
+function parseAllowedOrigins(raw: string | undefined): AllowedOrigins {
+  const origins = new Set<string>();
+  const hosts = new Set<string>();
+  const hostPorts = new Set<string>();
+  if (!raw) return { origins, hosts, hostPorts };
+
+  for (const part of raw.split(',').map((p) => p.trim()).filter(Boolean)) {
+    if (part.includes('://')) {
+      try {
+        const u = new URL(part);
+        if (u.protocol === 'http:' || u.protocol === 'https:') {
+          origins.add(u.origin);
+        }
+      } catch {
+        // ignore invalid
+      }
+    } else if (part.includes(':')) {
+      hostPorts.add(part.toLowerCase());
+    } else {
+      hosts.add(part.toLowerCase());
+    }
+  }
+
+  return { origins, hosts, hostPorts };
+}
+
+function isAllowedOrigin(origin: string, reqHost: string | undefined, allowed: AllowedOrigins): boolean {
+  // Allow local UI dev servers, same-host deployments, and configured allowlist.
+  // Example env: DZZENOS_ALLOWED_ORIGINS="https://dzzenos.example.com,localhost:5173"
   try {
     const u = new URL(origin);
     if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
-    const host = u.hostname;
-    return host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost') || host.includes('.');
+    const hostname = u.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname.endsWith('.localhost')) return true;
+    if (allowed.origins.has(u.origin)) return true;
+    if (allowed.hosts.has(hostname)) return true;
+    if (allowed.hostPorts.has(u.host.toLowerCase())) return true;
+    if (reqHost && u.host.toLowerCase() === String(reqHost).toLowerCase()) return true;
+    return false;
   } catch {
     return false;
   }
@@ -99,7 +144,11 @@ async function readJson(req: http.IncomingMessage): Promise<any> {
   for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return {};
-  return JSON.parse(raw);
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new HttpError(400, 'Invalid JSON');
+  }
 }
 
 function rowOrNull<T>(rows: T[]): T | null {
@@ -173,6 +222,13 @@ function tryParseJson(text: string): any | null {
     }
     return null;
   }
+}
+
+function isRequestSecure(req: http.IncomingMessage): boolean {
+  if ((req.socket as any).encrypted) return true;
+  const xf = String(req.headers['x-forwarded-proto'] ?? '');
+  return xf.split(',')[0]?.trim().toLowerCase() === 'https';
+}
 }
 
 function seedIfEmpty(db: DatabaseSync) {
@@ -377,6 +433,9 @@ function main() {
     auth.cookie.ttlSeconds = authTtlSeconds;
   }
   const authCookieSameSite = String(process.env.AUTH_COOKIE_SAMESITE ?? 'Strict');
+  const allowedOrigins = parseAllowedOrigins(
+    process.env.DZZENOS_ALLOWED_ORIGINS ?? process.env.DZZENOS_CORS_ORIGINS
+  );
 
   migrate({ dbPath, migrationsDir });
 
@@ -610,7 +669,7 @@ function main() {
       'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
       'access-control-allow-headers': 'content-type',
     };
-    if (origin && isAllowedOrigin(origin)) {
+    if (origin && isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
       corsHeaders['access-control-allow-origin'] = origin;
       corsHeaders['vary'] = 'Origin';
     }
@@ -828,7 +887,15 @@ function main() {
             : authCookieSameSite.toLowerCase() === 'lax'
               ? 'Lax'
               : 'Strict';
-        const cookie = `${auth.cookie.name}=${encodeURIComponent(s.value)}; Path=/; HttpOnly; SameSite=${sameSite}; Secure; Expires=${new Date(s.expiresAtMs).toUTCString()}`;
+        const cookieParts = [
+          `${auth.cookie.name}=${encodeURIComponent(s.value)}`,
+          'Path=/',
+          'HttpOnly',
+          `SameSite=${sameSite}`,
+          `Expires=${new Date(s.expiresAtMs).toUTCString()}`,
+        ];
+        if (isRequestSecure(req)) cookieParts.push('Secure');
+        const cookie = cookieParts.join('; ');
 
         res.writeHead(302, {
           ...corsHeaders,
@@ -850,7 +917,15 @@ function main() {
             : authCookieSameSite.toLowerCase() === 'lax'
               ? 'Lax'
               : 'Strict';
-        const cookie = `${auth.cookie.name}=; Path=/; HttpOnly; SameSite=${sameSite}; Secure; Expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+        const cookieParts = [
+          `${auth.cookie.name}=`,
+          'Path=/',
+          'HttpOnly',
+          `SameSite=${sameSite}`,
+          'Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+        ];
+        if (isRequestSecure(req)) cookieParts.push('Secure');
+        const cookie = cookieParts.join('; ');
         res.writeHead(302, { ...corsHeaders, 'set-cookie': cookie, location: '/login' });
         res.end();
         return;
@@ -1959,6 +2034,9 @@ function main() {
 
       return sendJson(res, 404, { error: 'Not found' }, corsHeaders);
     } catch (err: any) {
+      if (err instanceof HttpError) {
+        return sendJson(res, err.status, { error: err.message }, corsHeaders);
+      }
       console.error('[dzzenos-api] error', err);
       return sendJson(res, 500, { error: 'Internal server error' }, corsHeaders);
     }
