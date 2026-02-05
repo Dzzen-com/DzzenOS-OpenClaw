@@ -2,26 +2,42 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Sidebar } from '../components/Sidebar/Sidebar';
-import { TopBar } from '../components/TopBar/TopBar';
+import { AppShell } from '../components/Layout/AppShell';
+import { MobileNav } from '../components/Layout/MobileNav';
+import { useMobileNav } from '../state/mobile-nav';
+import { MobileEdge } from '../components/Layout/MobileEdge';
 import { Dashboard } from '../components/Dashboard/Dashboard';
 import { AutomationsPage } from '../components/Automations/AutomationsPage';
-import { TaskTable } from '../components/Tasks/TaskTable';
+import { KanbanPage } from '../components/Tasks/KanbanPage';
 import { TaskDrawer } from '../components/Tasks/TaskDrawer';
-import { NewTask } from '../components/Tasks/NewTask';
-import { EmptyState } from '../components/ui/EmptyState';
-import { InlineAlert } from '../components/ui/InlineAlert';
-import { Spinner } from '../components/ui/Spinner';
+import { DocsPage } from '../components/Docs/DocsPage';
+import { AgentsPage } from '../components/Agents/AgentsPage';
 
 import type { Task } from '../api/types';
-import { createTask, listTasks } from '../api/queries';
+import { createTask, listBoards, listTasks, patchTask, reorderTasks } from '../api/queries';
 import { startRealtime } from './realtime';
 
 export function App() {
   const qc = useQueryClient();
 
-  const [page, setPage] = useState<'dashboard' | 'tasks' | 'automations'>('dashboard');
+  const [page, setPage] = useState<'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents'>('dashboard');
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const mobileNav = useMobileNav();
+
+  useEffect(() => {
+    document.body.style.overflow = mobileNav.open ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [mobileNav.open]);
+
+  const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
+  useEffect(() => {
+    if (selectedBoardId) return;
+    const first = boardsQ.data?.[0];
+    if (first) setSelectedBoardId(first.id);
+  }, [boardsQ.data, selectedBoardId]);
 
   const tasksQ = useQuery({
     queryKey: ['tasks', selectedBoardId],
@@ -33,10 +49,30 @@ export function App() {
   });
 
   const createM = useMutation({
-    mutationFn: async (vars: { boardId: string; title: string }) => createTask({ boardId: vars.boardId, title: vars.title }),
+    mutationFn: async (vars: { boardId: string; title: string; status?: Task['status'] }) =>
+      createTask({ boardId: vars.boardId, title: vars.title, status: vars.status }),
     onSuccess: async (t) => {
       await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
       setSelectedTaskId(t.id);
+    },
+  });
+
+  const moveM = useMutation({
+    mutationFn: async (vars: { id: string; status: Task['status'] }) => patchTask(vars.id, { status: vars.status }),
+    onSuccess: async (t, vars) => {
+      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    },
+    onError: async () => {
+      if (selectedBoardId) {
+        await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
+      }
+    },
+  });
+
+  const reorderM = useMutation({
+    mutationFn: async (vars: { boardId: string; orderedIds: string[] }) => reorderTasks(vars),
+    onSuccess: async (_, vars) => {
+      await qc.invalidateQueries({ queryKey: ['tasks', vars.boardId] });
     },
   });
 
@@ -56,83 +92,91 @@ export function App() {
   }, [qc]);
 
   return (
-    <div className="min-h-dvh bg-background text-foreground">
-      <div className="flex min-h-dvh">
-        <Sidebar
-          selectedPage={page}
-          onSelectPage={(p) => setPage(p)}
-          selectedBoardId={selectedBoardId}
-          onSelectBoard={(id) => setSelectedBoardId(id)}
-        />
-
-        <div className="flex min-w-0 flex-1 flex-col">
-          <TopBar
-            title={page === 'dashboard' ? 'Dashboard' : page === 'automations' ? 'Automations' : 'Tasks'}
-            subtitle={page === 'dashboard' ? 'Progress overview' : page === 'automations' ? 'Build & run flows' : 'All tasks'}
+    <>
+      <AppShell
+        sidebar={
+          <Sidebar
+            selectedPage={page}
+            onSelectPage={(p) => setPage(p)}
+            mobileOpen={mobileNav.open}
+            onCloseMobile={() => mobileNav.setOpen(false)}
           />
-
-          <main className="min-w-0 flex-1 p-4 sm:p-6">
-            {page === 'dashboard' ? (
-              <Dashboard
-                onSelectTask={({ boardId, taskId }) => {
-                  setPage('tasks');
-                  setSelectedBoardId(boardId);
-                  setSelectedTaskId(null);
-                  queueMicrotask(() => setSelectedTaskId(taskId));
-                }}
-              />
-            ) : page === 'automations' ? (
-              <div className="mx-auto w-full max-w-6xl">
-                <AutomationsPage />
-              </div>
-            ) : (
-              <div className="mx-auto w-full max-w-6xl">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-                  <div>
-                    <h1 className="text-lg font-semibold tracking-tight">Tasks</h1>
-                    <p className="mt-1 text-sm text-muted-foreground">Local API-backed list.</p>
-                  </div>
-
-                  <div className="w-full sm:max-w-md">
-                    <NewTask
-                      onCreate={async (title) => {
-                        if (!selectedBoardId) return;
-                        await createM.mutateAsync({ boardId: selectedBoardId, title });
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {createM.isError ? (
-                  <div className="mt-3">
-                    <InlineAlert>{String(createM.error)}</InlineAlert>
-                  </div>
-                ) : null}
-
-                <div className="mt-4">
-                  {!selectedBoardId ? (
-                    <EmptyState title="Select a board" subtitle="Boards are loaded from GET /boards." />
-                  ) : tasksQ.isLoading ? (
-                    <div className="rounded-xl border border-border/70 bg-card p-4 shadow-panel">
-                      <Spinner label="Loading tasks…" />
-                    </div>
-                  ) : tasksQ.isError ? (
-                    <InlineAlert>{String(tasksQ.error)}</InlineAlert>
-                  ) : tasks.length === 0 ? (
-                    <EmptyState title="No tasks yet" subtitle="Create one with the input above." />
-                  ) : (
-                    <div className="rounded-xl border border-border/70 bg-card shadow-panel">
-                      <TaskTable tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={(id) => setSelectedTaskId(id)} />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </main>
-        </div>
-      </div>
+        }
+        mobileNav={
+          <MobileNav
+            page={page}
+            onSelectPage={(p) => {
+              setPage(p);
+              mobileNav.setOpen(false);
+            }}
+          />
+        }
+      >
+        <MobileEdge />
+        {mobileNav.open ? (
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm sm:hidden"
+            onClick={() => mobileNav.setOpen(false)}
+            aria-hidden="true"
+          />
+        ) : null}
+        {page === 'dashboard' ? (
+          <Dashboard
+            onSelectTask={({ boardId, taskId }) => {
+              setPage('kanban');
+              setSelectedBoardId(boardId);
+              setSelectedTaskId(null);
+              queueMicrotask(() => setSelectedTaskId(taskId));
+            }}
+          />
+        ) : page === 'automations' ? (
+          <div className="mx-auto w-full max-w-6xl">
+            <AutomationsPage />
+          </div>
+        ) : page === 'docs' ? (
+          <div className="mx-auto w-full max-w-6xl">
+            <DocsPage />
+          </div>
+        ) : page === 'agents' ? (
+          <div className="mx-auto w-full max-w-6xl">
+            <AgentsPage />
+          </div>
+        ) : page === 'kanban' ? (
+          <div className="mx-auto w-full max-w-6xl">
+            <KanbanPage
+              boards={boardsQ.data ?? []}
+              boardsLoading={boardsQ.isLoading}
+              boardsError={boardsQ.isError ? boardsQ.error : null}
+              selectedBoardId={selectedBoardId}
+              onSelectBoard={(id) => setSelectedBoardId(id)}
+              tasks={tasks}
+              tasksLoading={tasksQ.isLoading}
+              tasksError={tasksQ.isError ? tasksQ.error : null}
+              selectedTaskId={selectedTaskId}
+              onSelectTask={(id) => setSelectedTaskId(id)}
+              onMoveTask={(id, status) => moveM.mutate({ id, status })}
+              moveDisabled={moveM.isPending || reorderM.isPending}
+              onReorder={(status, orderedIds) => {
+                if (!selectedBoardId) return;
+                reorderM.mutate({ boardId: selectedBoardId, orderedIds });
+              }}
+              onQuickCreate={async (status, title) => {
+                if (!selectedBoardId) return;
+                await createM.mutateAsync({ boardId: selectedBoardId, title, status });
+              }}
+              onCreateTask={async (title) => {
+                if (!selectedBoardId) return;
+                await createM.mutateAsync({ boardId: selectedBoardId, title, status: 'ideas' });
+              }}
+              createTaskError={createM.isError ? createM.error : null}
+              moveError={moveM.isError ? moveM.error : null}
+              reorderError={reorderM.isError ? reorderM.error : null}
+            />
+          </div>
+        ) : null}
+      </AppShell>
 
       <TaskDrawer task={selectedTask} open={selectedTask != null} onOpenChange={(o) => !o && setSelectedTaskId(null)} />
-    </div>
+    </>
   );
 }

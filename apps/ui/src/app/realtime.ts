@@ -35,6 +35,38 @@ export function startRealtime(opts: {
         else opts.qc.invalidateQueries({ queryKey: ['tasks'] });
       }
 
+      if (msg.type === 'boards.changed') {
+        opts.qc.invalidateQueries({ queryKey: ['boards'] });
+      }
+
+      if (msg.type === 'task.checklist.changed') {
+        const taskId = msg.payload?.taskId as string | null | undefined;
+        if (taskId) opts.qc.invalidateQueries({ queryKey: ['checklist', taskId] });
+      }
+
+      if (msg.type === 'task.session.changed') {
+        const taskId = msg.payload?.taskId as string | null | undefined;
+        if (taskId) opts.qc.invalidateQueries({ queryKey: ['task-session', taskId] });
+      }
+
+      if (msg.type === 'task.chat.changed') {
+        const taskId = msg.payload?.taskId as string | null | undefined;
+        if (taskId) opts.qc.invalidateQueries({ queryKey: ['task-chat', taskId] });
+      }
+
+      if (msg.type === 'docs.changed') {
+        const boardId = msg.payload?.boardId as string | null | undefined;
+        opts.qc.invalidateQueries({ queryKey: ['docs', 'overview'] });
+        if (boardId) {
+          opts.qc.invalidateQueries({ queryKey: ['docs', 'board', boardId] });
+          opts.qc.invalidateQueries({ queryKey: ['docs', 'changelog', boardId] });
+        }
+      }
+
+      if (msg.type === 'agents.changed') {
+        opts.qc.invalidateQueries({ queryKey: ['agents'] });
+      }
+
       if (msg.type === 'approvals.changed') {
         const taskId = msg.payload?.taskId as string | null | undefined;
         // Dashboard

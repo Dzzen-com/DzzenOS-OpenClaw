@@ -1,8 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Approval, AgentRun, Task, TaskStatus } from '../../api/types';
-import { listApprovals, listTaskRuns, patchTask, requestTaskApproval, simulateRun } from '../../api/queries';
+import { listApprovals, listTaskRuns, patchTask, requestTaskApproval } from '../../api/queries';
+import { runTask } from '../../api/queries';
 import { statusLabel } from './status';
 import { shortId } from './taskId';
 import { formatUpdatedAt } from './taskTime';
@@ -10,8 +11,14 @@ import { InlineAlert } from '../ui/InlineAlert';
 import { Button } from '../ui/Button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/Tabs';
 import { TaskChat } from './TaskChat';
+import { Badge } from '../ui/Badge';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
+import { StatusDot } from '../ui/StatusDot';
+import { Input } from '../ui/Input';
+import { Checklist } from './Checklist';
+import { TaskAgent } from './TaskAgent';
 
-const STATUS: TaskStatus[] = ['todo', 'doing', 'blocked', 'done'];
+const STATUS: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
 
 type TabKey = 'details' | 'runs' | 'approvals' | 'chat';
 
@@ -26,11 +33,31 @@ export function TaskDrawer({
 }) {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('details');
+  const [titleDraft, setTitleDraft] = useState('');
+  const [descDraft, setDescDraft] = useState('');
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
 
   const patchM = useMutation({
     mutationFn: async (vars: { id: string; status: TaskStatus }) => patchTask(vars.id, { status: vars.status }),
     onSuccess: async (t) => {
       await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    },
+  });
+
+  const updateM = useMutation({
+    mutationFn: async (vars: { id: string; title?: string; description?: string | null }) =>
+      patchTask(vars.id, { title: vars.title, description: vars.description }),
+    onSuccess: async (t) => {
+      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    },
+  });
+
+  const planM = useMutation({
+    mutationFn: async (id: string) => runTask(id, { mode: 'plan' }),
+    onSuccess: async () => {
+      if (task?.board_id) await qc.invalidateQueries({ queryKey: ['tasks', task.board_id] });
+      if (task?.id) await qc.invalidateQueries({ queryKey: ['checklist', task.id] });
     },
   });
 
@@ -57,8 +84,13 @@ export function TaskDrawer({
     return all.filter((a) => a.task_id === task.id).slice(0, 50);
   }, [approvalsQ.data, task?.id]);
 
+  useEffect(() => {
+    setTitleDraft(task?.title ?? '');
+    setDescDraft(task?.description ?? '');
+  }, [task?.id]);
+
   const simulateM = useMutation({
-    mutationFn: async (id: string) => simulateRun(id),
+    mutationFn: async (id: string) => runTask(id, { mode: 'execute' }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
     },
@@ -81,49 +113,117 @@ export function TaskDrawer({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/45 backdrop-blur-sm" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
         <Dialog.Content
-          className="fixed right-0 top-0 h-dvh w-full max-w-xl border-l border-border/70 bg-card p-6 shadow-popover outline-none"
+          className="fixed right-0 top-0 z-[60] h-dvh w-full max-w-xl border-l border-border/70 bg-surface-1/85 p-4 shadow-popover backdrop-blur outline-none sm:p-6"
           aria-describedby={undefined}
+          onTouchStart={(e) => {
+            if (e.touches.length !== 1) return;
+            const t = e.touches[0];
+            touchStartX.current = t.clientX;
+            touchStartY.current = t.clientY;
+          }}
+          onTouchMove={(e) => {
+            const t = e.touches[0];
+            const startX = touchStartX.current;
+            const startY = touchStartY.current;
+            if (startX == null || startY == null) return;
+            const dx = t.clientX - startX;
+            const dy = Math.abs(t.clientY - startY);
+            if (dx > 80 && dy < 50) {
+              onOpenChange(false);
+              touchStartX.current = null;
+              touchStartY.current = null;
+            }
+          }}
+          onTouchEnd={() => {
+            touchStartX.current = null;
+            touchStartY.current = null;
+          }}
         >
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
             <div className="min-w-0">
               <Dialog.Title className="truncate text-base font-semibold tracking-tight">
                 {task ? `${shortId(task.id)} · ${task.title}` : 'Task'}
               </Dialog.Title>
-              <div className="mt-1 text-sm text-muted-foreground">Local task</div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  <StatusDot
+                  tone={
+                    task?.status === 'done'
+                      ? 'success'
+                      : task?.status === 'doing'
+                        ? 'info'
+                        : task?.status === 'review' || task?.status === 'release'
+                          ? 'warning'
+                          : task?.status === 'archived'
+                            ? 'muted'
+                            : 'muted'
+                  }
+                />
+                <span>Local task</span>
+                {task ? (
+                  <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+                    {statusLabel(task.status)}
+                  </Badge>
+                ) : null}
+              </div>
             </div>
-            <Dialog.Close asChild aria-label="Close">
-              <Button variant="secondary">Close</Button>
-            </Dialog.Close>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                disabled={!task || planM.isPending}
+                onClick={() => task && planM.mutate(task.id)}
+              >
+                {planM.isPending ? 'Planning…' : 'Plan'}
+              </Button>
+              <Dialog.Close asChild aria-label="Close">
+                <Button variant="ghost">Close</Button>
+              </Dialog.Close>
+            </div>
           </div>
 
-          {patchM.isError ? (
+          {(patchM.isError || updateM.isError || planM.isError) ? (
             <div className="mt-4">
-              <InlineAlert>{String(patchM.error)}</InlineAlert>
+              <InlineAlert>{String(patchM.error ?? updateM.error ?? planM.error)}</InlineAlert>
             </div>
           ) : null}
 
           <div className="mt-5">
             <Tabs defaultValue="details" value={tab} onValueChange={(v) => setTab(v as TabKey)}>
-              <TabsList className="w-full justify-start">
-                <TabsTrigger value="details">Details</TabsTrigger>
-                <TabsTrigger value="runs">Runs</TabsTrigger>
-                <TabsTrigger value="approvals">Approvals</TabsTrigger>
-                <TabsTrigger value="chat">Chat</TabsTrigger>
+              <TabsList className="w-full flex-wrap justify-start gap-1">
+                <TabsTrigger value="details" className="text-[11px] sm:text-xs">
+                  Details
+                </TabsTrigger>
+                <TabsTrigger value="runs" className="text-[11px] sm:text-xs">
+                  Runs
+                </TabsTrigger>
+                <TabsTrigger value="approvals" className="text-[11px] sm:text-xs">
+                  Approvals
+                </TabsTrigger>
+                <TabsTrigger value="chat" className="text-[11px] sm:text-xs">
+                  Chat
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="details">
                 <div className="grid gap-3">
+                  <Row label="Title">
+                    <Input
+                      value={titleDraft}
+                      onChange={(e) => setTitleDraft(e.target.value)}
+                      placeholder="Task title"
+                    />
+                  </Row>
+
                   <Row label="Status">
                     <select
                       value={task?.status ?? 'todo'}
-                      disabled={!task || patchM.isPending}
+                      disabled={!task || patchM.isPending || updateM.isPending}
                       onChange={(e) => {
                         if (!task) return;
                         patchM.mutate({ id: task.id, status: e.target.value as TaskStatus });
                       }}
-                      className="h-9 rounded-md border border-input bg-background/40 px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                     >
                       {STATUS.map((s) => (
                         <option key={s} value={s}>
@@ -141,14 +241,48 @@ export function TaskDrawer({
                     <div className="text-sm text-foreground">{task ? formatUpdatedAt(task.created_at) : '—'}</div>
                   </Row>
 
-                  <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
-                    <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Description</div>
-                    <p className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground">
-                      {task?.description?.trim() ? task.description : '—'}
-                    </p>
-                  </div>
+                  {task?.id ? (
+                    <TaskAgent taskId={task.id} lastRunStatus={runsQ.data?.[0]?.status ?? null} />
+                  ) : null}
 
-                  <div className="text-xs text-muted-foreground">PATCH /tasks/:id (status)</div>
+                  {task?.id ? <Checklist taskId={task.id} /> : null}
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Description</CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-0 text-sm text-muted-foreground">
+                      <textarea
+                        value={descDraft}
+                        onChange={(e) => setDescDraft(e.target.value)}
+                        placeholder="Describe the task…"
+                        rows={4}
+                        className="w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                      />
+                      <div className="mt-3 flex items-center justify-between">
+                        <div className="text-xs text-muted-foreground">
+                          Editable by humans or agents (when API is wired).
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={!task || updateM.isPending}
+                          onClick={() => {
+                            if (!task) return;
+                            updateM.mutate({
+                              id: task.id,
+                              title: titleDraft.trim() || task.title,
+                              description: descDraft.trim() ? descDraft : null,
+                            });
+                          }}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <div className="text-xs text-muted-foreground">PATCH /tasks/:id</div>
                 </div>
               </TabsContent>
 
@@ -208,13 +342,14 @@ function RunsPanel({
   onSimulate: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Runs</div>
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <CardTitle>Runs</CardTitle>
         <Button size="sm" variant="secondary" disabled={!taskId || simulatePending} onClick={onSimulate}>
-          Simulate run (stub)
+          Run now
         </Button>
-      </div>
+      </CardHeader>
+      <CardContent className="pt-0">
 
       {isLoading ? (
         <div className="mt-3 text-sm text-muted-foreground">Loading…</div>
@@ -227,7 +362,7 @@ function RunsPanel({
           {runs.slice(0, 30).map((r) => (
             <div
               key={r.id}
-              className="rounded-lg border border-border/70 bg-background/40 px-3 py-2 text-sm text-foreground"
+              className="rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2 text-sm text-foreground"
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 truncate">
@@ -244,7 +379,8 @@ function RunsPanel({
       ) : (
         <div className="mt-3 text-sm text-muted-foreground">No runs for this task.</div>
       )}
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -264,13 +400,14 @@ function ApprovalsPanel({
   onRequest: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Approvals</div>
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <CardTitle>Approvals</CardTitle>
         <Button size="sm" variant="secondary" disabled={!taskId || requestPending} onClick={onRequest}>
           Request approval (stub)
         </Button>
-      </div>
+      </CardHeader>
+      <CardContent className="pt-0">
 
       {isLoading ? (
         <div className="mt-3 text-sm text-muted-foreground">Loading…</div>
@@ -283,7 +420,7 @@ function ApprovalsPanel({
           {approvals.map((a) => (
             <div
               key={a.id}
-              className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-background/40 px-3 py-2"
+              className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2"
             >
               <div className="min-w-0">
                 <div className="truncate text-sm text-foreground">{a.request_title ?? `Approval ${a.id.slice(0, 8)}`}</div>
@@ -298,13 +435,14 @@ function ApprovalsPanel({
       ) : (
         <div className="mt-3 text-sm text-muted-foreground">No approvals for this task.</div>
       )}
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-surface-2/40 px-3 py-2">
       <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</div>
       {children}
     </div>

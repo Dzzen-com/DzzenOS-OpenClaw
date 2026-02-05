@@ -28,9 +28,11 @@ function copyDir(src, dst) {
 }
 
 const apiBase = process.env.DZZENOS_API_BASE ?? process.env.VITE_API_BASE ?? 'http://127.0.0.1:8787';
+const openclawPath = process.env.VITE_OPENCLAW_PATH ?? '';
 
 console.log('[canvas] building UI...');
-execSync(`VITE_API_BASE=${JSON.stringify(apiBase)} corepack pnpm -C apps/ui build`, { stdio: 'inherit' });
+const env = `VITE_API_BASE=${JSON.stringify(apiBase)}${openclawPath ? ` VITE_OPENCLAW_PATH=${JSON.stringify(openclawPath)}` : ''}`;
+execSync(`${env} corepack pnpm -C apps/ui build`, { stdio: 'inherit' });
 
 if (!fs.existsSync(distDir)) {
   throw new Error(`UI dist not found at ${distDir}. Build failed?`);

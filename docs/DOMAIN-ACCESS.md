@@ -8,7 +8,7 @@ This guide enables **secure access from anywhere** (phone, laptop) via a custom 
 - After login:
   - DzzenOS dashboard (nice URL): `https://<your-domain>/dashboard` (redirects to Canvas)
   - DzzenOS dashboard (Canvas path): `https://<your-domain>/__openclaw__/canvas/dzzenos/`
-  - OpenClaw Control UI: `https://<your-domain>/openclaw`
+  - OpenClaw Control UI: `https://<your-domain>/openclaw` (also linked from the DzzenOS menu)
 
 ## Security model
 
@@ -16,10 +16,13 @@ This guide enables **secure access from anywhere** (phone, laptop) via a custom 
 - Caddy is the only public entry point (ports **80/443**).
 - Your OpenClaw token is kept **server-side** in `/etc/caddy/Caddyfile` and is injected as an `Authorization: Bearer ...` header.
 - Users authenticate via a **cookie session** (username/password) handled by DzzenOS API (`/auth/*`).
+- Unauthenticated users see **only** `/login`. All other paths redirect to login.
 - Hardening included:
   - strict security headers (HSTS, nosniff, etc.)
   - request body size limit
   - basic brute-force protection on login (rate limit + temporary IP block)
+  - strong password policy (min 12 chars, upper/lower/number/symbol)
+  - cookie session TTL default: 7 days
 
 ## Install (recommended)
 
