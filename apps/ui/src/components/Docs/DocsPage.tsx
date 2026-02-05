@@ -97,66 +97,67 @@ export function DocsPage() {
           </CardContent>
         </Card>
 
-      <div className="grid gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Overview</CardTitle>
-            <Button size="sm" variant="secondary" onClick={() => saveOverviewM.mutate()} disabled={saveOverviewM.isPending}>
-              {saveOverviewM.isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {overviewQ.isLoading ? (
-              <Skeleton className="h-[200px] w-full" />
-            ) : (
-              <textarea
-                className="min-h-[200px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                value={overviewDraft}
-                onChange={(e) => setOverviewDraft(e.target.value)}
-                placeholder="Write the project overview here…"
-              />
-            )}
-          </CardContent>
-        </Card>
+        <div className="grid gap-4">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Overview</CardTitle>
+              <Button size="sm" variant="secondary" onClick={() => saveOverviewM.mutate()} disabled={saveOverviewM.isPending}>
+                {saveOverviewM.isPending ? 'Saving…' : 'Save'}
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {overviewQ.isLoading ? (
+                <Skeleton className="h-[200px] w-full" />
+              ) : (
+                <textarea
+                  className="min-h-[200px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                  value={overviewDraft}
+                  onChange={(e) => setOverviewDraft(e.target.value)}
+                  placeholder="Write the project overview here…"
+                />
+              )}
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>Board Doc</CardTitle>
-            <Button size="sm" variant="secondary" onClick={() => saveBoardM.mutate()} disabled={saveBoardM.isPending || !selectedBoardId}>
-              {saveBoardM.isPending ? 'Saving…' : 'Save'}
-            </Button>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {boardDocQ.isLoading ? (
-              <Skeleton className="h-[220px] w-full" />
-            ) : (
-              <textarea
-                className="min-h-[220px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                value={boardDraft}
-                onChange={(e) => setBoardDraft(e.target.value)}
-                placeholder="Board context and notes…"
-              />
-            )}
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Board Doc</CardTitle>
+              <Button size="sm" variant="secondary" onClick={() => saveBoardM.mutate()} disabled={saveBoardM.isPending || !selectedBoardId}>
+                {saveBoardM.isPending ? 'Saving…' : 'Save'}
+              </Button>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {boardDocQ.isLoading ? (
+                <Skeleton className="h-[220px] w-full" />
+              ) : (
+                <textarea
+                  className="min-h-[220px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                  value={boardDraft}
+                  onChange={(e) => setBoardDraft(e.target.value)}
+                  placeholder="Board context and notes…"
+                />
+              )}
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Changelog</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {changelogQ.isLoading ? (
-              <Skeleton className="h-[160px] w-full" />
-            ) : (
-              <textarea
-                readOnly
-                className="min-h-[160px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-muted-foreground outline-none"
-                value={changelogQ.data?.content ?? ''}
-                placeholder="No changelog entries yet."
-              />
-            )}
-          </CardContent>
-        </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Changelog</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {changelogQ.isLoading ? (
+                <Skeleton className="h-[160px] w-full" />
+              ) : (
+                <textarea
+                  readOnly
+                  className="min-h-[160px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-muted-foreground outline-none"
+                  value={changelogQ.data?.content ?? ''}
+                  placeholder="No changelog entries yet."
+                />
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );
