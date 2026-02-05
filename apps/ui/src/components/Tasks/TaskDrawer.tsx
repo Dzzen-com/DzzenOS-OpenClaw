@@ -131,6 +131,16 @@ export function TaskDrawer({
   const outputTokens = activeRun?.output_tokens ?? null;
   const totalTokens = activeRun?.total_tokens ?? null;
   const tokenLabel = formatTokenLabel({ inputTokens, outputTokens, totalTokens });
+  const showTokenLabel = useMemo(() => {
+    if (!tokenLabel) return false;
+    if (activeRun?.status === 'running') return true;
+    const finishedAt = activeRun?.finished_at ? Date.parse(activeRun.finished_at) : null;
+    if (finishedAt && Number.isFinite(finishedAt)) {
+      const ageMs = Date.now() - finishedAt;
+      return ageMs <= 30 * 60 * 1000;
+    }
+    return true;
+  }, [tokenLabel, activeRun?.status, activeRun?.finished_at]);
 
   useEffect(() => {
     if (runStatus !== 'running') {
@@ -296,8 +306,13 @@ export function TaskDrawer({
                     <span>{runStatusLabel(runStatus)}</span>
                   </div>
                   {elapsed ? <span className="text-muted-foreground">• {elapsed}</span> : null}
-                  {activeStageLabel ? <span className="text-muted-foreground">• {activeStageLabel}</span> : null}
-                  {tokenLabel ? <span className="text-muted-foreground">• {tokenLabel}</span> : null}
+                  {activeStageLabel ? (
+                    <span className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-surface-2/60 px-2 py-0.5 text-[11px] text-muted-foreground">
+                      <span className="inline-flex h-1.5 w-1.5 rounded-full bg-info/80 shadow-[0_0_6px_hsl(var(--info)/0.6)]" />
+                      {activeStageLabel}
+                    </span>
+                  ) : null}
+                  {tokenLabel && showTokenLabel ? <span className="text-muted-foreground">• {tokenLabel}</span> : null}
                 </div>
 
                 <div className="mt-3 grid grid-cols-3 gap-1">

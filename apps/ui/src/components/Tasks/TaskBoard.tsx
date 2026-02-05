@@ -649,7 +649,7 @@ const TaskCard = React.forwardRef<
       <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]">
         <div className="flex items-center gap-2">
           <StatusDot tone={runTone(task.run_status)} pulse={task.run_status === 'running'} />
-          <span className="truncate">{agentLabel}</span>
+          <span className={cn('truncate', task.run_status === 'running' && 'animate-pulse')}>{agentLabel}</span>
           <span>•</span>
           <span>{runLabel(task.run_status, task.run_started_at)}</span>
         </div>

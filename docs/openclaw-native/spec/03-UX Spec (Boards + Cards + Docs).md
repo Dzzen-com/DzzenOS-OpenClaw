@@ -82,6 +82,8 @@ Bulk actions:
 - Minimal activity ticker (last 2–3 steps) inside the task drawer
 - Token usage hint (input/output or total) when available
 - Stop confirmation (two-step) + Shift+S shortcut in drawer
+- Stage badge in status strip (glowing dot)
+- Subtle agent heartbeat on kanban cards while running
 
 ---
 
