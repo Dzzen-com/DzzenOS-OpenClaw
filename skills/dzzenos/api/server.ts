@@ -42,6 +42,12 @@ import {
   verifyPassword,
   verifySessionCookie,
 } from './auth.ts';
+import { MARKETPLACE_AGENTS, getMarketplaceAgentPreset, type PromptOverrides } from './marketplace/agents.ts';
+import {
+  MARKETPLACE_SKILLS,
+  getMarketplaceSkillPreset,
+  type SkillCapabilities,
+} from './marketplace/skills.ts';
 
 type Options = {
   port: number;
@@ -260,6 +266,135 @@ function seedIfEmpty(db: DatabaseSync) {
     db.exec('ROLLBACK');
     throw e;
   }
+}
+
+const DEFAULT_OPENCLAW_AGENT_ID = 'main';
+const PROMPT_OVERRIDE_KEYS = new Set(['system', 'plan', 'execute', 'chat', 'report']);
+
+function normalizeString(value: any): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function parseStringArrayJson(raw: any): string[] {
+  if (Array.isArray(raw)) return raw.map((v) => String(v)).filter(Boolean);
+  if (typeof raw !== 'string') return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed.map((v) => String(v)).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function parsePromptOverridesJson(raw: any): PromptOverrides {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const out: PromptOverrides = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!PROMPT_OVERRIDE_KEYS.has(k)) continue;
+      if (typeof v === 'string' && v.trim()) (out as any)[k] = v;
+    }
+    return out;
+  }
+
+  if (typeof raw !== 'string') return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsePromptOverridesJson(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function jsonStringifyArray(values: string[]): string {
+  return JSON.stringify(values.map((v) => String(v)).filter((v) => v.trim().length > 0));
+}
+
+function jsonStringifyPromptOverrides(value: PromptOverrides): string {
+  const out: Record<string, string> = {};
+  for (const k of PROMPT_OVERRIDE_KEYS) {
+    const v = (value as any)[k];
+    if (typeof v === 'string' && v.trim()) out[k] = v;
+  }
+  return JSON.stringify(out);
+}
+
+function parseCapabilitiesJson(raw: any): SkillCapabilities {
+  const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
+
+  const fromObject = (obj: any): SkillCapabilities => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    const secrets = Array.isArray(obj.secrets) ? obj.secrets.map((s: any) => normalize(s)).filter(Boolean) : [];
+    return {
+      network: obj.network === true ? true : undefined,
+      filesystem: obj.filesystem === true ? true : undefined,
+      external_write: obj.external_write === true ? true : undefined,
+      secrets: secrets.length ? secrets : undefined,
+    };
+  };
+
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return fromObject(raw);
+  if (typeof raw !== 'string') return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    return fromObject(JSON.parse(trimmed));
+  } catch {
+    return {};
+  }
+}
+
+function jsonStringifyCapabilities(value: SkillCapabilities): string {
+  const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
+  const out: any = {};
+  if (value.network) out.network = true;
+  if (value.filesystem) out.filesystem = true;
+  if (value.external_write) out.external_write = true;
+  const secrets = Array.isArray(value.secrets) ? value.secrets.map((s) => normalize(s)).filter(Boolean) : [];
+  if (secrets.length) out.secrets = secrets;
+  return JSON.stringify(out);
+}
+
+function skillRowToDto(r: any) {
+  return {
+    slug: String(r.slug),
+    display_name: r.display_name ?? null,
+    description: r.description ?? null,
+    tier: String(r.tier ?? 'community'),
+    enabled: Boolean(r.enabled),
+    source: String(r.source ?? 'manual'),
+    preset_key: r.preset_key ?? null,
+    sort_order: Number(r.sort_order ?? 0),
+    capabilities: parseCapabilitiesJson(r.capabilities_json),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  };
+}
+
+function agentRowToDto(r: any) {
+  return {
+    id: String(r.id),
+    display_name: String(r.display_name ?? ''),
+    emoji: r.emoji ?? null,
+    openclaw_agent_id: String(r.openclaw_agent_id ?? ''),
+    enabled: Boolean(r.enabled),
+    role: r.role ?? null,
+    description: r.description ?? null,
+    category: String(r.category ?? 'general'),
+    tags: parseStringArrayJson(r.tags_json),
+    skills: parseStringArrayJson(r.skills_json),
+    prompt_overrides: parsePromptOverridesJson(r.prompt_overrides_json),
+    preset_key: r.preset_key ?? null,
+    sort_order: Number(r.sort_order ?? 0),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+    assigned_task_count: Number(r.assigned_task_count ?? 0),
+    run_count_7d: Number(r.run_count_7d ?? 0),
+    last_used_at: r.last_used_at ?? null,
+  };
 }
 
 function getDefaultBoardId(db: DatabaseSync): string | null {
@@ -1364,46 +1499,692 @@ function main() {
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
-      if (req.method === 'GET' && url.pathname === '/agents') {
+      // --- Skills (installed) ---
+      if (req.method === 'GET' && url.pathname === '/skills') {
         const rows = db
           .prepare(
-            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+            `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+               FROM installed_skills
+              ORDER BY enabled DESC, sort_order ASC, COALESCE(display_name, slug) ASC, slug ASC`
           )
           .all() as any[];
-        const payload = rows.map((r) => ({
-          ...r,
-          enabled: Boolean(r.enabled),
+        return sendJson(res, 200, rows.map(skillRowToDto), corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/skills') {
+        const body = await readJson(req);
+        const slug = normalizeString(body?.slug);
+        if (!slug) return sendJson(res, 400, { error: 'slug is required' }, corsHeaders);
+
+        const existing = rowOrNull<{ slug: string }>(
+          db.prepare('SELECT slug FROM installed_skills WHERE slug = ? LIMIT 1').all(slug) as any
+        );
+        if (existing) return sendJson(res, 409, { error: 'Skill already installed' }, corsHeaders);
+
+        const displayName = normalizeString(body?.display_name ?? body?.displayName) || null;
+        const description = typeof body?.description === 'string' ? body.description : null;
+        const tier = normalizeString(body?.tier) || 'community';
+        const enabled = body?.enabled === false ? 0 : 1;
+        const capabilities = parseCapabilitiesJson(body?.capabilities ?? body?.capabilities_json);
+
+        db.prepare(
+          `INSERT INTO installed_skills(
+            slug, display_name, description, tier, enabled, source, preset_key, preset_defaults_json, sort_order, capabilities_json
+          ) VALUES (?, ?, ?, ?, ?, 'manual', NULL, NULL, 0, ?)`
+        ).run(slug, displayName, description, tier, enabled, jsonStringifyCapabilities(capabilities));
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+                 FROM installed_skills
+                WHERE slug = ?`
+            )
+            .all(slug) as any
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 201, row ? skillRowToDto(row) : { slug }, corsHeaders);
+      }
+
+      const skillPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/skills\/([^/]+)$/) : null;
+      if (skillPatchMatch) {
+        const slug = decodeURIComponent(skillPatchMatch[1]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.display_name !== undefined || body?.displayName !== undefined) {
+          const displayName = normalizeString(body?.display_name ?? body?.displayName) || null;
+          updates.push('display_name = ?');
+          params.push(displayName);
+        }
+
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+
+        if (body?.tier !== undefined) {
+          const tier = normalizeString(body.tier) || 'community';
+          updates.push('tier = ?');
+          params.push(tier);
+        }
+
+        if (body?.enabled !== undefined) {
+          updates.push('enabled = ?');
+          params.push(body.enabled === false ? 0 : 1);
+        }
+
+        if (body?.capabilities !== undefined || body?.capabilities_json !== undefined) {
+          const capabilities = parseCapabilitiesJson(body?.capabilities ?? body?.capabilities_json);
+          updates.push('capabilities_json = ?');
+          params.push(jsonStringifyCapabilities(capabilities));
+        }
+
+        if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
+
+        params.push(slug);
+        const info = db.prepare(`UPDATE installed_skills SET ${updates.join(', ')} WHERE slug = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Skill not found' }, corsHeaders);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+                 FROM installed_skills
+                WHERE slug = ?`
+            )
+            .all(slug) as any
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 200, row ? skillRowToDto(row) : { slug }, corsHeaders);
+      }
+
+      const skillResetMatch = req.method === 'POST' ? url.pathname.match(/^\/skills\/([^/]+)\/reset$/) : null;
+      if (skillResetMatch) {
+        const slug = decodeURIComponent(skillResetMatch[1]);
+        const row = rowOrNull<{ preset_key: string | null; preset_defaults_json: string | null }>(
+          db.prepare('SELECT preset_key, preset_defaults_json FROM installed_skills WHERE slug = ?').all(slug) as any
+        );
+        if (!row) return sendJson(res, 404, { error: 'Skill not found' }, corsHeaders);
+        if (!row.preset_key || !row.preset_defaults_json) {
+          return sendJson(res, 400, { error: 'Reset is only available for installed presets' }, corsHeaders);
+        }
+
+        const defaults = (() => {
+          try {
+            return JSON.parse(row.preset_defaults_json as string);
+          } catch {
+            return null;
+          }
+        })();
+        if (!defaults || typeof defaults !== 'object') return sendJson(res, 500, { error: 'Invalid preset defaults' }, corsHeaders);
+
+        db.prepare(
+          `UPDATE installed_skills
+             SET display_name = ?,
+                 description = ?,
+                 tier = ?,
+                 enabled = ?,
+                 source = ?,
+                 sort_order = ?,
+                 capabilities_json = ?
+           WHERE slug = ?`
+        ).run(
+          typeof (defaults as any).display_name === 'string' ? (defaults as any).display_name : null,
+          typeof (defaults as any).description === 'string' ? (defaults as any).description : null,
+          normalizeString((defaults as any).tier) || 'official',
+          (defaults as any).enabled === false ? 0 : 1,
+          normalizeString((defaults as any).source) || 'marketplace',
+          Number.isFinite(Number((defaults as any).sort_order)) ? Number((defaults as any).sort_order) : 0,
+          jsonStringifyCapabilities(parseCapabilitiesJson((defaults as any).capabilities)),
+          slug
+        );
+
+        const updated = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+                 FROM installed_skills
+                WHERE slug = ?`
+            )
+            .all(slug) as any
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 200, updated ? skillRowToDto(updated) : { slug }, corsHeaders);
+      }
+
+      const skillDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/skills\/([^/]+)$/) : null;
+      if (skillDeleteMatch) {
+        const slug = decodeURIComponent(skillDeleteMatch[1]);
+        const info = db.prepare('DELETE FROM installed_skills WHERE slug = ?').run(slug);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Skill not found' }, corsHeaders);
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      // --- Skills marketplace ---
+      if (req.method === 'GET' && url.pathname === '/marketplace/skills') {
+        const installedRows = db.prepare('SELECT slug FROM installed_skills').all() as any[];
+        const installed = new Set<string>();
+        for (const r of installedRows) {
+          if (typeof r?.slug === 'string') installed.add(r.slug);
+        }
+
+        const payload = MARKETPLACE_SKILLS.map((p) => ({
+          ...p,
+          installed: installed.has(p.slug),
+        }));
+
+        return sendJson(res, 200, payload, corsHeaders);
+      }
+
+      const marketplaceSkillInstallMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/marketplace\/skills\/([^/]+)\/install$/)
+        : null;
+      if (marketplaceSkillInstallMatch) {
+        const presetKey = decodeURIComponent(marketplaceSkillInstallMatch[1]);
+        const preset = getMarketplaceSkillPreset(presetKey);
+        if (!preset) return sendJson(res, 404, { error: 'Preset not found' }, corsHeaders);
+        if (preset.requires_subscription) {
+          return sendJson(res, 403, { error: 'Subscription required' }, corsHeaders);
+        }
+
+        const existing = rowOrNull<{ slug: string }>(
+          db.prepare('SELECT slug FROM installed_skills WHERE slug = ? LIMIT 1').all(preset.slug) as any
+        );
+        if (existing?.slug) return sendJson(res, 200, { slug: existing.slug }, corsHeaders);
+
+        const presetDefaults = {
+          preset_key: preset.preset_key,
+          slug: preset.slug,
+          display_name: preset.display_name,
+          description: preset.description,
+          tier: preset.tier,
+          enabled: true,
+          source: 'marketplace',
+          sort_order: preset.sort_order,
+          capabilities: preset.capabilities,
+        };
+
+        db.prepare(
+          `INSERT INTO installed_skills(
+            slug, display_name, description, tier, enabled, source, preset_key, preset_defaults_json, sort_order, capabilities_json
+          ) VALUES (?, ?, ?, ?, 1, 'marketplace', ?, ?, ?, ?)`
+        ).run(
+          preset.slug,
+          preset.display_name,
+          preset.description,
+          preset.tier,
+          preset.preset_key,
+          JSON.stringify(presetDefaults),
+          preset.sort_order,
+          jsonStringifyCapabilities(preset.capabilities)
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 201, { slug: preset.slug }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/marketplace/agents') {
+        const installedRows = db
+          .prepare('SELECT id, preset_key FROM agents WHERE preset_key IS NOT NULL')
+          .all() as any[];
+        const installedByKey = new Map<string, string>();
+        for (const r of installedRows) {
+          if (typeof r?.preset_key === 'string' && typeof r?.id === 'string') installedByKey.set(r.preset_key, r.id);
+        }
+
+        const payload = MARKETPLACE_AGENTS.map((p) => ({
+          ...p,
+          installed: installedByKey.has(p.preset_key),
+          installed_agent_id: installedByKey.get(p.preset_key) ?? null,
         }));
         return sendJson(res, 200, payload, corsHeaders);
       }
 
+      const marketplaceInstallMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/marketplace\/agents\/([^/]+)\/install$/)
+        : null;
+      if (marketplaceInstallMatch) {
+        const presetKey = decodeURIComponent(marketplaceInstallMatch[1]);
+        const preset = getMarketplaceAgentPreset(presetKey);
+        if (!preset) return sendJson(res, 404, { error: 'Preset not found' }, corsHeaders);
+        if (preset.requires_subscription) {
+          return sendJson(res, 403, { error: 'Subscription required' }, corsHeaders);
+        }
+
+        const existing = rowOrNull<{ id: string }>(
+          db.prepare('SELECT id FROM agents WHERE preset_key = ? LIMIT 1').all(presetKey) as any
+        );
+        if (existing?.id) return sendJson(res, 200, { id: existing.id }, corsHeaders);
+
+        const id = randomUUID();
+        const enabled = 1;
+        const role = 'orchestrator';
+        const openclawAgentId = DEFAULT_OPENCLAW_AGENT_ID;
+
+        const presetDefaults = {
+          preset_key: preset.preset_key,
+          display_name: preset.display_name,
+          emoji: preset.emoji,
+          description: preset.description,
+          category: preset.category,
+          tags: preset.tags,
+          skills: preset.skills,
+          prompt_overrides: preset.prompt_overrides,
+          openclaw_agent_id: openclawAgentId,
+          enabled: true,
+          role,
+          sort_order: preset.sort_order,
+        };
+
+        db.prepare(
+          `INSERT INTO agents(
+            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            description, category, tags_json, skills_json, prompt_overrides_json,
+            preset_key, preset_defaults_json, sort_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          id,
+          preset.display_name,
+          preset.emoji,
+          openclawAgentId,
+          enabled,
+          role,
+          preset.description,
+          preset.category,
+          jsonStringifyArray(preset.tags),
+          jsonStringifyArray(preset.skills),
+          jsonStringifyPromptOverrides(preset.prompt_overrides),
+          preset.preset_key,
+          JSON.stringify(presetDefaults),
+          preset.sort_order
+        );
+
+        sseBroadcast({ type: 'agents.changed', payload: {} });
+        return sendJson(res, 201, { id }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/agents') {
+        const rows = db
+          .prepare(
+            `SELECT
+              a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+              a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+              a.preset_key, a.sort_order, a.created_at, a.updated_at,
+              (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
+              (SELECT MAX(ar.started_at)
+                 FROM task_sessions ts
+                 JOIN agent_runs ar ON ar.task_id = ts.task_id
+                WHERE ts.agent_id = a.id) as last_used_at,
+              (SELECT COUNT(*)
+                 FROM task_sessions ts
+                 JOIN agent_runs ar ON ar.task_id = ts.task_id
+                WHERE ts.agent_id = a.id
+                  AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
+             FROM agents a
+             ORDER BY a.enabled DESC, a.sort_order ASC, a.display_name ASC`
+          )
+          .all() as any[];
+
+        return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/agents') {
+        const body = await readJson(req);
+
+        const displayName = normalizeString(body?.display_name ?? body?.displayName);
+        const openclawAgentId = normalizeString(body?.openclaw_agent_id ?? body?.openclawAgentId);
+        if (!displayName) return sendJson(res, 400, { error: 'display_name is required' }, corsHeaders);
+        if (!openclawAgentId) return sendJson(res, 400, { error: 'openclaw_agent_id is required' }, corsHeaders);
+
+        const id = randomUUID();
+        const emoji = normalizeString(body?.emoji) || null;
+        const role = normalizeString(body?.role) || null;
+        const enabled = body?.enabled === false ? 0 : 1;
+        const description = body?.description === null ? null : typeof body?.description === 'string' ? body.description : null;
+        const category = normalizeString(body?.category) || 'general';
+        const tags = Array.isArray(body?.tags) ? body.tags : parseStringArrayJson(body?.tags_json);
+        const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
+        const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
+        const sortOrder = Number.isFinite(Number(body?.sort_order)) ? Number(body.sort_order) : 0;
+
+        db.prepare(
+          `INSERT INTO agents(
+            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            description, category, tags_json, skills_json, prompt_overrides_json,
+            preset_key, preset_defaults_json, sort_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+        ).run(
+          id,
+          displayName,
+          emoji,
+          openclawAgentId,
+          enabled,
+          role,
+          description,
+          category,
+          jsonStringifyArray(tags),
+          jsonStringifyArray(skills),
+          jsonStringifyPromptOverrides(promptOverrides),
+          sortOrder
+        );
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+                a.preset_key, a.sort_order, a.created_at, a.updated_at,
+                (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
+                (SELECT MAX(ar.started_at)
+                   FROM task_sessions ts
+                   JOIN agent_runs ar ON ar.task_id = ts.task_id
+                  WHERE ts.agent_id = a.id) as last_used_at,
+                (SELECT COUNT(*)
+                   FROM task_sessions ts
+                   JOIN agent_runs ar ON ar.task_id = ts.task_id
+                  WHERE ts.agent_id = a.id
+                    AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
+               FROM agents a
+               WHERE a.id = ?`
+            )
+            .all(id) as any
+        );
+
+        sseBroadcast({ type: 'agents.changed', payload: {} });
+        return sendJson(res, 201, row ? agentRowToDto(row) : { id }, corsHeaders);
+      }
+
+      const agentPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
+      if (agentPatchMatch) {
+        const id = decodeURIComponent(agentPatchMatch[1]);
+        const body = await readJson(req);
+
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.display_name !== undefined || body?.displayName !== undefined) {
+          const displayName = normalizeString(body?.display_name ?? body?.displayName);
+          if (!displayName) return sendJson(res, 400, { error: 'display_name must be a non-empty string' }, corsHeaders);
+          updates.push('display_name = ?');
+          params.push(displayName);
+        }
+
+        if (body?.emoji !== undefined) {
+          const emoji = body.emoji === null ? null : normalizeString(body.emoji) || null;
+          updates.push('emoji = ?');
+          params.push(emoji);
+        }
+
+        if (body?.openclaw_agent_id !== undefined || body?.openclawAgentId !== undefined) {
+          const openclawAgentId = normalizeString(body?.openclaw_agent_id ?? body?.openclawAgentId);
+          if (!openclawAgentId) return sendJson(res, 400, { error: 'openclaw_agent_id must be a non-empty string' }, corsHeaders);
+          updates.push('openclaw_agent_id = ?');
+          params.push(openclawAgentId);
+        }
+
+        if (body?.enabled !== undefined) {
+          const enabled = body.enabled === false ? 0 : 1;
+          updates.push('enabled = ?');
+          params.push(enabled);
+        }
+
+        if (body?.role !== undefined) {
+          const role = body.role === null ? null : normalizeString(body.role) || null;
+          updates.push('role = ?');
+          params.push(role);
+        }
+
+        if (body?.description !== undefined) {
+          const description =
+            body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+
+        if (body?.category !== undefined) {
+          const category = normalizeString(body.category) || 'general';
+          updates.push('category = ?');
+          params.push(category);
+        }
+
+        if (body?.tags !== undefined || body?.tags_json !== undefined) {
+          const tags = Array.isArray(body?.tags) ? body.tags : parseStringArrayJson(body?.tags_json);
+          updates.push('tags_json = ?');
+          params.push(jsonStringifyArray(tags));
+        }
+
+        if (body?.skills !== undefined || body?.skills_json !== undefined) {
+          const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
+          updates.push('skills_json = ?');
+          params.push(jsonStringifyArray(skills));
+        }
+
+        if (body?.prompt_overrides !== undefined || body?.prompt_overrides_json !== undefined) {
+          const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
+          updates.push('prompt_overrides_json = ?');
+          params.push(jsonStringifyPromptOverrides(promptOverrides));
+        }
+
+        if (body?.sort_order !== undefined) {
+          const sortOrder = Number(body.sort_order);
+          if (!Number.isFinite(sortOrder)) return sendJson(res, 400, { error: 'sort_order must be a number' }, corsHeaders);
+          updates.push('sort_order = ?');
+          params.push(sortOrder);
+        }
+
+        if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
+
+        params.push(id);
+        const info = db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+                a.preset_key, a.sort_order, a.created_at, a.updated_at,
+                (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
+                (SELECT MAX(ar.started_at)
+                   FROM task_sessions ts
+                   JOIN agent_runs ar ON ar.task_id = ts.task_id
+                  WHERE ts.agent_id = a.id) as last_used_at,
+                (SELECT COUNT(*)
+                   FROM task_sessions ts
+                   JOIN agent_runs ar ON ar.task_id = ts.task_id
+                  WHERE ts.agent_id = a.id
+                    AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
+               FROM agents a
+               WHERE a.id = ?`
+            )
+            .all(id) as any
+        );
+
+        sseBroadcast({ type: 'agents.changed', payload: {} });
+        return sendJson(res, 200, row ? agentRowToDto(row) : { id }, corsHeaders);
+      }
+
+      const agentResetMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/reset$/) : null;
+      if (agentResetMatch) {
+        const id = decodeURIComponent(agentResetMatch[1]);
+        const row = rowOrNull<{ preset_key: string | null; preset_defaults_json: string | null }>(
+          db.prepare('SELECT preset_key, preset_defaults_json FROM agents WHERE id = ?').all(id) as any
+        );
+        if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!row.preset_key || !row.preset_defaults_json) {
+          return sendJson(res, 400, { error: 'Reset is only available for installed presets' }, corsHeaders);
+        }
+
+        const defaults = (() => {
+          try {
+            return JSON.parse(row.preset_defaults_json as string);
+          } catch {
+            return null;
+          }
+        })();
+        if (!defaults || typeof defaults !== 'object') {
+          return sendJson(res, 500, { error: 'Invalid preset defaults' }, corsHeaders);
+        }
+
+        db.prepare(
+          `UPDATE agents
+             SET display_name = ?,
+                 emoji = ?,
+                 openclaw_agent_id = ?,
+                 enabled = ?,
+                 role = ?,
+                 description = ?,
+                 category = ?,
+                 tags_json = ?,
+                 skills_json = ?,
+                 prompt_overrides_json = ?,
+                 sort_order = ?
+           WHERE id = ?`
+        ).run(
+          normalizeString((defaults as any).display_name) || normalizeString((defaults as any).displayName) || 'Agent',
+          (defaults as any).emoji ?? null,
+          normalizeString((defaults as any).openclaw_agent_id) || DEFAULT_OPENCLAW_AGENT_ID,
+          (defaults as any).enabled === false ? 0 : 1,
+          normalizeString((defaults as any).role) || 'orchestrator',
+          typeof (defaults as any).description === 'string' ? (defaults as any).description : null,
+          normalizeString((defaults as any).category) || 'general',
+          jsonStringifyArray(Array.isArray((defaults as any).tags) ? (defaults as any).tags : []),
+          jsonStringifyArray(Array.isArray((defaults as any).skills) ? (defaults as any).skills : []),
+          jsonStringifyPromptOverrides(parsePromptOverridesJson((defaults as any).prompt_overrides)),
+          Number.isFinite(Number((defaults as any).sort_order)) ? Number((defaults as any).sort_order) : 0,
+          id
+        );
+
+        const updated = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+                a.preset_key, a.sort_order, a.created_at, a.updated_at,
+                (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
+                (SELECT MAX(ar.started_at)
+                   FROM task_sessions ts
+                   JOIN agent_runs ar ON ar.task_id = ts.task_id
+                  WHERE ts.agent_id = a.id) as last_used_at,
+                (SELECT COUNT(*)
+                   FROM task_sessions ts
+                   JOIN agent_runs ar ON ar.task_id = ts.task_id
+                  WHERE ts.agent_id = a.id
+                    AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
+               FROM agents a
+               WHERE a.id = ?`
+            )
+            .all(id) as any
+        );
+
+        sseBroadcast({ type: 'agents.changed', payload: {} });
+        return sendJson(res, 200, updated ? agentRowToDto(updated) : { id }, corsHeaders);
+      }
+
+      const agentDuplicateMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/duplicate$/) : null;
+      if (agentDuplicateMatch) {
+        const id = decodeURIComponent(agentDuplicateMatch[1]);
+        const src = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                id, display_name, emoji, openclaw_agent_id, enabled, role,
+                description, category, tags_json, skills_json, prompt_overrides_json, sort_order
+               FROM agents
+               WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        if (!src) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+
+        const newId = randomUUID();
+        const displayName = `${String(src.display_name ?? 'Agent')} (copy)`;
+
+        db.prepare(
+          `INSERT INTO agents(
+            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            description, category, tags_json, skills_json, prompt_overrides_json,
+            preset_key, preset_defaults_json, sort_order
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+        ).run(
+          newId,
+          displayName,
+          src.emoji ?? null,
+          String(src.openclaw_agent_id ?? DEFAULT_OPENCLAW_AGENT_ID),
+          src.enabled === 0 ? 0 : 1,
+          src.role ?? null,
+          src.description ?? null,
+          String(src.category ?? 'general'),
+          typeof src.tags_json === 'string' ? src.tags_json : '[]',
+          typeof src.skills_json === 'string' ? src.skills_json : '[]',
+          typeof src.prompt_overrides_json === 'string' ? src.prompt_overrides_json : '{}',
+          Number.isFinite(Number(src.sort_order)) ? Number(src.sort_order) : 0
+        );
+
+        sseBroadcast({ type: 'agents.changed', payload: {} });
+        return sendJson(res, 201, { id: newId }, corsHeaders);
+      }
+
+      const deleteAgentMatch = req.method === 'DELETE' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
+      if (deleteAgentMatch) {
+        const id = decodeURIComponent(deleteAgentMatch[1]);
+        const row = rowOrNull<{ preset_key: string | null }>(
+          db.prepare('SELECT preset_key FROM agents WHERE id = ?').all(id) as any
+        );
+        if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (row.preset_key) {
+          return sendJson(res, 400, { error: 'Installed presets cannot be deleted (disable instead)' }, corsHeaders);
+        }
+
+        const info = db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        sseBroadcast({ type: 'agents.changed', payload: {} });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      // Legacy endpoint (v1): upsert basic fields for a list of agents.
       if (req.method === 'PUT' && url.pathname === '/agents') {
         const body = await readJson(req);
         if (!Array.isArray(body)) return sendJson(res, 400, { error: 'Expected JSON array' }, corsHeaders);
 
-        const normalize = (s: any) => (typeof s === 'string' ? s.trim() : '');
+        const upsert = db.prepare(
+          `INSERT INTO agents(id, display_name, emoji, openclaw_agent_id, enabled, role)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             display_name = excluded.display_name,
+             emoji = excluded.emoji,
+             openclaw_agent_id = excluded.openclaw_agent_id,
+             enabled = excluded.enabled,
+             role = excluded.role`
+        );
 
         db.exec('BEGIN');
         try {
-          db.prepare('DELETE FROM agents').run();
-          const ins = db.prepare(
-            'INSERT INTO agents(id, display_name, emoji, openclaw_agent_id, enabled, role) VALUES (?, ?, ?, ?, ?, ?)'
-          );
-
           for (const row of body) {
-            const id = normalize(row?.id) || randomUUID();
-            const displayName = normalize(row?.display_name ?? row?.displayName);
-            const emoji = normalize(row?.emoji) || null;
-            const openclawAgentId = normalize(row?.openclaw_agent_id ?? row?.openclawAgentId);
-            const role = normalize(row?.role) || null;
+            const id = normalizeString(row?.id) || randomUUID();
+            const displayName = normalizeString(row?.display_name ?? row?.displayName);
+            const emoji = normalizeString(row?.emoji) || null;
+            const openclawAgentId = normalizeString(row?.openclaw_agent_id ?? row?.openclawAgentId);
+            const role = normalizeString(row?.role) || null;
             const enabled = row?.enabled === false ? 0 : 1;
 
             if (!displayName) throw new Error('agent.display_name is required');
             if (!openclawAgentId) throw new Error('agent.openclaw_agent_id is required');
 
-            ins.run(id, displayName, emoji, openclawAgentId, enabled, role);
+            upsert.run(id, displayName, emoji, openclawAgentId, enabled, role);
           }
-
           db.exec('COMMIT');
         } catch (e) {
           db.exec('ROLLBACK');
@@ -1412,12 +2193,27 @@ function main() {
 
         const rows = db
           .prepare(
-            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+            `SELECT
+              a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+              a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+              a.preset_key, a.sort_order, a.created_at, a.updated_at,
+              (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
+              (SELECT MAX(ar.started_at)
+                 FROM task_sessions ts
+                 JOIN agent_runs ar ON ar.task_id = ts.task_id
+                WHERE ts.agent_id = a.id) as last_used_at,
+              (SELECT COUNT(*)
+                 FROM task_sessions ts
+                 JOIN agent_runs ar ON ar.task_id = ts.task_id
+                WHERE ts.agent_id = a.id
+                  AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
+             FROM agents a
+             ORDER BY a.enabled DESC, a.sort_order ASC, a.display_name ASC`
           )
           .all() as any[];
-        const payload = rows.map((r) => ({ ...r, enabled: Boolean(r.enabled) }));
+
         sseBroadcast({ type: 'agents.changed', payload: {} });
-        return sendJson(res, 200, payload, corsHeaders);
+        return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/docs/overview') {

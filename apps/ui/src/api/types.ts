@@ -75,8 +75,69 @@ export type Agent = {
   openclaw_agent_id: string;
   enabled: boolean;
   role: string | null;
+  description: string | null;
+  category: string;
+  tags: string[];
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  preset_key: string | null;
+  sort_order: number;
   created_at: string;
   updated_at: string;
+  assigned_task_count: number;
+  run_count_7d: number;
+  last_used_at: string | null;
+};
+
+export type PromptOverrides = Partial<Record<'system' | 'plan' | 'execute' | 'chat' | 'report', string>>;
+
+export type MarketplaceAgent = {
+  preset_key: string;
+  display_name: string;
+  emoji: string;
+  description: string;
+  category: string;
+  tags: string[];
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  requires_subscription: boolean;
+  tier: 'official' | 'verified' | 'community';
+  sort_order: number;
+  installed: boolean;
+  installed_agent_id: string | null;
+};
+
+export type SkillCapabilities = {
+  network?: boolean;
+  filesystem?: boolean;
+  external_write?: boolean;
+  secrets?: string[];
+};
+
+export type InstalledSkill = {
+  slug: string;
+  display_name: string | null;
+  description: string | null;
+  tier: 'official' | 'verified' | 'community';
+  enabled: boolean;
+  source: 'manual' | 'marketplace';
+  preset_key: string | null;
+  sort_order: number;
+  capabilities: SkillCapabilities;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketplaceSkill = {
+  preset_key: string;
+  slug: string;
+  display_name: string;
+  description: string;
+  tier: 'official' | 'verified' | 'community';
+  capabilities: SkillCapabilities;
+  requires_subscription: boolean;
+  sort_order: number;
+  installed: boolean;
 };
 
 export type RunStepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
