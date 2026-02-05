@@ -21,3 +21,13 @@ pnpm test:security
 2. Open `/login`, sign in, then hit `/auth/verify` (should return 200).
 3. Logout and re-check `/auth/verify` (should return 401).
 
+## Smoke test overrides (when login flow changes)
+
+You can adjust the smoke test without editing code by setting env vars:
+
+- `DZZENOS_AUTH_LOGIN_PATH` (default `/auth/login`)
+- `DZZENOS_AUTH_READY_PATH` (default `/login`)
+- `DZZENOS_AUTH_VERIFY_PATH` (default `/auth/verify`)
+- `DZZENOS_AUTH_LOGOUT_PATH` (default `/auth/logout`)
+- `DZZENOS_AUTH_USERNAME_FIELD` (default `username`)
+- `DZZENOS_AUTH_PASSWORD_FIELD` (default `password`)
