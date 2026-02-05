@@ -15,3 +15,7 @@ apps/ui/dist
 # Local-first sqlite db files
 /data/*.db
 /data/*.db-*
+
+# Dev-only docs and Cursor config (not for GitHub)
+DEV_DOCS/
+.cursor/

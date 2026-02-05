@@ -3,7 +3,7 @@
 DzzenOS-OpenClaw is **source-available** under the **Business Source License 1.1 (BUSL-1.1)**.
 
 ## Free production use (under $1M revenue)
-Production use is **free** for organizations with **Annual Gross Revenue < USD 1,000,000**, as described in the **Additional Use Grant** in [`LICENSE-ADDITIONAL-GRANT.md`](../LICENSE-ADDITIONAL-GRANT.md) (supplements [`LICENSE`](../LICENSE)).
+Production use is **free** for organizations with **Annual Gross Revenue < USD 1,000,000**, as described in the **Additional Use Grant** in [licensing/ADDITIONAL-GRANT.md](licensing/ADDITIONAL-GRANT.md) (supplements [LICENSE](../LICENSE)).
 
 Consultants/agencies may deploy and configure DzzenOS-OpenClaw on infrastructure owned or controlled by their clients, and the client is deemed the Licensee for purposes of the revenue threshold.
 

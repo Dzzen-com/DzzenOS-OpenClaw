@@ -1,17 +1,32 @@
-# Reporting Security Vulnerabilities
+# Security Policy
 
-**If you believe you have discovered a security issue within DzzenOS-OpenClaw, please open a new private security
-vulnerability report through GitHub:
-https://github.com/Dzzen-com/DzzenOS-OpenClaw/security/advisories/new
+## Supported Versions
 
-Alternatively, reach out to us directly over email: [team@dzzen.com](mailto:team@dzzen.com).**
+We release security updates for the **latest release** of DzzenOS-OpenClaw. We recommend always running the latest version. Older versions are not officially supported with security patches.
 
-We will then open a GitHub Security Advisory for tracking the fix on your behalf.
+| Version | Supported          |
+| ------- | ------------------ |
+| latest  | :white_check_mark: |
+| older   | :x:                |
 
-Dzzen values the members of the independent security research community who find security vulnerabilities and work with
-our team so that proper fixes can be issued to users.
+## Reporting a Vulnerability
 
-In order to receive credit, security researchers must follow responsible disclosure practices, including:
+If you believe you have discovered a security issue in DzzenOS-OpenClaw, please report it responsibly.
 
-- Do not publish the vulnerability prior to the Dzzen team releasing a fix for it.
-- Do not divulge exact details of the issue, for example, through exploits or proof-of-concepts.
+**Preferred (when enabled):**
+
+1. Go to the [Security tab](https://github.com/Dzzen-com/DzzenOS-OpenClaw/security) of this repository.
+2. Click **Report a vulnerability** and submit the form.
+
+**Alternative:** Email [team@dzzen.com](mailto:team@dzzen.com) with a description of the issue. Do not open a public issue for security vulnerabilities.
+
+We will open a GitHub Security Advisory to track the fix and will respond as soon as we can. We aim to acknowledge reports within a few business days.
+
+## Responsible Disclosure
+
+We value the security research community. To receive credit and avoid harm to users:
+
+- **Do not** publish the vulnerability or share exploit details before we have released a fix.
+- **Do not** disclose exact details, proof-of-concepts, or exploits publicly before coordinated disclosure.
+
+After a fix is released, we are happy to acknowledge researchers (unless you prefer to remain anonymous).

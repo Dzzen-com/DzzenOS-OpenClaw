@@ -1,10 +1,12 @@
-# DzzenOS-OpenClaw
+<h1 align="center">DzzenOS-OpenClaw</h1>
 
-[![Release](https://img.shields.io/github/v/release/Dzzen-com/DzzenOS-OpenClaw?include_prereleases&sort=semver)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/releases)
-[![Stars](https://img.shields.io/github/stars/Dzzen-com/DzzenOS-OpenClaw?style=flat)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/stargazers)
-[![Issues](https://img.shields.io/github/issues/Dzzen-com/DzzenOS-OpenClaw)](https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues)
-[![License](https://img.shields.io/badge/license-BUSL--1.1-blue)](./LICENSE)
-[![OpenClaw](https://img.shields.io/badge/OpenClaw-native-111827)](https://github.com/openclaw/openclaw)
+<p align="center">
+  <a href="https://github.com/Dzzen-com/DzzenOS-OpenClaw/releases"><img src="https://img.shields.io/github/v/release/Dzzen-com/DzzenOS-OpenClaw?include_prereleases&sort=semver" alt="Release" /></a>
+  <a href="https://github.com/Dzzen-com/DzzenOS-OpenClaw/stargazers"><img src="https://img.shields.io/github/stars/Dzzen-com/DzzenOS-OpenClaw?style=flat" alt="Stars" /></a>
+  <a href="https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues"><img src="https://img.shields.io/github/issues/Dzzen-com/DzzenOS-OpenClaw" alt="Issues" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-BUSL--1.1-blue" alt="License" /></a>
+  <a href="https://github.com/openclaw/openclaw"><img src="https://img.shields.io/badge/OpenClaw-native-111827" alt="OpenClaw" /></a>
+</p>
 
 <p align="center">
   <img src="./assets/hero-placeholder.svg" alt="DzzenOS-OpenClaw hero" width="900" />
@@ -46,53 +48,24 @@ It provides:
 
 ---
 
-## 3-minute quickstart (local demo)
-
-**Prereqs:** Node.js (>= 22 recommended). We use **Corepack** to provide pnpm.
-
-```bash
-corepack enable
-corepack pnpm install
-corepack pnpm dev
-```
-
-Then open the UI printed in the console (default: `http://127.0.0.1:5173`).
-
-What you can try in ~1 minute:
-1. Create a task.
-2. Click **Simulate run** (dev-only) to create a run + steps.
-3. Refresh the task to see the run advance.
-
-### Ports / collisions
-- API defaults to `127.0.0.1:8787`
-- UI defaults to `127.0.0.1:5173`
-
-If a default port is already in use, `pnpm dev` will automatically pick the next free port and print it.
-
-You can override:
-```bash
-HOST=127.0.0.1 API_PORT=8787 UI_PORT=5173 pnpm dev
-```
-
----
-
 ## Install
 
-### Option A — Remote (server) via SSH tunnel (fastest)
+### Option A — Remote (server)
 
-**1) On your laptop: create an SSH tunnel**
-```bash
-ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
-```
-
-**2) On your server: run installer**
+**1) On your server: run installer**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+```
+
+**2) On your laptop: create an SSH tunnel**
+```bash
+ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
 ```
 
 **3) Open in your browser**
 - DzzenOS UI: `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if required)
 - Control UI: `http://localhost:18789/` (append `?token=...` if required)
+
 
 ### Option B — Domain (Caddy + TLS + login) (best UX)
 
@@ -151,7 +124,7 @@ We track work in GitHub Issues + Project Board.
 - **English-only** issues and PRs.
 - Use the issue templates.
 
-See `CONTRIBUTING.md`.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
@@ -160,7 +133,7 @@ See `CONTRIBUTING.md`.
 DzzenOS-OpenClaw is part of **Dzzen** — a unified space for solo founders.
 
 If you fork this project, you must follow the trademark policy:
-- `TRADEMARKS.md`
+- [TRADEMARKS.md](TRADEMARKS.md)
 
 ---
 
@@ -168,7 +141,7 @@ If you fork this project, you must follow the trademark policy:
 
 This project is **source-available** under the **Business Source License 1.1 (BUSL-1.1)**.
 
-- Free production use for organizations with **Annual Gross Revenue < USD 1,000,000** (see the Additional Use Grant in `LICENSE`).
+- Free production use for organizations with **Annual Gross Revenue < USD 1,000,000** (see [Additional Use Grant](docs/licensing/ADDITIONAL-GRANT.md) in [LICENSE](LICENSE)).
 - For companies ≥ $1M revenue and/or prohibited use-cases (hosted/managed service, resale/rebrand), a commercial license is required.
 
-See: `LICENSE`, `docs/licensing.md`, and `TRADEMARKS.md`.
+See: [LICENSE](LICENSE), [docs/licensing.md](docs/licensing.md), [docs/licensing/ADDITIONAL-GRANT.md](docs/licensing/ADDITIONAL-GRANT.md), and [TRADEMARKS.md](TRADEMARKS.md).
