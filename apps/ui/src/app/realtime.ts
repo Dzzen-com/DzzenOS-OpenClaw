@@ -65,6 +65,7 @@ export function startRealtime(opts: {
 
       if (msg.type === 'agents.changed') {
         opts.qc.invalidateQueries({ queryKey: ['agents'] });
+        opts.qc.invalidateQueries({ queryKey: ['marketplace-agents'] });
       }
 
       if (msg.type === 'approvals.changed') {

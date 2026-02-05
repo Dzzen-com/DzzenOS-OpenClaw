@@ -64,8 +64,36 @@ export type Agent = {
   openclaw_agent_id: string;
   enabled: boolean;
   role: string | null;
+  description: string | null;
+  category: string;
+  tags: string[];
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  preset_key: string | null;
+  sort_order: number;
   created_at: string;
   updated_at: string;
+  assigned_task_count: number;
+  run_count_7d: number;
+  last_used_at: string | null;
+};
+
+export type PromptOverrides = Partial<Record<'system' | 'plan' | 'execute' | 'chat' | 'report', string>>;
+
+export type MarketplaceAgent = {
+  preset_key: string;
+  display_name: string;
+  emoji: string;
+  description: string;
+  category: string;
+  tags: string[];
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  requires_subscription: boolean;
+  tier: 'official' | 'verified' | 'community';
+  sort_order: number;
+  installed: boolean;
+  installed_agent_id: string | null;
 };
 
 export type RunStepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
