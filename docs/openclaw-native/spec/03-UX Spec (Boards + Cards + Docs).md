@@ -85,6 +85,8 @@ Bulk actions:
 - Stage badge in status strip (glowing dot)
 - Subtle agent heartbeat on kanban cards while running
 - Stage icons in activity ticker
+- Agent selector inside task drawer; if no enabled agents, show CTA “Manage agents”
+- Skills/tools/prompts are configured on the agent profile (not per task)
 
 ---
 

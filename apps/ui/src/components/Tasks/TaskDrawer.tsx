@@ -27,10 +27,12 @@ export function TaskDrawer({
   task,
   open,
   onOpenChange,
+  onOpenAgents,
 }: {
   task: Task | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onOpenAgents?: () => void;
 }) {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('details');
@@ -423,7 +425,11 @@ export function TaskDrawer({
                   </Row>
 
                   {task?.id ? (
-                    <TaskAgent taskId={task.id} lastRunStatus={runsQ.data?.[0]?.status ?? null} />
+                    <TaskAgent
+                      taskId={task.id}
+                      lastRunStatus={runsQ.data?.[0]?.status ?? null}
+                      onOpenAgents={onOpenAgents}
+                    />
                   ) : null}
 
                   {task?.id ? <Checklist taskId={task.id} /> : null}
