@@ -686,12 +686,13 @@ function formatTokens(value: number | null | undefined) {
   return String(Math.round(n));
 }
 
-function formatTokenLabel(input: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) {
-  const input = formatTokens(input.inputTokens);
-  const output = formatTokens(input.outputTokens);
-  const total = formatTokens(input.totalTokens);
-  if (input || output) {
-    return `${input ?? '—'} in / ${output ?? '—'} out`;
+function formatTokenLabel(input?: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null } | null) {
+  if (!input) return null;
+  const inputTokens = formatTokens(input.inputTokens);
+  const outputTokens = formatTokens(input.outputTokens);
+  const totalTokens = formatTokens(input.totalTokens);
+  if (inputTokens || outputTokens) {
+    return `${inputTokens ?? '—'} in / ${outputTokens ?? '—'} out`;
   }
-  return total ? `${total} tokens` : null;
+  return totalTokens ? `${totalTokens} tokens` : null;
 }
