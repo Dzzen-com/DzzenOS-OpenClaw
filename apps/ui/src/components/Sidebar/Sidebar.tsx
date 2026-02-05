@@ -23,7 +23,7 @@ import { Button } from '../ui/Button';
 export function Sidebar({
   selectedPage,
   onSelectPage,
-  mobileOpen,
+  mobileOpen = false,
   onCloseMobile,
 }: {
   selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents';

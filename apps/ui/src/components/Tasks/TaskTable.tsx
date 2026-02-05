@@ -80,9 +80,7 @@ function StatusPill({ status }: { status: Task['status'] }) {
         ? 'info'
         : variant === 'warning'
           ? 'warning'
-          : variant === 'danger'
-            ? 'danger'
-            : 'muted';
+          : 'muted';
 
   return (
     <div className="inline-flex items-center gap-2">
