@@ -1,28 +1,39 @@
-import { useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { listBoards } from '../../api/queries';
-import { Spinner } from '../ui/Spinner';
-import { InlineAlert } from '../ui/InlineAlert';
+import { useRef } from 'react';
+import type { ReactNode } from 'react';
 import { StatusDot } from '../ui/StatusDot';
+import {
+  IconBot,
+  IconExternal,
+  IconFile,
+  IconKanban,
+  IconLayout,
+  IconSettings,
+  IconWorkflow,
+} from '../ui/Icons';
+import {
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRoot,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../ui/DropdownMenu';
+import { Button } from '../ui/Button';
 
 export function Sidebar({
   selectedPage,
   onSelectPage,
-  selectedBoardId,
-  onSelectBoard,
   mobileOpen = false,
   onCloseMobile,
 }: {
-  selectedPage: 'dashboard' | 'tasks' | 'automations' | 'docs' | 'agents';
-  onSelectPage: (p: 'dashboard' | 'tasks' | 'automations' | 'docs' | 'agents') => void;
-  selectedBoardId: string | null;
-  onSelectBoard: (id: string) => void;
+  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents';
+  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents') => void;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
-  const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
+  const platformSettingsUrl = (import.meta as any).env?.VITE_PLATFORM_SETTINGS_URL as string | undefined;
   const envOpenclawPath = (import.meta as any).env?.VITE_OPENCLAW_PATH as string | undefined;
   const derivedPath = (() => {
     if (envOpenclawPath && envOpenclawPath.trim()) return envOpenclawPath.trim();
@@ -35,12 +46,7 @@ export function Sidebar({
     : derivedPath.startsWith('/')
       ? derivedPath
       : `/${derivedPath}`;
-
-  useEffect(() => {
-    if (selectedBoardId) return;
-    const first = boardsQ.data?.[0];
-    if (first) onSelectBoard(first.id);
-  }, [boardsQ.data, onSelectBoard, selectedBoardId]);
+  const settingsHref = platformSettingsUrl && platformSettingsUrl.trim() ? platformSettingsUrl.trim() : '';
 
   return (
     <aside
@@ -85,24 +91,26 @@ export function Sidebar({
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        <SectionTitle>Overview</SectionTitle>
+        <SectionTitle>Workspace</SectionTitle>
         <NavItem
           active={selectedPage === 'dashboard'}
           onClick={() => {
             onSelectPage('dashboard');
             onCloseMobile?.();
           }}
+          icon={<IconLayout />}
         >
           Dashboard
         </NavItem>
         <NavItem
-          active={selectedPage === 'docs'}
+          active={selectedPage === 'kanban'}
           onClick={() => {
-            onSelectPage('docs');
+            onSelectPage('kanban');
             onCloseMobile?.();
           }}
+          icon={<IconKanban />}
         >
-          Docs
+          Kanban
         </NavItem>
         <NavItem
           active={selectedPage === 'automations'}
@@ -110,6 +118,7 @@ export function Sidebar({
             onSelectPage('automations');
             onCloseMobile?.();
           }}
+          icon={<IconWorkflow />}
         >
           Automations
         </NavItem>
@@ -119,49 +128,66 @@ export function Sidebar({
             onSelectPage('agents');
             onCloseMobile?.();
           }}
+          icon={<IconBot />}
         >
           Agent Library
+        </NavItem>
+        <NavItem
+          active={selectedPage === 'docs'}
+          onClick={() => {
+            onSelectPage('docs');
+            onCloseMobile?.();
+          }}
+          icon={<IconFile />}
+        >
+          Docs
         </NavItem>
         <NavLink
           href={openclawHref}
           onClick={() => {
             onCloseMobile?.();
           }}
+          icon={<IconExternal />}
         >
           OpenClaw UI
         </NavLink>
-
-        <SectionTitle>Boards</SectionTitle>
-
-        {boardsQ.isLoading ? (
-          <div className="px-3 py-2">
-            <Spinner label="Loading…" />
-          </div>
-        ) : null}
-        {boardsQ.isError ? (
-          <div className="px-3 py-2">
-            <InlineAlert>{String(boardsQ.error)}</InlineAlert>
-          </div>
-        ) : null}
-
-        {(boardsQ.data ?? []).map((b) => (
-          <NavItem
-            key={b.id}
-            active={selectedPage === 'tasks' && b.id === selectedBoardId}
-            onClick={() => {
-              onSelectBoard(b.id);
-              onSelectPage('tasks');
-              onCloseMobile?.();
-            }}
-          >
-            {b.name}
-          </NavItem>
-        ))}
       </nav>
 
-      <div className="mt-auto border-t border-border/70 p-3 text-xs text-muted-foreground">
-        API: <span className="text-foreground/80">/boards</span> • <span className="text-foreground/80">/tasks</span> •{' '}
-        <span className="text-foreground/80">/docs</span>
+      <div className="mt-auto border-t border-border/70 p-3">
+        <DropdownMenuRoot>
+          <DropdownMenuTrigger asChild>
+            <Button variant="secondary" className="w-full justify-start">
+              <IconSettings className="h-4 w-4" />
+              Settings
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={8} className="min-w-[220px]">
+            <DropdownMenuLabel>Platform</DropdownMenuLabel>
+            <DropdownMenuItem
+              disabled={!settingsHref}
+              onSelect={(e) => {
+                e.preventDefault();
+                if (!settingsHref) return;
+                window.location.href = settingsHref;
+              }}
+            >
+              DzzenOS Settings
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(e) => {
+                e.preventDefault();
+                window.location.href = openclawHref;
+              }}
+            >
+              OpenClaw Settings
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenuRoot>
+        <div className="mt-3 text-[11px] text-muted-foreground">
+          <div>API: /boards • /tasks • /docs</div>
+          <div className="mt-1">Realtime: SSE</div>
+        </div>
       </div>
     </aside>
   );
@@ -179,10 +205,12 @@ function NavItem({
   children,
   active,
   onClick,
+  icon,
 }: {
   children: string;
   active?: boolean;
   onClick: () => void;
+  icon?: ReactNode;
 }) {
   return (
     <button
@@ -195,12 +223,23 @@ function NavItem({
       }
     >
       <StatusDot tone={active ? 'info' : 'muted'} />
+      {icon ? <span className="text-muted-foreground/90">{icon}</span> : null}
       <span className="truncate">{children}</span>
     </button>
   );
 }
 
-function NavLink({ children, href, onClick }: { children: string; href: string; onClick?: () => void }) {
+function NavLink({
+  children,
+  href,
+  icon,
+  onClick,
+}: {
+  children: string;
+  href: string;
+  icon?: ReactNode;
+  onClick?: () => void;
+}) {
   return (
     <a
       href={href}
@@ -208,6 +247,7 @@ function NavLink({ children, href, onClick }: { children: string; href: string; 
       className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 transition hover:bg-surface-2/50"
     >
       <StatusDot tone="muted" />
+      {icon ? <span className="text-muted-foreground/90">{icon}</span> : null}
       <span className="truncate">{children}</span>
     </a>
   );

@@ -20,6 +20,39 @@ export function listBoards(): Promise<Board[]> {
   return apiFetch('/boards');
 }
 
+export function createBoard(input: {
+  name: string;
+  description?: string | null;
+  position?: number;
+  workspaceId?: string | null;
+}): Promise<Board> {
+  return apiFetch('/boards', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: input.name,
+      description: input.description ?? null,
+      position: input.position ?? 0,
+      workspaceId: input.workspaceId ?? null,
+    }),
+  });
+}
+
+export function patchBoard(
+  id: string,
+  patch: { name?: string; description?: string | null; position?: number }
+): Promise<Board> {
+  return apiFetch(`/boards/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteBoard(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/boards/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 export function listTasks(boardId: string): Promise<Task[]> {
   const qs = new URLSearchParams({ boardId });
   return apiFetch(`/tasks?${qs.toString()}`);
