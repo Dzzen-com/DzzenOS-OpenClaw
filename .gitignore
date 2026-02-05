@@ -7,6 +7,7 @@ node_modules
 .next
 .dist
 coverage
+ownership-map-out/
 
 # Build outputs
 apps/ui/dist
