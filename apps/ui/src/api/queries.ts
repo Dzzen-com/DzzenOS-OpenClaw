@@ -4,6 +4,7 @@ import type {
   AgentRunListItem,
   AgentRunStatus,
   Agent,
+  MarketplaceAgent,
   Approval,
   ApprovalStatus,
   Automation,
@@ -232,6 +233,67 @@ export function updateAgents(input: Agent[]): Promise<Agent[]> {
     method: 'PUT',
     body: JSON.stringify(input),
   });
+}
+
+export function createAgent(
+  input: Pick<Agent, 'display_name' | 'openclaw_agent_id'> &
+    Partial<
+      Pick<
+        Agent,
+        'emoji' | 'enabled' | 'role' | 'description' | 'category' | 'tags' | 'skills' | 'prompt_overrides' | 'sort_order'
+      >
+    >
+): Promise<Agent> {
+  return apiFetch('/agents', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function patchAgent(
+  id: string,
+  patch: Partial<
+    Pick<
+      Agent,
+      | 'display_name'
+      | 'emoji'
+      | 'openclaw_agent_id'
+      | 'enabled'
+      | 'role'
+      | 'description'
+      | 'category'
+      | 'tags'
+      | 'skills'
+      | 'prompt_overrides'
+      | 'sort_order'
+    >
+  >
+): Promise<Agent> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function resetAgent(id: string): Promise<Agent> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+}
+
+export function duplicateAgent(id: string): Promise<{ id: string }> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
+}
+
+export function deleteAgent(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// --- Marketplace (embedded) ---
+export function listMarketplaceAgents(): Promise<MarketplaceAgent[]> {
+  return apiFetch('/marketplace/agents');
+}
+
+export function installMarketplaceAgent(presetKey: string): Promise<{ id: string }> {
+  return apiFetch(`/marketplace/agents/${encodeURIComponent(presetKey)}/install`, { method: 'POST' });
 }
 
 // --- Docs ---

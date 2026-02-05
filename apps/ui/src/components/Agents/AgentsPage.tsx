@@ -1,149 +1,528 @@
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { listAgents, updateAgents } from '../../api/queries';
-import type { Agent } from '../../api/types';
-import { Button } from '../ui/Button';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
-import { InlineAlert } from '../ui/InlineAlert';
-import { Skeleton } from '../ui/Skeleton';
-import { PageHeader } from '../Layout/PageHeader';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-function newAgent(): Agent {
-  return {
-    id: crypto.randomUUID(),
-    display_name: '',
-    emoji: null,
-    openclaw_agent_id: '',
-    enabled: true,
-    role: null,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-  };
+import type { Agent, MarketplaceAgent } from '../../api/types';
+import { installMarketplaceAgent, listAgents, listMarketplaceAgents, patchAgent } from '../../api/queries';
+import { PageHeader } from '../Layout/PageHeader';
+import { Button } from '../ui/Button';
+import { Badge } from '../ui/Badge';
+import { EmptyState } from '../ui/EmptyState';
+import { InlineAlert } from '../ui/InlineAlert';
+import { Input } from '../ui/Input';
+import { Skeleton } from '../ui/Skeleton';
+import { AgentDrawer } from './AgentDrawer';
+
+function queryTokens(q: string): string[] {
+  return q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matchesTokens(haystack: string, tokens: string[]) {
+  if (!tokens.length) return true;
+  const hay = haystack.toLowerCase();
+  return tokens.every((t) => hay.includes(t));
+}
+
+function matchesQuery(
+  agent: {
+    display_name: string;
+    description?: string | null;
+    category?: string;
+    tags?: string[];
+    openclaw_agent_id?: string;
+    skills?: string[];
+  },
+  q: string,
+) {
+  const tokens = queryTokens(q);
+  if (!tokens.length) return true;
+
+  const hay = [
+    agent.display_name ?? '',
+    agent.description ?? '',
+    agent.category ?? '',
+    ...(agent.tags ?? []),
+    agent.openclaw_agent_id ?? '',
+    ...(agent.skills ?? []),
+  ].join(' ');
+
+  return matchesTokens(hay, tokens);
+}
+
+function clampCategories(values: string[]) {
+  return [...new Set(values.map((v) => (v || 'general').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function isTypingElement(el: Element | null): boolean {
+  if (!el) return false;
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+  if ((el as HTMLElement).isContentEditable) return true;
+  return false;
+}
+
+function formatRelative(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const ms = Date.now() - d.getTime();
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}h`;
+  const days = Math.floor(h / 24);
+  return `${days}d`;
+}
+
+function countPromptOverrides(agent: Agent) {
+  const po = agent.prompt_overrides ?? {};
+  const keys: (keyof typeof po)[] = ['system', 'plan', 'execute', 'chat', 'report'];
+  let count = 0;
+  for (const k of keys) {
+    const v = po[k];
+    if (typeof v === 'string' && v.trim()) count++;
+  }
+  return count;
 }
 
 export function AgentsPage() {
-  const listQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
-  const [draft, setDraft] = useState<Agent[]>([]);
+  const qc = useQueryClient();
+
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState<'all' | string>('all');
+  const [showDisabled, setShowDisabled] = useState(false);
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerAgent, setDrawerAgent] = useState<Agent | null>(null);
 
   useEffect(() => {
-    if (listQ.data) setDraft(listQ.data);
-  }, [listQ.data]);
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-  const saveM = useMutation({
-    mutationFn: async () => updateAgents(draft),
+      if (e.key === '/') {
+        if (isTypingElement(document.activeElement)) return;
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+
+      if (e.key === 'Escape') {
+        if (search.trim()) {
+          e.preventDefault();
+          setSearch('');
+          return;
+        }
+        if (category !== 'all') {
+          e.preventDefault();
+          setCategory('all');
+          return;
+        }
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [search, category]);
+
+  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const marketplaceQ = useQuery({ queryKey: ['marketplace-agents'], queryFn: listMarketplaceAgents });
+
+  const toggleEnabledM = useMutation({
+    mutationFn: async (vars: { id: string; enabled: boolean }) => patchAgent(vars.id, { enabled: vars.enabled }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['agents'] });
+      await qc.invalidateQueries({ queryKey: ['marketplace-agents'] });
+    },
   });
 
+  const installM = useMutation({
+    mutationFn: async (presetKey: string) => installMarketplaceAgent(presetKey),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['agents'] });
+      await qc.invalidateQueries({ queryKey: ['marketplace-agents'] });
+    },
+  });
+
+  const installedAgents = agentsQ.data ?? [];
+  const availablePresets = (marketplaceQ.data ?? [])
+    .filter((p) => !p.installed)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+
+  const categories = useMemo(() => {
+    const installedCats = installedAgents.map((a) => a.category ?? 'general');
+    const presetCats = (marketplaceQ.data ?? []).map((p) => p.category ?? 'general');
+    return clampCategories([...installedCats, ...presetCats]);
+  }, [installedAgents, marketplaceQ.data]);
+
+  const installedFiltered = useMemo(() => {
+    return installedAgents
+      .filter((a) => (category === 'all' ? true : (a.category ?? 'general') === category))
+      .filter((a) => matchesQuery(a, search));
+  }, [installedAgents, category, search]);
+
+  const installedActive = useMemo(() => installedFiltered.filter((a) => a.enabled), [installedFiltered]);
+  const installedDisabled = useMemo(() => installedFiltered.filter((a) => !a.enabled), [installedFiltered]);
+
+  const availableFiltered = useMemo(() => {
+    return availablePresets
+      .filter((p) => (category === 'all' ? true : (p.category ?? 'general') === category))
+      .filter((p) => matchesQuery(p, search));
+  }, [availablePresets, category, search]);
+
+  const showClear = search.trim().length > 0 || category !== 'all';
+
+  const headerActions = (
+    <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+      <div className="w-full sm:w-[260px]">
+        <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Search ( / )</label>
+        <Input
+          ref={searchRef}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search agents…"
+        />
+      </div>
+      <div className="w-full sm:w-[180px]">
+        <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Category</label>
+        <select
+          className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+        >
+          <option value="all">All</option>
+          {categories.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </div>
+      {showClear ? (
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setSearch('');
+            setCategory('all');
+          }}
+        >
+          Clear
+        </Button>
+      ) : null}
+      <Button
+        onClick={() => {
+          setDrawerAgent(null);
+          setDrawerOpen(true);
+        }}
+      >
+        New agent
+      </Button>
+    </div>
+  );
+
   return (
-    <div className="grid gap-4">
+    <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Agent Library"
-        subtitle="Manage OpenClaw agent profiles."
-        actions={
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setDraft((prev) => [...prev, newAgent()])}
-            >
-              Add agent
-            </Button>
-            <Button size="sm" onClick={() => saveM.mutate()} disabled={saveM.isPending}>
-              {saveM.isPending ? 'Saving…' : 'Save changes'}
-            </Button>
-          </>
-        }
+        title="Agents"
+        subtitle="Agent profiles (templates for OpenClaw sessions). Install presets below."
+        actions={headerActions}
       />
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Agents</CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {listQ.isError ? <InlineAlert>{String(listQ.error)}</InlineAlert> : null}
-          <div className="grid gap-3">
-            {listQ.isLoading && draft.length === 0 ? (
-              <div className="grid gap-3">
-                {Array.from({ length: 3 }).map((_, idx) => (
-                  <div key={idx} className="rounded-lg border border-border/70 bg-surface-2/40 p-3">
-                    <div className="grid gap-2 sm:grid-cols-[120px,1fr]">
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-9 w-full" />
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-9 w-full" />
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-9 w-full" />
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-9 w-full" />
-                      <Skeleton className="h-3 w-20" />
-                      <Skeleton className="h-6 w-16" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              draft.map((agent, idx) => (
-                <div key={agent.id} className="rounded-lg border border-border/70 bg-surface-2/40 p-3">
-                  <div className="grid gap-2 sm:grid-cols-[120px,1fr]">
-                    <label className="text-xs text-muted-foreground">Display name</label>
-                    <input
-                      className="rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
-                      value={agent.display_name}
-                      onChange={(e) =>
-                        setDraft((prev) => prev.map((a, i) => (i === idx ? { ...a, display_name: e.target.value } : a)))
-                      }
-                      placeholder="Agent name"
-                    />
 
-                    <label className="text-xs text-muted-foreground">OpenClaw agent id</label>
-                    <input
-                      className="rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
-                      value={agent.openclaw_agent_id}
-                      onChange={(e) =>
-                        setDraft((prev) => prev.map((a, i) => (i === idx ? { ...a, openclaw_agent_id: e.target.value } : a)))
-                      }
-                      placeholder="main"
-                    />
+      {(agentsQ.isError || marketplaceQ.isError || toggleEnabledM.isError || installM.isError) && (
+        <div className="mt-4">
+          <InlineAlert>
+            {String(agentsQ.error ?? marketplaceQ.error ?? toggleEnabledM.error ?? installM.error)}
+          </InlineAlert>
+        </div>
+      )}
 
-                    <label className="text-xs text-muted-foreground">Role</label>
-                    <input
-                      className="rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
-                      value={agent.role ?? ''}
-                      onChange={(e) =>
-                        setDraft((prev) => prev.map((a, i) => (i === idx ? { ...a, role: e.target.value } : a)))
-                      }
-                      placeholder="orchestrator / builder / reviewer"
-                    />
-
-                    <label className="text-xs text-muted-foreground">Emoji</label>
-                    <input
-                      className="rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
-                      value={agent.emoji ?? ''}
-                      onChange={(e) =>
-                        setDraft((prev) => prev.map((a, i) => (i === idx ? { ...a, emoji: e.target.value } : a)))
-                      }
-                      placeholder=":zap:"
-                    />
-
-                    <label className="text-xs text-muted-foreground">Enabled</label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        checked={agent.enabled}
-                        onChange={(e) =>
-                          setDraft((prev) => prev.map((a, i) => (i === idx ? { ...a, enabled: e.target.checked } : a)))
-                        }
-                      />
-                      <span className="text-xs text-muted-foreground">Active</span>
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-            {!listQ.isLoading && draft.length === 0 ? (
-              <div className="text-sm text-muted-foreground">No agents configured yet.</div>
+      <section className="mt-6">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Installed</div>
+            <div className="mt-1 text-xs text-muted-foreground">Agents stored in your local SQLite database.</div>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span>{installedFiltered.length} shown</span>
+            {installedDisabled.length > 0 ? (
+              <button
+                type="button"
+                className="rounded-md border border-border/70 bg-surface-2/40 px-2 py-1 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
+                onClick={() => setShowDisabled((v) => !v)}
+              >
+                {showDisabled ? 'Hide disabled' : `Show disabled (${installedDisabled.length})`}
+              </button>
             ) : null}
           </div>
-        </CardContent>
-      </Card>
+        </div>
+
+        <div className="mt-3">
+          {agentsQ.isLoading && installedAgents.length === 0 ? (
+            <CardsSkeleton />
+          ) : installedActive.length === 0 && installedDisabled.length === 0 ? (
+            <EmptyState
+              title="No agents installed"
+              subtitle="Install a preset below, or create a new custom agent."
+            />
+          ) : (
+            <div className="grid gap-6">
+              {installedActive.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {installedActive.map((a) => (
+                    <InstalledCard
+                      key={a.id}
+                      agent={a}
+                      onConfigure={() => {
+                        setDrawerAgent(a);
+                        setDrawerOpen(true);
+                      }}
+                      onToggleEnabled={(next) => toggleEnabledM.mutate({ id: a.id, enabled: next })}
+                      disabled={toggleEnabledM.isPending}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <EmptyState
+                  title="No active agents"
+                  subtitle="Enable an installed agent, install a preset, or create a new custom agent."
+                />
+              )}
+
+              {showDisabled && installedDisabled.length > 0 ? (
+                <div>
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="text-sm font-semibold text-muted-foreground">Disabled</div>
+                    <div className="text-xs text-muted-foreground">{installedDisabled.length}</div>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {installedDisabled.map((a) => (
+                      <InstalledCard
+                        key={a.id}
+                        agent={a}
+                        onConfigure={() => {
+                          setDrawerAgent(a);
+                          setDrawerOpen(true);
+                        }}
+                        onToggleEnabled={(next) => toggleEnabledM.mutate({ id: a.id, enabled: next })}
+                        disabled={toggleEnabledM.isPending}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="mt-8">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold">Available presets</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              Install official presets. Pro items are visible but locked until subscriptions ship.
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground">{availableFiltered.length} shown</div>
+        </div>
+
+        <div className="mt-3">
+          {marketplaceQ.isLoading && availablePresets.length === 0 ? (
+            <CardsSkeleton />
+          ) : availableFiltered.length === 0 ? (
+            <EmptyState
+              title="No presets found"
+              subtitle="Try clearing search or changing the category filter."
+            />
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {availableFiltered.map((p) => (
+                <AvailableCard
+                  key={p.preset_key}
+                  preset={p}
+                  onInstall={() => installM.mutate(p.preset_key)}
+                  installing={installM.isPending && installM.variables === p.preset_key}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <AgentDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        agent={drawerAgent}
+      />
+    </div>
+  );
+}
+
+function CardsSkeleton() {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {Array.from({ length: 6 }).map((_, idx) => (
+        <div key={idx} className="rounded-xl border border-border/70 bg-surface-1/70 p-4 shadow-panel">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="mt-2 h-3 w-56" />
+            </div>
+            <Skeleton className="h-8 w-20" />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Skeleton className="h-5 w-16" />
+            <Skeleton className="h-5 w-20" />
+            <Skeleton className="h-5 w-14" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function InstalledCard({
+  agent,
+  onConfigure,
+  onToggleEnabled,
+  disabled,
+}: {
+  agent: Agent;
+  onConfigure: () => void;
+  onToggleEnabled: (enabled: boolean) => void;
+  disabled?: boolean;
+}) {
+  const skillsCount = agent.skills?.length ?? 0;
+  const promptCount = countPromptOverrides(agent);
+  const techParts = [
+    `OpenClaw: ${agent.openclaw_agent_id ?? 'main'}`,
+    `Skills: ${skillsCount}`,
+    `Prompts: ${promptCount}`,
+  ];
+
+  const usageParts: string[] = [];
+  usageParts.push(`Used in ${agent.assigned_task_count ?? 0} tasks`);
+  if ((agent.run_count_7d ?? 0) > 0) usageParts.push(`Runs 7d: ${agent.run_count_7d}`);
+  if (agent.last_used_at) usageParts.push(`Last used: ${formatRelative(agent.last_used_at)}`);
+
+  return (
+    <div
+      className={[
+        'rounded-xl border border-border/70 bg-surface-1/70 p-4 shadow-panel backdrop-blur',
+        agent.enabled ? '' : 'opacity-75',
+      ].join(' ')}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">
+            <span className="mr-2">{agent.emoji ?? '🤖'}</span>
+            {agent.display_name}
+          </div>
+          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+            {agent.description ?? '—'}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {techParts.map((t) => (
+              <span key={t} className="whitespace-nowrap">
+                {t.startsWith('OpenClaw: ') ? (
+                  <>
+                    OpenClaw:{' '}
+                    <span className="font-mono text-foreground/90">{agent.openclaw_agent_id ?? 'main'}</span>
+                  </>
+                ) : (
+                  t
+                )}
+              </span>
+            ))}
+          </div>
+        </div>
+        <Button size="sm" variant="secondary" onClick={onConfigure}>
+          Configure
+        </Button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+          {agent.category ?? 'general'}
+        </Badge>
+        {(agent.tags ?? []).slice(0, 3).map((t) => (
+          <Badge key={t} variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+            {t}
+          </Badge>
+        ))}
+        {agent.preset_key ? (
+          <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+            Preset
+          </Badge>
+        ) : null}
+        {!agent.enabled ? (
+          <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+            Disabled
+          </Badge>
+        ) : null}
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <div className="text-xs text-muted-foreground">{usageParts.join(' · ')}</div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={agent.enabled}
+            onChange={(e) => onToggleEnabled(e.target.checked)}
+            disabled={disabled}
+          />
+          Enabled
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function AvailableCard({
+  preset,
+  onInstall,
+  installing,
+}: {
+  preset: MarketplaceAgent;
+  onInstall: () => void;
+  installing: boolean;
+}) {
+  const locked = preset.requires_subscription;
+  const badgeLabel = locked ? 'Pro' : 'Free';
+
+  return (
+    <div className="rounded-xl border border-border/70 bg-surface-1/70 p-4 shadow-panel backdrop-blur">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">
+            <span className="mr-2">{preset.emoji ?? '🤖'}</span>
+            {preset.display_name}
+          </div>
+          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{preset.description}</div>
+        </div>
+        <Button size="sm" onClick={onInstall} disabled={locked || installing}>
+          {locked ? 'Locked' : installing ? 'Installing…' : 'Install'}
+        </Button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+          {preset.category ?? 'general'}
+        </Badge>
+        <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+          {badgeLabel}
+        </Badge>
+        {(preset.tags ?? []).slice(0, 3).map((t) => (
+          <Badge key={t} variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
+            {t}
+          </Badge>
+        ))}
+      </div>
+
+      {locked ? (
+        <div className="mt-3 text-xs text-muted-foreground">Subscription required (soon).</div>
+      ) : (
+        <div className="mt-3 text-xs text-muted-foreground">Installs with OpenClaw agent id = “main”.</div>
+      )}
     </div>
   );
 }
