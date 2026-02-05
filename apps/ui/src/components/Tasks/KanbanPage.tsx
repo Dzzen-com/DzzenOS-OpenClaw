@@ -94,7 +94,7 @@ export function KanbanPage({
         actions={
           <Dialog.Root open={createOpen} onOpenChange={setCreateOpen}>
             <Dialog.Trigger asChild>
-              <Button variant="secondary">New board</Button>
+              <Button>Create board</Button>
             </Dialog.Trigger>
             <Dialog.Portal>
               <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
@@ -165,11 +165,20 @@ export function KanbanPage({
                   type="button"
                   onClick={() => setCreateOpen(true)}
                   className={cn(
-                    'flex min-h-[120px] w-full items-center justify-center rounded-xl border border-dashed border-border/70 bg-surface-1/40 text-sm text-muted-foreground transition',
-                    'hover:border-primary/60 hover:text-foreground'
+                    'group flex min-h-[140px] w-full flex-col justify-between rounded-xl border border-dashed border-border/70 bg-surface-1/40 p-4 text-left text-sm text-muted-foreground transition',
+                    'hover:border-primary/60 hover:bg-surface-2/50 hover:text-foreground'
                   )}
                 >
-                  + Create board
+                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80 group-hover:text-foreground">
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 bg-surface-2/70 text-base">
+                      +
+                    </span>
+                    Create board
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    Start a new workflow for a project, team, or domain.
+                  </div>
+                  <div className="mt-auto text-xs text-primary/80 group-hover:text-primary">Open creator</div>
                 </button>
 
                 {sortedBoards.map((board) => {
