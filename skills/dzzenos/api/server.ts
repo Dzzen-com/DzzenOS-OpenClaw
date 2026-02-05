@@ -551,7 +551,21 @@ function main() {
           )
           .run(nextStatus, decidedBy, reason, id);
 
-        sseBroadcast({ type: 'approvals.changed', payload: { approvalId: id, status: nextStatus } });
+        const approvalMeta = rowOrNull<{ task_id: string | null; board_id: string | null }>(
+          db
+            .prepare(
+              `SELECT r.task_id as task_id, r.board_id as board_id
+               FROM approvals a
+               JOIN agent_runs r ON r.id = a.run_id
+               WHERE a.id = ?`
+            )
+            .all(id) as any
+        );
+
+        sseBroadcast({
+          type: 'approvals.changed',
+          payload: { approvalId: id, status: nextStatus, taskId: approvalMeta?.task_id ?? null, boardId: approvalMeta?.board_id ?? null },
+        });
         if (info.changes === 0) {
           return sendJson(res, 409, { error: 'Approval already decided' }, corsHeaders);
         }
@@ -867,7 +881,7 @@ function main() {
             'INSERT INTO approvals(id, run_id, step_id, status, request_title, request_body) VALUES (?, ?, ?, ?, ?, ?)'
           ).run(approvalId, runId, stepId, 'pending', requestTitle, requestBody);
 
-          sseBroadcast({ type: 'approvals.changed', payload: { approvalId, status: 'pending', taskId } });
+          sseBroadcast({ type: 'approvals.changed', payload: { approvalId, status: 'pending', taskId: taskId, boardId: taskRow.board_id } });
 
           db.exec('COMMIT');
 
@@ -1050,7 +1064,10 @@ function main() {
         const info = db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...params);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
 
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id } });
+        const meta = rowOrNull<{ board_id: string }>(
+          db.prepare('SELECT board_id FROM tasks WHERE id = ?').all(id) as any
+        );
+        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id, boardId: meta?.board_id ?? null } });
 
         const task = rowOrNull<any>(
           db.prepare(

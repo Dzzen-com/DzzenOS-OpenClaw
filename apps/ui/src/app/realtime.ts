@@ -28,16 +28,34 @@ export function startRealtime(opts: {
     try {
       const msg = JSON.parse((ev as MessageEvent).data) as DzzenosEvent;
 
-      // Keep it simple for v1: invalidate relevant caches.
+      // Keep it simple for v1, but prefer targeted invalidations.
       if (msg.type === 'tasks.changed') {
-        opts.qc.invalidateQueries({ queryKey: ['tasks'] });
+        const boardId = msg.payload?.boardId as string | null | undefined;
+        if (boardId) opts.qc.invalidateQueries({ queryKey: ['tasks', boardId] });
+        else opts.qc.invalidateQueries({ queryKey: ['tasks'] });
       }
+
       if (msg.type === 'approvals.changed') {
+        const taskId = msg.payload?.taskId as string | null | undefined;
+        // Dashboard
+        opts.qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
+        // Task drawer
+        if (taskId) opts.qc.invalidateQueries({ queryKey: ['approvals', 'task', taskId] });
+        // Fallback
         opts.qc.invalidateQueries({ queryKey: ['approvals'] });
       }
+
       if (msg.type === 'runs.changed') {
+        const taskId = msg.payload?.taskId as string | null | undefined;
+        // Dashboard
+        opts.qc.invalidateQueries({ queryKey: ['runs', 'stuck'] });
+        opts.qc.invalidateQueries({ queryKey: ['runs', 'failed'] });
+        // Task drawer
+        if (taskId) opts.qc.invalidateQueries({ queryKey: ['runs', taskId] });
+        // Fallback
         opts.qc.invalidateQueries({ queryKey: ['runs'] });
       }
+
       if (msg.type === 'automations.changed') {
         opts.qc.invalidateQueries({ queryKey: ['automations'] });
       }
