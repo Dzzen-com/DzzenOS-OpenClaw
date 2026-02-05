@@ -27,6 +27,11 @@
 - Agent library (profiles/packs)
 - Settings (policy/skills)
 
+Глобальный слой:
+- Левое меню + Top bar + **минимальный footer** (API + realtime status + Docs link)
+- Единая типографика и цветовые токены на всех экранах
+- Login page в том же стиле, что и Kanban (темный градиент, карточка входа)
+
 ---
 
 ## 3) Компоненты (референс)

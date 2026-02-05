@@ -19,6 +19,11 @@
 - Agent Library (профили/пакеты)
 - Settings (policy/budgets/integrations)
 
+### Глобальный layout
+- Sidebar + Top bar + **минимальный footer**
+- Footer показывает API и realtime статус, плюс ссылку на Docs
+- Login page стилистически совпадает с Kanban (темная тема, фирменная карточка входа)
+
 ### Внутри Workspace
 - Boards: Founder Ops, Content, Custom…
 - Docs:

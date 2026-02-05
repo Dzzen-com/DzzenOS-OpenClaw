@@ -17,6 +17,9 @@ HOST_DEFAULT="127.0.0.1"
 GATEWAY_PORT_DEFAULT="18789"
 HOST="${HOST:-$HOST_DEFAULT}"
 GATEWAY_PORT="${GATEWAY_PORT:-$GATEWAY_PORT_DEFAULT}"
+AUTH_TTL_SECONDS="${AUTH_TTL_SECONDS:-604800}"
+AUTH_PASSWORD_POLICY="${AUTH_PASSWORD_POLICY:-strict}"
+AUTH_COOKIE_SAMESITE="${AUTH_COOKIE_SAMESITE:-Strict}"
 
 JSON_MODE=0
 for arg in "$@"; do
@@ -41,6 +44,25 @@ err()  { [ $JSON_MODE -eq 1 ] || echo -e "${RED}✖${RST} $*"; }
 die() { err "$*"; exit 1; }
 
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "$1 is required"; }
+
+check_password_strict() {
+  local p="$1"
+  if [ ${#p} -lt 12 ]; then return 1; fi
+  if ! [[ "$p" =~ [A-Z] ]]; then return 1; fi
+  if ! [[ "$p" =~ [a-z] ]]; then return 1; fi
+  if ! [[ "$p" =~ [0-9] ]]; then return 1; fi
+  if ! [[ "$p" =~ [^A-Za-z0-9] ]]; then return 1; fi
+  return 0
+}
+
+warn_if_gateway_public() {
+  if [ ! -f "$OPENCLAW_CONFIG_PATH" ]; then return 0; fi
+  local bind
+  bind=$(node -e 'try{const j=require(process.env.OPENCLAW_CONFIG_PATH);const v=j?.gateway?.bind??j?.gateway?.host??j?.gateway?.listen??"";process.stdout.write(String(v||""));}catch(e){process.exit(0)}')
+  if [ -n "$bind" ] && [ "$bind" != "127.0.0.1" ] && [ "$bind" != "localhost" ] && [ "$bind" != "::1" ]; then
+    warn "OpenClaw Gateway bind appears non-loopback ($bind). Recommended: loopback only."
+  fi
+}
 
 step "DzzenOS-OpenClaw installer"
 info "repo:   $REPO_URL"
@@ -83,14 +105,25 @@ if [ $JSON_MODE -eq 0 ]; then
   echo "  2) server/VPS (optionally with domain)"
   read -r -p "> " WHERE
   if [ "${WHERE:-}" = "2" ]; then
+    warn_if_gateway_public
     read -r -p "Set up secure domain access (Caddy + TLS + login page)? [y/N] " ANS
     if [[ "${ANS:-}" =~ ^[Yy]$ ]]; then
       SETUP_DOMAIN=1
       read -r -p "Domain (e.g. dzzenos.example.com): " DOMAIN
       read -r -p "Email for Let's Encrypt (optional): " DOMAIN_EMAIL
       read -r -p "Login username: " AUTH_USERNAME
-      read -r -s -p "Login password: " AUTH_PASSWORD
-      echo
+      while true; do
+        read -r -s -p "Login password (min 12 chars, upper/lower/number/symbol): " AUTH_PASSWORD
+        echo
+        if [ "$AUTH_PASSWORD_POLICY" = "strict" ]; then
+          if check_password_strict "$AUTH_PASSWORD"; then
+            break
+          fi
+          warn "Password too weak. Try again."
+        else
+          break
+        fi
+      done
 
       echo -e "${BOLD}DNS setup (required)${RST}"
       info "1) Create an A record: ${DOMAIN} -> <your-server-public-ip>"
@@ -112,6 +145,9 @@ fi
 
 if [ $SETUP_DOMAIN -eq 1 ]; then
   export DZZENOS_API_BASE="/dzzenos-api"
+  export VITE_OPENCLAW_PATH="/openclaw"
+else
+  export VITE_OPENCLAW_PATH="/"
 fi
 
 corepack pnpm dzzenos:canvas:publish
@@ -127,6 +163,7 @@ if [ $SETUP_DOMAIN -eq 1 ]; then
 
   DOMAIN="$DOMAIN" EMAIL="$DOMAIN_EMAIL" USERNAME="$AUTH_USERNAME" PASSWORD="$AUTH_PASSWORD" \
     OPENCLAW_CONFIG_PATH="$OPENCLAW_CONFIG_PATH" GATEWAY_PORT="$GATEWAY_PORT" REPO_DIR="$INSTALL_DIR" \
+    AUTH_TTL_SECONDS="$AUTH_TTL_SECONDS" AUTH_PASSWORD_POLICY="$AUTH_PASSWORD_POLICY" AUTH_COOKIE_SAMESITE="$AUTH_COOKIE_SAMESITE" \
     sudo -E bash "$INSTALL_DIR/scripts/setup-domain.sh"
   ok "Domain setup complete"
 
