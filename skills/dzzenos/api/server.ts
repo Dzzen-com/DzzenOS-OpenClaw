@@ -148,11 +148,41 @@ function sendText(res: http.ServerResponse, status: number, text: string, header
   res.end(text);
 }
 
-async function readJson(req: http.IncomingMessage): Promise<any> {
+const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+
+function isJsonContentType(raw: string): boolean {
+  const ct = raw.split(';')[0]?.trim().toLowerCase();
+  if (!ct) return false;
+  if (ct === 'application/json') return true;
+  return ct.startsWith('application/') && ct.endsWith('+json');
+}
+
+async function readBodyText(req: http.IncomingMessage, maxBytes = DEFAULT_MAX_BODY_BYTES): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new HttpError(413, `Request body too large (max ${maxBytes} bytes)`);
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readJson(req: http.IncomingMessage): Promise<any> {
+  const maxBytesRaw = Number(process.env.DZZENOS_MAX_BODY_BYTES ?? '');
+  const maxBytes = Number.isFinite(maxBytesRaw) && maxBytesRaw > 0 ? maxBytesRaw : DEFAULT_MAX_BODY_BYTES;
+
+  const raw = (await readBodyText(req, maxBytes)).trim();
   if (!raw) return {};
+
+  const ct = String(req.headers['content-type'] ?? '');
+  if (!isJsonContentType(ct)) {
+    throw new HttpError(415, 'Expected Content-Type: application/json');
+  }
+
   try {
     return JSON.parse(raw);
   } catch {
@@ -272,6 +302,22 @@ const PROMPT_OVERRIDE_KEYS = new Set(['system', 'plan', 'execute', 'chat', 'repo
 
 function normalizeString(value: any): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new HttpError(400, 'Invalid URL encoding');
+  }
+}
+
+function requireUuid(value: string, label: string): string {
+  const v = String(value ?? '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    throw new HttpError(400, `${label} must be a UUID`);
+  }
+  return v;
 }
 
 function parseStringArrayJson(raw: any): string[] {
@@ -861,34 +907,91 @@ function main() {
     return { runId, outputText, parsed };
   }
 
-  function isSameOrigin(req: http.IncomingMessage): boolean {
-    const origin = req.headers.origin as string | undefined;
-    const referer = req.headers.referer as string | undefined;
-    const host = req.headers.host ?? '';
-    const proto = String(req.headers['x-forwarded-proto'] ?? 'http');
-    const base = `${proto}://${host}`;
-    const normalize = (v: string) => v.replace(/\/$/, '');
+function isSameOrigin(req: http.IncomingMessage): boolean {
+  const origin = req.headers.origin as string | undefined;
+  const referer = req.headers.referer as string | undefined;
+  const host = req.headers.host ?? '';
+  const proto = String(req.headers['x-forwarded-proto'] ?? 'http');
+  const base = `${proto}://${host}`;
+  const normalize = (v: string) => v.replace(/\/$/, '');
 
-    if (origin) {
-      return normalize(origin) === normalize(base);
+  if (origin) {
+    return normalize(origin) === normalize(base);
+  }
+  if (referer) {
+    try {
+      const u = new URL(referer);
+      return normalize(u.origin) === normalize(base);
+    } catch {
+      return false;
     }
-    if (referer) {
-      try {
-        const u = new URL(referer);
-        return normalize(u.origin) === normalize(base);
-      } catch {
-        return false;
-      }
+  }
+  return false;
+}
+
+function isStateChangingMethod(method: string | undefined): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+}
+
+function getEffectiveOrigin(req: http.IncomingMessage): string | null {
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (origin) return origin;
+  const referer = typeof req.headers.referer === 'string' ? req.headers.referer.trim() : '';
+  if (!referer) return null;
+  try {
+    return new URL(referer).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackAddress(addr: string | undefined): boolean {
+  if (!addr) return false;
+  const a = addr.startsWith('::ffff:') ? addr.slice('::ffff:'.length) : addr;
+  if (a === '::1' || a === '::') return true;
+  if (a === '127.0.0.1') return true;
+  return a.startsWith('127.');
+}
+
+function requireAllowedOriginForStateChange(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  corsHeaders: Record<string, string>,
+  allowedOrigins: AllowedOrigins
+): boolean {
+  if (!isStateChangingMethod(req.method)) return true;
+
+  const origin = getEffectiveOrigin(req);
+  if (origin) {
+    if (!isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
+      sendText(res, 403, 'Invalid origin', corsHeaders);
+      return false;
     }
+    return true;
+  }
+
+  // Browsers typically send Sec-Fetch-*; if present but no Origin/Referer, reject.
+  const secFetchSite = req.headers['sec-fetch-site'];
+  if (typeof secFetchSite === 'string' && secFetchSite.trim()) {
+    sendText(res, 403, 'Missing origin', corsHeaders);
     return false;
   }
 
-  const server = http.createServer(async (req, res) => {
-    const origin = (req.headers.origin as string | undefined) ?? '';
-    const corsHeaders: Record<string, string> = {
-      'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-      'access-control-allow-headers': 'content-type',
-    };
+  // Allow originless state changes only from loopback (e.g., CLI tools on the same host).
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    sendText(res, 403, 'Missing origin', corsHeaders);
+    return false;
+  }
+
+  return true;
+}
+
+const server = http.createServer(async (req, res) => {
+  const origin = (req.headers.origin as string | undefined) ?? '';
+  const corsHeaders: Record<string, string> = {
+    'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
+    'access-control-allow-headers': 'content-type',
+  };
     if (origin && isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
       corsHeaders['access-control-allow-origin'] = origin;
       corsHeaders['vary'] = 'Origin';
@@ -900,14 +1003,29 @@ function main() {
       return;
     }
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
-    try {
-      // --- Auth (for domain / reverse-proxy installs) ---
-      // This API can act as a Caddy `forward_auth` target.
-      // If no auth config exists, we keep auth endpoints usable but do not block API calls here.
-      if (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) {
-        if (!auth) {
+  try {
+    if (!requireAllowedOriginForStateChange(req, res, corsHeaders, allowedOrigins)) return;
+    if (auth) {
+      const isAuthExempt =
+        (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) ||
+        url.pathname.startsWith('/auth/');
+      if (!isAuthExempt) {
+        const cookies = parseCookies(req.headers.cookie as string | undefined);
+        const v = cookies[auth.cookie.name];
+        const ok = v ? verifySessionCookie(auth, v) : null;
+        if (!ok) {
+          return sendText(res, 401, 'unauthorized', { ...corsHeaders, 'x-auth-login': '/login' });
+        }
+      }
+    }
+
+    // --- Auth (for domain / reverse-proxy installs) ---
+    // This API can act as a Caddy `forward_auth` target.
+    // If no auth config exists, we keep auth endpoints usable but do not block API calls here.
+    if (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) {
+      if (!auth) {
           return sendText(
             res,
             200,
@@ -2229,13 +2347,13 @@ function main() {
 
       const boardDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
       if (boardDocsGet) {
-        const boardId = decodeURIComponent(boardDocsGet[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardDocsGet[1]), 'boardId');
         return sendJson(res, 200, { content: readTextFile(boardDocPath(boardId)) }, corsHeaders);
       }
 
       const boardDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
       if (boardDocsPut) {
-        const boardId = decodeURIComponent(boardDocsPut[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardDocsPut[1]), 'boardId');
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
         writeTextFile(boardDocPath(boardId), content);
@@ -2245,13 +2363,13 @@ function main() {
 
       const boardChangelogGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/changelog$/) : null;
       if (boardChangelogGet) {
-        const boardId = decodeURIComponent(boardChangelogGet[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardChangelogGet[1]), 'boardId');
         return sendJson(res, 200, { content: readTextFile(boardChangelogPath(boardId)) }, corsHeaders);
       }
 
       const boardSummaryPost = req.method === 'POST' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/summary$/) : null;
       if (boardSummaryPost) {
-        const boardId = decodeURIComponent(boardSummaryPost[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardSummaryPost[1]), 'boardId');
         const body = await readJson(req);
         const title = typeof body?.title === 'string' ? body.title.trim() : 'Untitled';
         const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';

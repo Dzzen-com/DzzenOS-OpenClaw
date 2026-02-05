@@ -92,6 +92,11 @@ export function App() {
     return startRealtime({ apiBase: base, qc });
   }, [qc]);
 
+  const openAgentsPage = () => {
+    setPage('agents');
+    setSelectedTaskId(null);
+  };
+
   return (
     <>
       <AppShell
@@ -181,7 +186,12 @@ export function App() {
         ) : null}
       </AppShell>
 
-      <TaskDrawer task={selectedTask} open={selectedTask != null} onOpenChange={(o) => !o && setSelectedTaskId(null)} />
+      <TaskDrawer
+        task={selectedTask}
+        open={selectedTask != null}
+        onOpenChange={(o) => !o && setSelectedTaskId(null)}
+        onOpenAgents={openAgentsPage}
+      />
     </>
   );
 }
