@@ -52,6 +52,7 @@
 - Stage badge in status strip (glowing dot)
 - Agent heartbeat on card while running
 - Stage icons in activity ticker
+- Agent selector in task drawer with CTA to Agents page if none enabled
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)
