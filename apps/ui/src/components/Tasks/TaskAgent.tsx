@@ -49,6 +49,7 @@ export function TaskAgent({
           : 'muted';
 
   const selectedAgentId = session?.agent_id ?? '';
+  const autoSelected = !selectedAgentId;
   const reasoningLevel = (session?.reasoning_level ?? 'auto') as ReasoningLevel;
 
   return (
@@ -74,6 +75,11 @@ export function TaskAgent({
             <div className="mt-2 text-xs text-muted-foreground">
               Auto selects a default agent based on the task description. You can override before running.
             </div>
+            {autoSelected ? (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-border/70 bg-surface-1/60 px-2 py-1 text-[11px] text-muted-foreground">
+                Auto agent selected
+              </div>
+            ) : null}
             <div className="mt-2 text-xs text-muted-foreground">
               Skills, tools, and prompts are configured in the agent profile.
             </div>
