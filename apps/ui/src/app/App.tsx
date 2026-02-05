@@ -12,6 +12,7 @@ import { KanbanPage } from '../components/Tasks/KanbanPage';
 import { TaskDrawer } from '../components/Tasks/TaskDrawer';
 import { DocsPage } from '../components/Docs/DocsPage';
 import { AgentsPage } from '../components/Agents/AgentsPage';
+import { SkillsPage } from '../components/Skills/SkillsPage';
 
 import type { Task } from '../api/types';
 import { createTask, listBoards, listTasks, patchTask, reorderTasks } from '../api/queries';
@@ -20,7 +21,7 @@ import { startRealtime } from './realtime';
 export function App() {
   const qc = useQueryClient();
 
-  const [page, setPage] = useState<'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents'>('dashboard');
+  const [page, setPage] = useState<'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills'>('dashboard');
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const mobileNav = useMobileNav();
@@ -140,6 +141,10 @@ export function App() {
         ) : page === 'agents' ? (
           <div className="mx-auto w-full max-w-6xl">
             <AgentsPage />
+          </div>
+        ) : page === 'skills' ? (
+          <div className="mx-auto w-full max-w-6xl">
+            <SkillsPage />
           </div>
         ) : page === 'kanban' ? (
           <div className="mx-auto w-full max-w-6xl">

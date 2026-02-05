@@ -1,9 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { Agent, PromptOverrides } from '../../api/types';
-import { createAgent, deleteAgent, duplicateAgent, patchAgent, resetAgent } from '../../api/queries';
+import type { Agent, InstalledSkill, PromptOverrides } from '../../api/types';
+import { createAgent, deleteAgent, duplicateAgent, listSkills, patchAgent, resetAgent } from '../../api/queries';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/Tabs';
@@ -136,6 +136,12 @@ export function AgentDrawer({
   const isCreate = !agent;
   const [tab, setTab] = useState<TabKey>('overview');
 
+  const skillsQ = useQuery({
+    queryKey: ['skills'],
+    queryFn: listSkills,
+    enabled: open,
+  });
+
   const [displayName, setDisplayName] = useState('');
   const [emoji, setEmoji] = useState<string>('');
   const [openclawAgentId, setOpenclawAgentId] = useState('main');
@@ -145,11 +151,33 @@ export function AgentDrawer({
   const [category, setCategory] = useState('general');
   const [tags, setTags] = useState<string[]>([]);
   const [skills, setSkills] = useState<string[]>([]);
+  const [skillSearch, setSkillSearch] = useState('');
   const [prompts, setPrompts] = useState<PromptOverrides>(emptyPromptOverrides());
+
+  const installedSkills: InstalledSkill[] = skillsQ.data ?? [];
+  const installedBySlug = useMemo(() => {
+    const m = new Map<string, InstalledSkill>();
+    for (const s of installedSkills) m.set(s.slug, s);
+    return m;
+  }, [installedSkills]);
+
+  const filteredInstalledSkills = useMemo(() => {
+    const tokens = skillSearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return installedSkills;
+    return installedSkills.filter((s) => {
+      const hay = `${s.display_name ?? ''} ${s.slug} ${s.description ?? ''}`.toLowerCase();
+      return tokens.every((t) => hay.includes(t));
+    });
+  }, [installedSkills, skillSearch]);
+
+  const missingSelectedSkills = useMemo(() => {
+    return (skills ?? []).filter((slug) => !installedBySlug.has(slug));
+  }, [skills, installedBySlug]);
 
   useEffect(() => {
     if (!open) return;
     setTab('overview');
+    setSkillSearch('');
     if (!agent) {
       setDisplayName('');
       setEmoji('');
@@ -389,9 +417,129 @@ export function AgentDrawer({
 
               <TabsContent value="skills">
                 <div className="grid gap-4">
-                  <ChipInput label="Skills" value={skills} onChange={setSkills} placeholder="skill id (string)" />
+                  <div>
+                    <label className="text-xs text-muted-foreground">Selected skills</label>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {(skills ?? []).length === 0 ? (
+                        <div className="text-xs text-muted-foreground">No skills selected.</div>
+                      ) : (
+                        (skills ?? []).map((slug) => {
+                          const installed = installedBySlug.get(slug) ?? null;
+                          const missing = !installed;
+                          return (
+                            <span
+                              key={slug}
+                              className={[
+                                'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs',
+                                missing
+                                  ? 'border-danger/35 bg-danger/15 text-danger'
+                                  : 'border-border/70 bg-surface-2/50 text-foreground',
+                              ].join(' ')}
+                              title={missing ? 'Not installed (missing)' : undefined}
+                            >
+                              <span className="font-mono">{slug}</span>
+                              {missing ? <span className="ml-1">Missing</span> : null}
+                              <button
+                                type="button"
+                                className="rounded-full px-1 text-muted-foreground hover:text-foreground"
+                                onClick={() => setSkills((prev) => (prev ?? []).filter((s) => s !== slug))}
+                                aria-label={`Remove ${slug}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })
+                      )}
+                    </div>
+                    {missingSelectedSkills.length > 0 ? (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        Some selected skills are not installed. Install them in the Skills page or remove them here.
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="rounded-xl border border-border/70 bg-surface-2/40 p-4">
+                    <div className="flex items-end justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                          Installed skills
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Pick from installed skills. Install more in the Skills page.
+                        </div>
+                      </div>
+                      <div className="w-[220px]">
+                        <Input
+                          value={skillSearch}
+                          onChange={(e) => setSkillSearch(e.target.value)}
+                          placeholder="Filter…"
+                        />
+                      </div>
+                    </div>
+
+                    {skillsQ.isError ? (
+                      <div className="mt-3">
+                        <InlineAlert>{String(skillsQ.error)}</InlineAlert>
+                      </div>
+                    ) : null}
+
+                    <div className="mt-3 grid gap-2">
+                      {skillsQ.isLoading ? (
+                        <div className="text-xs text-muted-foreground">Loading skills…</div>
+                      ) : filteredInstalledSkills.length === 0 ? (
+                        <div className="text-xs text-muted-foreground">No installed skills found.</div>
+                      ) : (
+                        filteredInstalledSkills.map((s) => {
+                          const checked = (skills ?? []).includes(s.slug);
+                          const caps = s.capabilities ?? {};
+                          const capsParts: string[] = [];
+                          if (caps.network) capsParts.push('Network');
+                          if (caps.filesystem) capsParts.push('Files');
+                          if (caps.external_write) capsParts.push('Write');
+                          const secretsCount = caps.secrets?.length ?? 0;
+                          if (secretsCount > 0) capsParts.push(`Secrets:${secretsCount}`);
+
+                          return (
+                            <label
+                              key={s.slug}
+                              className="flex items-start justify-between gap-3 rounded-lg border border-border/60 bg-surface-1/40 px-3 py-2 text-sm text-foreground hover:bg-surface-1/60"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={(e) => {
+                                      const next = e.target.checked;
+                                      setSkills((prev) => {
+                                        const cur = prev ?? [];
+                                        return next
+                                          ? uniqStrings([...cur, s.slug])
+                                          : cur.filter((x) => x !== s.slug);
+                                      });
+                                    }}
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="truncate text-sm font-medium">{s.display_name ?? s.slug}</div>
+                                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                                      <span className="font-mono">{s.slug}</span>
+                                      {capsParts.length ? (
+                                        <span className="truncate">{capsParts.join(' · ')}</span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
                   <div className="text-xs text-muted-foreground">
-                    Skills are stored as expected skill ids. Execution integration ships in a later version.
+                    Skills are stored as skill ids in DzzenOS (overlay). Execution integration ships in a later version.
                   </div>
                 </div>
               </TabsContent>

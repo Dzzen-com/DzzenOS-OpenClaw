@@ -7,6 +7,7 @@ import {
   IconFile,
   IconKanban,
   IconLayout,
+  IconSpark,
   IconSettings,
   IconWorkflow,
 } from '../ui/Icons';
@@ -26,8 +27,8 @@ export function Sidebar({
   mobileOpen = false,
   onCloseMobile,
 }: {
-  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents';
-  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents') => void;
+  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills';
+  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills') => void;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
@@ -131,6 +132,16 @@ export function Sidebar({
           icon={<IconBot />}
         >
           Agent Library
+        </NavItem>
+        <NavItem
+          active={selectedPage === 'skills'}
+          onClick={() => {
+            onSelectPage('skills');
+            onCloseMobile?.();
+          }}
+          icon={<IconSpark />}
+        >
+          Skills
         </NavItem>
         <NavItem
           active={selectedPage === 'docs'}

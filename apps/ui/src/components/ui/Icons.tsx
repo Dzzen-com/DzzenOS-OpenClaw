@@ -83,3 +83,19 @@ export function IconExternal({ className, size, ...props }: IconProps) {
     </svg>
   );
 }
+
+export function IconSpark({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <path d="M10 2.5v3.2" strokeLinecap="round" />
+      <path d="M10 14.3v3.2" strokeLinecap="round" />
+      <path d="M2.5 10h3.2" strokeLinecap="round" />
+      <path d="M14.3 10h3.2" strokeLinecap="round" />
+      <path d="M6.2 6.2l2.1 2.1" strokeLinecap="round" />
+      <path d="M11.7 11.7l2.1 2.1" strokeLinecap="round" />
+      <path d="M13.8 6.2l-2.1 2.1" strokeLinecap="round" />
+      <path d="M8.3 11.7l-2.1 2.1" strokeLinecap="round" />
+      <circle cx="10" cy="10" r="2.4" />
+    </svg>
+  );
+}
