@@ -294,7 +294,7 @@ export function AgentDrawer({
           )}
 
           <div className="mt-5">
-            <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)}>
+            <Tabs defaultValue="overview" value={tab} onValueChange={(v) => setTab(v as TabKey)}>
               <TabsList className="w-full flex-wrap justify-start gap-1">
                 <TabsTrigger value="overview" className="text-[11px] sm:text-xs">
                   Overview
