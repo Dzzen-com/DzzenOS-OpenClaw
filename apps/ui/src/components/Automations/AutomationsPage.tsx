@@ -17,6 +17,7 @@ import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 import { Spinner } from '../ui/Spinner';
 import { Skeleton } from '../ui/Skeleton';
+import { PageHeader } from '../Layout/PageHeader';
 
 import type { Automation } from '../../api/types';
 import { createAutomation, getAutomation, listAutomations, runAutomation, updateAutomation } from '../../api/queries';
@@ -139,45 +140,44 @@ function AutomationsPageInner() {
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Automations</h1>
-          <p className="mt-1 text-sm text-muted-foreground">React Flow skeleton (save/load via /automations).</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setSelectedId(null);
-              setName('');
-              setNodes(SAMPLE_NODES);
-              setEdges(SAMPLE_EDGES);
-            }}
-          >
-            New
-          </Button>
-          <Button onClick={async () => createM.mutateAsync()} disabled={createM.isPending}>
-            {createM.isPending ? 'Saving…' : 'Save as new'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => saveM.mutateAsync()}
-            disabled={!selectedId || saveM.isPending}
-            title={selectedId ? undefined : 'Select or create an automation first'}
-          >
-            {saveM.isPending ? 'Saving…' : 'Save'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => runM.mutateAsync()}
-            disabled={!selectedId || runM.isPending}
-            title={selectedId ? undefined : 'Select or create an automation first'}
-          >
-            {runM.isPending ? 'Starting…' : 'Run now'}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Automations"
+        subtitle="React Flow skeleton (save/load via /automations)."
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSelectedId(null);
+                setName('');
+                setNodes(SAMPLE_NODES);
+                setEdges(SAMPLE_EDGES);
+              }}
+            >
+              New
+            </Button>
+            <Button onClick={async () => createM.mutateAsync()} disabled={createM.isPending}>
+              {createM.isPending ? 'Saving…' : 'Save as new'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={async () => saveM.mutateAsync()}
+              disabled={!selectedId || saveM.isPending}
+              title={selectedId ? undefined : 'Select or create an automation first'}
+            >
+              {saveM.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={async () => runM.mutateAsync()}
+              disabled={!selectedId || runM.isPending}
+              title={selectedId ? undefined : 'Select or create an automation first'}
+            >
+              {runM.isPending ? 'Starting…' : 'Run now'}
+            </Button>
+          </>
+        }
+      />
 
       {(listQ.isError || selectedQ.isError || createM.isError || saveM.isError || runM.isError) && (
         <InlineAlert>

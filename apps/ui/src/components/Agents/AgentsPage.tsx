@@ -6,6 +6,7 @@ import { Button } from '../ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { InlineAlert } from '../ui/InlineAlert';
 import { Skeleton } from '../ui/Skeleton';
+import { PageHeader } from '../Layout/PageHeader';
 
 function newAgent(): Agent {
   return {
@@ -34,10 +35,11 @@ export function AgentsPage() {
 
   return (
     <div className="grid gap-4">
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>Agent Library</CardTitle>
-          <div className="flex items-center gap-2">
+      <PageHeader
+        title="Agent Library"
+        subtitle="Manage OpenClaw agent profiles."
+        actions={
+          <>
             <Button
               variant="secondary"
               size="sm"
@@ -48,7 +50,12 @@ export function AgentsPage() {
             <Button size="sm" onClick={() => saveM.mutate()} disabled={saveM.isPending}>
               {saveM.isPending ? 'Saving…' : 'Save changes'}
             </Button>
-          </div>
+          </>
+        }
+      />
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Agents</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           {listQ.isError ? <InlineAlert>{String(listQ.error)}</InlineAlert> : null}

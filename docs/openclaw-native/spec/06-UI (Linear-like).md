@@ -20,6 +20,7 @@
 
 ## 2) Основные экраны
 - Workspace switcher
+- Kanban landing: grid всех досок + создание новой
 - Board (kanban + list view)
 - Task drawer (brief + chat + runs/artifacts)
 - Docs (workspace/board)
@@ -28,7 +29,9 @@
 - Settings (policy/skills)
 
 Глобальный слой:
-- Левое меню + Top bar + **минимальный footer** (API + realtime status + Docs link)
+- Левое меню (sidebar‑first) как основной навигатор
+- Без глобального top bar / footer (контекст задаётся локальными header‑блоками страниц)
+- Мобильный гибрид: нижняя панель + выезжающий sidebar
 - Единая типографика и цветовые токены на всех экранах
 - Login page в том же стиле, что и Kanban (темный градиент, карточка входа)
 

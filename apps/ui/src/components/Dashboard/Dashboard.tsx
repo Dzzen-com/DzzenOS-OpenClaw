@@ -10,6 +10,7 @@ import { Spinner } from '../ui/Spinner';
 import { Button } from '../ui/Button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/Card';
 import { Skeleton } from '../ui/Skeleton';
+import { PageHeader } from '../Layout/PageHeader';
 
 function withinLastHours(iso: string, hours: number) {
   const t = Date.parse(iso);
@@ -100,34 +101,34 @@ export function Dashboard({
 
   return (
     <div className="mx-auto w-full max-w-6xl">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
-          <p className="mt-1 text-sm text-muted-foreground">Stuck runs, recent failures, and pending approvals.</p>
-        </div>
-        <div className="min-w-[220px]">
-          <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Board</label>
-          <select
-            className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
-            value={boardId ?? ''}
-            onChange={(e) => setBoardId(e.target.value)}
-            disabled={!boardsQ.data?.length}
-          >
-            {(boardsQ.data ?? []).length === 0 ? (
-              <option value="">No boards</option>
-            ) : (
-              (boardsQ.data ?? []).map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))
-            )}
-          </select>
-          {boardsQ.isError ? (
-            <div className="mt-2 text-xs text-danger">Failed to load boards.</div>
-          ) : null}
-        </div>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        subtitle="Stuck runs, recent failures, and pending approvals."
+        actions={
+          <div className="min-w-[220px]">
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Board</label>
+            <select
+              className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
+              value={boardId ?? ''}
+              onChange={(e) => setBoardId(e.target.value)}
+              disabled={!boardsQ.data?.length}
+            >
+              {(boardsQ.data ?? []).length === 0 ? (
+                <option value="">No boards</option>
+              ) : (
+                (boardsQ.data ?? []).map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))
+              )}
+            </select>
+            {boardsQ.isError ? (
+              <div className="mt-2 text-xs text-danger">Failed to load boards.</div>
+            ) : null}
+          </div>
+        }
+      />
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Board status" subtitle={boardId ? 'Counts by status' : 'Select a board'}>
