@@ -84,7 +84,6 @@ export function IconExternal({ className, size, ...props }: IconProps) {
   );
 }
 
-<<<<<<< HEAD
 export function IconInfo({ className, size, ...props }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
