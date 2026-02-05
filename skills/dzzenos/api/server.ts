@@ -269,7 +269,6 @@ function isRequestSecure(req: http.IncomingMessage): boolean {
   const xf = String(req.headers['x-forwarded-proto'] ?? '');
   return xf.split(',')[0]?.trim().toLowerCase() === 'https';
 }
-}
 
 function seedIfEmpty(db: DatabaseSync) {
   const row = rowOrNull<{ c: number }>(
@@ -777,7 +776,7 @@ function main() {
 
     const session = ensureTaskSession(task.id, { agentId: opts.agentId ?? null });
     const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
-    const agentOpenClawId = agentRow?.openclaw_agent_id ?? defaultAgentId || null;
+    const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
     const agentDisplayName = agentRow?.display_name ?? 'orchestrator';
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
@@ -2777,7 +2776,7 @@ const server = http.createServer(async (req, res) => {
 
         const session = ensureTaskSession(taskId, agentId);
         const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
-        const agentOpenClawId = agentRow?.openclaw_agent_id ?? defaultAgentId || null;
+        const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
 
         const userMsgId = randomUUID();
         db.prepare('INSERT INTO task_messages(id, task_id, role, content) VALUES (?, ?, ?, ?)').run(

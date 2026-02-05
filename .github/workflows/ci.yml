@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      security: ${{ steps.filter.outputs.security }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            security:
+              - 'skills/dzzenos/api/**'
+              - 'skills/dzzenos/db/migrations/**'
+              - 'scripts/init-auth.mjs'
+              - 'packages/security-tests/**'
+              - 'docs/auth-session-guardrails.md'
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -20,3 +37,18 @@ jobs:
       - run: pnpm -r --if-present lint
       - run: pnpm -r --if-present test
       - run: pnpm -r --if-present build
+
+  security-tests:
+    needs: changes
+    if: needs.changes.outputs.security == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:security

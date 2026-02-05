@@ -109,6 +109,10 @@ When filing bugs, include:
 - reproduction steps
 - relevant DzzenOS logs (redact secrets)
 
+## Security checks
+
+- Auth/session smoke test: `pnpm test:security`
+
 ---
 
 ## Roadmap
