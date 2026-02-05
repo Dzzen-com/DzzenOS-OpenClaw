@@ -1008,6 +1008,19 @@ const server = http.createServer(async (req, res) => {
 
   try {
     if (!requireAllowedOriginForStateChange(req, res, corsHeaders, allowedOrigins)) return;
+    if (auth) {
+      const isAuthExempt =
+        (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) ||
+        url.pathname.startsWith('/auth/');
+      if (!isAuthExempt) {
+        const cookies = parseCookies(req.headers.cookie as string | undefined);
+        const v = cookies[auth.cookie.name];
+        const ok = v ? verifySessionCookie(auth, v) : null;
+        if (!ok) {
+          return sendText(res, 401, 'unauthorized', { ...corsHeaders, 'x-auth-login': '/login' });
+        }
+      }
+    }
 
     // --- Auth (for domain / reverse-proxy installs) ---
     // This API can act as a Caddy `forward_auth` target.
