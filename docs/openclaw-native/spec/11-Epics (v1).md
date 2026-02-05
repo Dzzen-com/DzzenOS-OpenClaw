@@ -30,6 +30,8 @@ Deliverables:
 ## EPIC 3 — Agent Packs & Squads
 **Outcome:** один клик → качественный результат.
 
+Note: v1 execution relies on **task-level sessions** (session-based work inside each card). A dedicated multi-agent roster / @mentions is planned later.
+
 Deliverables:
 - Agent Packs model (SQLite)
 - Content Squad v1
