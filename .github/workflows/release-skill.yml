@@ -9,14 +9,14 @@ jobs:
   bundle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Create dzzenos skill bundle
         run: |
           mkdir -p dist
           cd skills
           zip -r ../dist/dzzenos-skill.zip dzzenos
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dzzenos-skill
           path: dist/dzzenos-skill.zip
