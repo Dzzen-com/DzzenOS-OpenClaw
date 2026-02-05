@@ -63,6 +63,9 @@ export function TaskBoard({
   moveDisabled,
   onReorder,
   onQuickCreate,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
 }: {
   tasks: Task[];
   selectedTaskId: string | null;
@@ -71,6 +74,9 @@ export function TaskBoard({
   moveDisabled?: boolean;
   onReorder?: (status: TaskStatus, orderedIds: string[]) => void;
   onQuickCreate?: (status: TaskStatus, title: string) => void;
+  selectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
 }) {
   const columnIds = useMemo(() => COLUMNS.map((c) => c.status), []);
 
@@ -218,6 +224,9 @@ export function TaskBoard({
               moveDisabled={moveDisabled}
               onQuickCreate={onQuickCreate}
               dragging={isDragging}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onToggleSelect={onToggleSelect}
             />
           );
         })}
@@ -239,6 +248,9 @@ function TaskColumn({
   moveDisabled,
   onQuickCreate,
   dragging,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
 }: {
   col: ColumnMeta;
   ids: string[];
@@ -248,8 +260,11 @@ function TaskColumn({
   moveDisabled?: boolean;
   onQuickCreate?: (status: TaskStatus, title: string) => void;
   dragging?: boolean;
+  selectionMode?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: col.status, disabled: !!moveDisabled });
+  const { setNodeRef, isOver } = useDroppable({ id: col.status, disabled: !!moveDisabled || !!selectionMode });
   const listRef = useRef<HTMLDivElement | null>(null);
   const heightsRef = useRef<Map<string, number>>(new Map());
   const rafRef = useRef<number | null>(null);
@@ -398,10 +413,13 @@ function TaskColumn({
                         key={task.id}
                         task={task}
                         selected={task.id === selectedTaskId}
+                        bulkSelected={!!selectedIds?.has(task.id)}
                         onSelect={onSelectTask}
                         disabled={moveDisabled}
                         onMeasure={setHeight}
                         dataIndex={shouldVirtualize ? range.start + idx : undefined}
+                        selectionMode={selectionMode}
+                        onToggleSelect={onToggleSelect}
                       />
                     ))
                   )}
@@ -454,21 +472,27 @@ function QuickCreate({
 function SortableTaskCard({
   task,
   selected,
+  bulkSelected,
   onSelect,
   disabled,
   onMeasure,
   dataIndex,
+  selectionMode,
+  onToggleSelect,
 }: {
   task: Task;
   selected: boolean;
+  bulkSelected: boolean;
   onSelect: (id: string) => void;
   disabled?: boolean;
   onMeasure?: (id: string, h: number) => void;
   dataIndex?: number;
+  selectionMode?: boolean;
+  onToggleSelect?: (id: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
-    disabled,
+    disabled: disabled || !!selectionMode,
   });
 
   const style = {
@@ -481,14 +505,20 @@ function SortableTaskCard({
       ref={setNodeRef}
       task={task}
       selected={selected}
+      bulkSelected={bulkSelected}
       dragging={isDragging}
       style={style}
       onMeasure={onMeasure}
       data-index={dataIndex}
       onClick={() => {
         if (isDragging) return;
+        if (selectionMode) {
+          onToggleSelect?.(task.id);
+          return;
+        }
         onSelect(task.id);
       }}
+      selectionMode={selectionMode}
       {...attributes}
       {...listeners}
     />
@@ -500,12 +530,14 @@ const TaskCard = React.forwardRef<
   {
     task: Task;
     selected: boolean;
+    bulkSelected?: boolean;
+    selectionMode?: boolean;
     dragging?: boolean;
     style?: React.CSSProperties;
     onClick?: () => void;
     onMeasure?: (id: string, h: number) => void;
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
->(function TaskCard({ task, selected, dragging, style, onClick, onMeasure, ...props }, ref) {
+>(function TaskCard({ task, selected, bulkSelected, selectionMode, dragging, style, onClick, onMeasure, ...props }, ref) {
   const localRef = React.useRef<HTMLButtonElement | null>(null);
   const setRefs = (node: HTMLButtonElement | null) => {
     localRef.current = node;
@@ -547,15 +579,26 @@ const TaskCard = React.forwardRef<
       style={style}
       onClick={onClick}
       className={cn(
-        'cv-auto group rounded-lg border border-border/70 bg-surface-2/40 p-2.5 text-left transition sm:p-3',
-        'cursor-grab touch-none active:cursor-grabbing',
+        'cv-auto group relative rounded-lg border border-border/70 bg-surface-2/40 p-2.5 text-left transition sm:p-3',
+        selectionMode ? 'cursor-default' : 'cursor-grab touch-none active:cursor-grabbing',
         'hover:bg-surface-2/70',
-        selected && 'ring-1 ring-primary/60',
+        (selected || bulkSelected) && 'ring-1 ring-primary/60',
         task.status === 'archived' && 'opacity-70',
         dragging && 'opacity-60',
       )}
       {...props}
     >
+      {selectionMode ? (
+        <div
+          className={cn(
+            'absolute right-2 top-2 h-5 w-5 rounded-md border border-border/70 bg-surface-1/80 text-xs text-foreground',
+            'flex items-center justify-center',
+            bulkSelected ? 'border-primary/60 bg-primary/15 text-primary' : 'text-muted-foreground'
+          )}
+        >
+          {bulkSelected ? '✓' : ''}
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-2">
         <div className="text-[13px] font-medium text-foreground sm:text-sm">{task.title}</div>
         <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] font-semibold text-muted-foreground">

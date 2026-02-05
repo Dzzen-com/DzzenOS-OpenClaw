@@ -43,6 +43,12 @@ Status columns:
 Empty state:
 - If no boards exist, show a primary CTA (“Create your first board”) and keep the flow minimal.
 
+Quick capture:
+- A fast input to capture ideas directly into **Ideas** without opening a modal.
+
+Bulk actions:
+- Multi-select cards for status changes or archive.
+
 ### 2.2 Views (фильтры)
 Важно сделать сохранённые представления:
 - Founder Ops view (Domain=Founder Ops)

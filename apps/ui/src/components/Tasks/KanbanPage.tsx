@@ -1,9 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import type { Board, Task, TaskStatus } from '../../api/types';
-import { createBoard } from '../../api/queries';
+import { createBoard, patchTask } from '../../api/queries';
 import { cn } from '../../lib/cn';
 import { formatUpdatedAt } from './taskTime';
 
@@ -16,6 +16,16 @@ import { EmptyState } from '../ui/EmptyState';
 import { TaskBoard } from './TaskBoard';
 import { TaskBoardSkeleton } from './TaskBoardSkeleton';
 import { NewTask } from './NewTask';
+
+const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
+  { value: 'ideas', label: 'Ideas' },
+  { value: 'todo', label: 'To do' },
+  { value: 'doing', label: 'In progress' },
+  { value: 'review', label: 'Review' },
+  { value: 'release', label: 'Release' },
+  { value: 'done', label: 'Done' },
+  { value: 'archived', label: 'Archived' },
+];
 
 export function KanbanPage({
   boards,
@@ -60,6 +70,13 @@ export function KanbanPage({
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [quickTitle, setQuickTitle] = useState('');
+  const [search, setSearch] = useState('');
+  const [showArchived, setShowArchived] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const quickRef = useRef<HTMLInputElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const createM = useMutation({
     mutationFn: async () => {
@@ -76,6 +93,18 @@ export function KanbanPage({
     },
   });
 
+  const bulkMoveM = useMutation({
+    mutationFn: async (input: { ids: string[]; status: TaskStatus }) => {
+      await Promise.all(input.ids.map((id) => patchTask(id, { status: input.status })));
+      return { ok: true };
+    },
+    onSuccess: async () => {
+      if (selectedBoardId) {
+        await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
+      }
+    },
+  });
+
   const sortedBoards = useMemo(() => {
     return [...boards].sort((a, b) => {
       if (a.position !== b.position) return a.position - b.position;
@@ -85,6 +114,100 @@ export function KanbanPage({
 
   const hasBoards = sortedBoards.length > 0;
   const selectedBoard = sortedBoards.find((b) => b.id === selectedBoardId) ?? null;
+
+  const filteredTasks = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return tasks.filter((t) => {
+      if (!showArchived && t.status === 'archived') return false;
+      if (!q) return true;
+      return t.title.toLowerCase().includes(q) || (t.description ?? '').toLowerCase().includes(q);
+    });
+  }, [tasks, search, showArchived]);
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const visibleIds = useMemo(() => filteredTasks.map((t) => t.id), [filteredTasks]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
+
+  useEffect(() => {
+    if (!selectionMode) {
+      setSelectedIds([]);
+    }
+  }, [selectionMode]);
+
+  useEffect(() => {
+    const visible = new Set(visibleIds);
+    setSelectedIds((prev) => prev.filter((id) => visible.has(id)));
+  }, [visibleIds]);
+
+  useEffect(() => {
+    const isTyping = (el: Element | null) => {
+      if (!el) return false;
+      const tag = el.tagName.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || (el as HTMLElement).isContentEditable;
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (isTyping(document.activeElement)) return;
+      if (e.key.toLowerCase() === 'n') {
+        quickRef.current?.focus();
+        e.preventDefault();
+      }
+      if ((e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) || e.key === '/') {
+        searchRef.current?.focus();
+        e.preventDefault();
+      }
+      if (e.key === 'Escape' && selectionMode) {
+        setSelectionMode(false);
+        setSelectedIds([]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectionMode]);
+
+  useEffect(() => {
+    const key = `dzzenos.kanban.scroll.${selectedBoardId ?? 'none'}`;
+    const saved = sessionStorage.getItem(key);
+    if (saved) {
+      const top = Number(saved);
+      if (Number.isFinite(top)) window.scrollTo({ top, behavior: 'auto' });
+    }
+    let raf: number | null = null;
+    const onScroll = () => {
+      if (raf != null) return;
+      raf = window.requestAnimationFrame(() => {
+        sessionStorage.setItem(key, String(window.scrollY));
+        raf = null;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (raf != null) window.cancelAnimationFrame(raf);
+    };
+  }, [selectedBoardId]);
+
+  const handleQuickAdd = async () => {
+    const trimmed = quickTitle.trim();
+    if (!trimmed) return;
+    if (!selectedBoardId) {
+      setCreateOpen(true);
+      return;
+    }
+    await onCreateTask(trimmed);
+    setQuickTitle('');
+  };
+
+  const toggleSelection = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAll = () => {
+    if (allVisibleSelected) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(visibleIds);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -134,6 +257,29 @@ export function KanbanPage({
           </Dialog.Root>
         }
       />
+
+      <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="flex-1">
+            <Input
+              ref={quickRef}
+              value={quickTitle}
+              onChange={(e) => setQuickTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleQuickAdd();
+                }
+              }}
+              placeholder="Capture a quick idea… (Press N)"
+            />
+          </div>
+          <Button onClick={handleQuickAdd} disabled={!quickTitle.trim()}>
+            Add idea
+          </Button>
+        </div>
+        <div className="mt-2 text-xs text-muted-foreground">Fast capture goes to Ideas for the selected board.</div>
+      </div>
 
       <div className="flex flex-col gap-3">
         <div>
@@ -225,13 +371,87 @@ export function KanbanPage({
           </div>
           <div className="w-full sm:max-w-md">
             {selectedBoardId ? (
-              <NewTask onCreate={onCreateTask} />
+              <div className="flex flex-col gap-2">
+                <NewTask onCreate={onCreateTask} />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setSelectionMode((prev) => !prev)}
+                  >
+                    {selectionMode ? 'Done selecting' : 'Select'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={toggleSelectAll}
+                    disabled={!filteredTasks.length}
+                  >
+                    {allVisibleSelected ? 'Clear selection' : 'Select all visible'}
+                  </Button>
+                </div>
+              </div>
             ) : (
               <div className="rounded-md border border-border/70 bg-surface-1/50 px-3 py-2 text-xs text-muted-foreground">
                 Select a board to create tasks.
               </div>
             )}
           </div>
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="flex-1">
+              <Input
+                ref={searchRef}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search tasks… (Ctrl+K or /)"
+              />
+            </div>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+              />
+              Show archived
+            </label>
+          </div>
+          {selectionMode ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{selectedIds.length} selected</span>
+              <select
+                className="h-8 rounded-md border border-input/70 bg-surface-1/70 px-2 text-xs text-foreground"
+                value=""
+                onChange={(e) => {
+                  const next = e.target.value as TaskStatus;
+                  if (!next || selectedIds.length === 0) return;
+                  bulkMoveM.mutate({ ids: selectedIds, status: next });
+                  setSelectedIds([]);
+                }}
+              >
+                <option value="">Move to…</option>
+                {STATUS_OPTIONS.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  if (!selectedIds.length) return;
+                  bulkMoveM.mutate({ ids: selectedIds, status: 'archived' });
+                  setSelectedIds([]);
+                }}
+                disabled={selectedIds.length === 0}
+              >
+                Archive
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         {createTaskError ? <InlineAlert>{String(createTaskError)}</InlineAlert> : null}
@@ -245,17 +465,20 @@ export function KanbanPage({
           <TaskBoardSkeleton />
         ) : tasksError ? (
           <InlineAlert>{String(tasksError)}</InlineAlert>
-        ) : tasks.length === 0 ? (
+        ) : filteredTasks.length === 0 ? (
           <EmptyState title="No tasks yet" subtitle="Create one with the input above." />
         ) : (
           <TaskBoard
-            tasks={tasks}
+            tasks={filteredTasks}
             selectedTaskId={selectedTaskId}
             onSelectTask={onSelectTask}
             onMoveTask={onMoveTask}
             moveDisabled={moveDisabled}
             onReorder={onReorder}
             onQuickCreate={onQuickCreate}
+            selectionMode={selectionMode}
+            selectedIds={selectedSet}
+            onToggleSelect={toggleSelection}
           />
         )}
       </div>
