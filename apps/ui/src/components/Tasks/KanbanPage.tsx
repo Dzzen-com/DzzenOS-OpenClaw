@@ -84,6 +84,7 @@ export function KanbanPage({
   }, [boards]);
 
   const hasBoards = sortedBoards.length > 0;
+  const selectedBoard = sortedBoards.find((b) => b.id === selectedBoardId) ?? null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -134,59 +135,83 @@ export function KanbanPage({
         }
       />
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {boardsLoading ? (
-          Array.from({ length: 6 }).map((_, idx) => <Skeleton key={idx} className="h-[120px] w-full" />)
-        ) : boardsError ? (
-          <div className="sm:col-span-2 lg:col-span-3">
-            <InlineAlert>{String(boardsError)}</InlineAlert>
+      <div className="flex flex-col gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Boards</div>
+          <div className="mt-1 text-sm text-muted-foreground">Pick a board or create a new workspace for tasks.</div>
+        </div>
+
+        {!boardsLoading && !boardsError && !hasBoards ? (
+          <div className="rounded-2xl border border-dashed border-border/70 bg-surface-1/60 p-6 text-sm text-muted-foreground shadow-panel">
+            <div className="text-base font-semibold text-foreground">Create your first board</div>
+            <div className="mt-2 max-w-lg text-sm text-muted-foreground">
+              Boards keep tasks grouped by workflow (product, content, ops). You can edit the name and description later.
+            </div>
+            <div className="mt-4">
+              <Button onClick={() => setCreateOpen(true)}>Create board</Button>
+            </div>
           </div>
         ) : (
-          <>
-            {sortedBoards.map((board) => {
-              const active = board.id === selectedBoardId;
-              return (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {boardsLoading ? (
+              Array.from({ length: 6 }).map((_, idx) => <Skeleton key={idx} className="h-[120px] w-full" />)
+            ) : boardsError ? (
+              <div className="sm:col-span-2 lg:col-span-3">
+                <InlineAlert>{String(boardsError)}</InlineAlert>
+              </div>
+            ) : (
+              <>
                 <button
-                  key={board.id}
                   type="button"
-                  onClick={() => onSelectBoard(board.id)}
+                  onClick={() => setCreateOpen(true)}
                   className={cn(
-                    'group flex w-full flex-col gap-2 rounded-xl border border-border/70 bg-surface-1/70 p-4 text-left shadow-panel transition',
-                    'hover:-translate-y-0.5 hover:bg-surface-2/70',
-                    active && 'border-primary/60 bg-surface-2/80 ring-1 ring-primary/40'
+                    'flex min-h-[120px] w-full items-center justify-center rounded-xl border border-dashed border-border/70 bg-surface-1/40 text-sm text-muted-foreground transition',
+                    'hover:border-primary/60 hover:text-foreground'
                   )}
                 >
-                  <div className="text-sm font-semibold tracking-tight text-foreground">{board.name}</div>
-                  <div className="max-h-10 overflow-hidden text-xs text-muted-foreground">
-                    {board.description || 'No description yet.'}
-                  </div>
-                  <div className="mt-auto text-[11px] text-muted-foreground">
-                    Updated {formatUpdatedAt(board.updated_at)}
-                  </div>
+                  + Create board
                 </button>
-              );
-            })}
 
-            <button
-              type="button"
-              onClick={() => setCreateOpen(true)}
-              className={cn(
-                'flex min-h-[120px] w-full items-center justify-center rounded-xl border border-dashed border-border/70 bg-surface-1/40 text-sm text-muted-foreground transition',
-                'hover:border-primary/60 hover:text-foreground'
-              )}
-            >
-              + Create board
-            </button>
-          </>
+                {sortedBoards.map((board) => {
+                  const active = board.id === selectedBoardId;
+                  return (
+                    <button
+                      key={board.id}
+                      type="button"
+                      onClick={() => onSelectBoard(board.id)}
+                      className={cn(
+                        'group flex w-full flex-col gap-2 rounded-xl border border-border/70 bg-surface-1/70 p-4 text-left shadow-panel transition',
+                        'hover:-translate-y-0.5 hover:bg-surface-2/70',
+                        active && 'border-primary/60 bg-surface-2/80 ring-1 ring-primary/40'
+                      )}
+                    >
+                      <div className="text-sm font-semibold tracking-tight text-foreground">{board.name}</div>
+                      <div className="max-h-10 overflow-hidden text-xs text-muted-foreground">
+                        {board.description || 'No description yet.'}
+                      </div>
+                      <div className="mt-auto text-[11px] text-muted-foreground">
+                        Updated {formatUpdatedAt(board.updated_at)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </>
+            )}
+          </div>
         )}
       </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h2 className="text-base font-semibold tracking-tight">Board tasks</h2>
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected board</div>
+            <h2 className="mt-1 text-base font-semibold tracking-tight">
+              {selectedBoard ? selectedBoard.name : 'No board selected'}
+            </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {selectedBoardId ? 'Move cards to advance the work.' : 'Select a board to see tasks.'}
+              {selectedBoard
+                ? selectedBoard.description || 'Move cards to advance the work.'
+                : 'Select a board above to view tasks.'}
             </p>
           </div>
           <div className="w-full sm:max-w-md">

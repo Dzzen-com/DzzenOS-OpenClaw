@@ -115,7 +115,7 @@ export function TaskDrawer({
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
         <Dialog.Content
-          className="fixed right-0 top-0 z-[60] h-dvh w-full max-w-xl border-l border-border/70 bg-surface-1/85 p-4 shadow-popover backdrop-blur outline-none sm:p-6"
+          className="fixed right-0 top-0 z-[60] h-dvh w-full max-w-xl border-0 bg-surface-1/85 p-4 shadow-popover backdrop-blur outline-none sm:border-l sm:border-border/70 sm:p-6"
           aria-describedby={undefined}
           onTouchStart={(e) => {
             if (e.touches.length !== 1) return;

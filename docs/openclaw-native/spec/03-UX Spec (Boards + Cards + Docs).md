@@ -40,6 +40,9 @@
 Status columns:
 - Ideas / To do / In progress / Review / Release / Done / Archived
 
+Empty state:
+- If no boards exist, show a primary CTA (“Create your first board”) and keep the flow minimal.
+
 ### 2.2 Views (фильтры)
 Важно сделать сохранённые представления:
 - Founder Ops view (Domain=Founder Ops)
