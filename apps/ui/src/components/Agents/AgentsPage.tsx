@@ -172,50 +172,73 @@ export function AgentsPage() {
   const showClear = search.trim().length > 0 || category !== 'all';
 
   const headerActions = (
-    <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
-      <div className="w-full sm:w-[260px]">
-        <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Search ( / )</label>
-        <Input
-          ref={searchRef}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search agents…"
-        />
+    <div className="w-full sm:w-auto">
+      <div className="rounded-xl border border-border/70 bg-gradient-to-b from-surface-2/70 to-surface-1/70 p-2 shadow-panel backdrop-blur">
+        <div className="flex w-full flex-col gap-2 lg:w-[720px] lg:flex-row lg:items-end">
+          <div className="min-w-0 flex-1">
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Search agents</label>
+            <div className="relative">
+              <svg
+                viewBox="0 0 20 20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+                aria-hidden="true"
+              >
+                <circle cx="9" cy="9" r="6" />
+                <path d="M13.5 13.5L17 17" strokeLinecap="round" />
+              </svg>
+              <Input
+                ref={searchRef}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Name, description, tags, OpenClaw id, skills..."
+                className="bg-background/35 pl-9 pr-12"
+              />
+              <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 bg-surface-2/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                /
+              </span>
+            </div>
+          </div>
+          <div className="w-full lg:w-[180px]">
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Category</label>
+            <select
+              className="h-9 w-full rounded-md border border-input/70 bg-background/35 px-3 text-sm text-foreground"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              <option value="all">All</option>
+              {categories.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+          {showClear ? (
+            <Button
+              variant="ghost"
+              className="lg:self-end"
+              onClick={() => {
+                setSearch('');
+                setCategory('all');
+              }}
+            >
+              Clear
+            </Button>
+          ) : null}
+          <Button
+            className="lg:self-end"
+            onClick={() => {
+              setDrawerAgent(null);
+              setDrawerOpen(true);
+            }}
+          >
+            New agent
+          </Button>
+        </div>
       </div>
-      <div className="w-full sm:w-[180px]">
-        <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Category</label>
-        <select
-          className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
-          value={category}
-          onChange={(e) => setCategory(e.target.value)}
-        >
-          <option value="all">All</option>
-          {categories.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </div>
-      {showClear ? (
-        <Button
-          variant="ghost"
-          onClick={() => {
-            setSearch('');
-            setCategory('all');
-          }}
-        >
-          Clear
-        </Button>
-      ) : null}
-      <Button
-        onClick={() => {
-          setDrawerAgent(null);
-          setDrawerOpen(true);
-        }}
-      >
-        New agent
-      </Button>
     </div>
   );
 
