@@ -121,6 +121,10 @@ export function TaskDrawer({
   const runStatus = activeRun?.status ?? task?.run_status ?? null;
   const runStartedAt = activeRun?.started_at ?? task?.run_started_at ?? null;
   const elapsed = runStatus === 'running' ? formatElapsed(runStartedAt) : null;
+  const recentActivity = useMemo(() => {
+    const steps = activeRun?.steps ?? [];
+    return steps.slice(-3).reverse();
+  }, [activeRun?.steps]);
 
   return (
     <Dialog.Root
@@ -227,6 +231,9 @@ export function TaskDrawer({
                   </div>
                   {elapsed ? <span className="text-muted-foreground">• {elapsed}</span> : null}
                   {activeStageLabel ? <span className="text-muted-foreground">• {activeStageLabel}</span> : null}
+                  {Number.isFinite(activeRun?.total_tokens) ? (
+                    <span className="text-muted-foreground">• {activeRun?.total_tokens} tokens</span>
+                  ) : null}
                 </div>
 
                 <div className="mt-3 grid grid-cols-3 gap-1">
@@ -254,6 +261,24 @@ export function TaskDrawer({
                   <span>Plan</span>
                   <span className="text-center">Execute</span>
                   <span className="text-right">Report</span>
+                </div>
+
+                <div className="mt-3 rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2">
+                  <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Latest activity
+                  </div>
+                  {recentActivity.length ? (
+                    <div className="mt-2 grid gap-1 text-xs text-foreground">
+                      {recentActivity.map((step) => (
+                        <div key={step.id} className="flex items-center justify-between gap-3">
+                          <span className="truncate">{stageLabel(step.kind) ?? step.kind}</span>
+                          <span className="text-muted-foreground">{step.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-2 text-xs text-muted-foreground">No activity yet.</div>
+                  )}
                 </div>
               </CardContent>
             </Card>

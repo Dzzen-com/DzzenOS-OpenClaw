@@ -47,6 +47,7 @@
 - Agent status strip (running/idle + stage + mini bar)
 - Reasoning selector (auto/off/low/medium/high)
 - Stop run control (soft cancel)
+- Minimal activity ticker (latest steps)
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)

@@ -79,6 +79,7 @@ Bulk actions:
 - Agent status strip: running/idle + stage (Plan/Execute/Report) + elapsed time
 - Reasoning control per task (auto/off/low/medium/high) with info tooltip
 - Stop run button (soft cancel) for active sessions
+- Minimal activity ticker (last 2–3 steps) inside the task drawer
 
 ---
 
