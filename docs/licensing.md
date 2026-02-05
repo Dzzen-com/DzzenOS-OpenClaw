@@ -15,4 +15,4 @@ The Additional Use Grant does **not** permit:
 ## Commercial license
 If your use does not qualify under the Additional Use Grant, you must obtain a commercial license.
 
-Contact: TBD
+Contact: team@dzzen.com
