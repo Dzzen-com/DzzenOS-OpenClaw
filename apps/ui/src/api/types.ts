@@ -96,6 +96,39 @@ export type MarketplaceAgent = {
   installed_agent_id: string | null;
 };
 
+export type SkillCapabilities = {
+  network?: boolean;
+  filesystem?: boolean;
+  external_write?: boolean;
+  secrets?: string[];
+};
+
+export type InstalledSkill = {
+  slug: string;
+  display_name: string | null;
+  description: string | null;
+  tier: 'official' | 'verified' | 'community';
+  enabled: boolean;
+  source: 'manual' | 'marketplace';
+  preset_key: string | null;
+  sort_order: number;
+  capabilities: SkillCapabilities;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketplaceSkill = {
+  preset_key: string;
+  slug: string;
+  display_name: string;
+  description: string;
+  tier: 'official' | 'verified' | 'community';
+  capabilities: SkillCapabilities;
+  requires_subscription: boolean;
+  sort_order: number;
+  installed: boolean;
+};
+
 export type RunStepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
 
 export type RunStep = {

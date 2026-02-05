@@ -208,3 +208,12 @@ DzzenOS лишь хранит **overlays** (skills/prompts/metadata) для бу
   - `DELETE /agents/:id` (только custom; presets нельзя удалить)
 
 Важно: `openclaw_agent_id` **не уникален** — несколько DzzenOS profiles могут ссылаться на один OpenClaw agent (например `main`).
+
+### 9.7 Skills page + связь с Agent profiles (v1)
+В v1 мы делаем отдельную страницу **Skills** по тому же паттерну (Installed / Available).
+
+- `Agent.skills_json` хранит **список slug** установленных skills (как overlay).
+- В `AgentDrawer` skills выбираются **из Installed skills** (picker), чтобы не вводить slug руками.
+- Если skill удалён (uninstall), он не удаляется автоматически из `Agent.skills_json` — UI показывает такой skill как **Missing** (данные не ломаем).
+
+Future: в Agent Packs / Squads будет логично задавать skills **по ролям** (sub-agents) и/или отдельный allowlist на orchestration graph.

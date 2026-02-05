@@ -68,3 +68,8 @@ DzzenOS не обязан “встраивать” чужие skills.
 
 Отдельно можно сделать:
 - “skill registry” внутри DzzenOS, где видно какие skills установлены и какие capabilities дают.
+
+### v1 (implemented UI pattern)
+В MVP мы используем простой встроенный marketplace:
+- страница **Skills** показывает `Installed` (SQLite) и `Available` (presets в коде) с кнопкой `Install`
+- выбор skills для агента делается в `AgentDrawer` из installed списка (picker)

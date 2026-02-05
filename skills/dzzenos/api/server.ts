@@ -42,6 +42,11 @@ import {
   verifySessionCookie,
 } from './auth.ts';
 import { MARKETPLACE_AGENTS, getMarketplaceAgentPreset, type PromptOverrides } from './marketplace/agents.ts';
+import {
+  MARKETPLACE_SKILLS,
+  getMarketplaceSkillPreset,
+  type SkillCapabilities,
+} from './marketplace/skills.ts';
 
 type Options = {
   port: number;
@@ -311,6 +316,58 @@ function jsonStringifyPromptOverrides(value: PromptOverrides): string {
     if (typeof v === 'string' && v.trim()) out[k] = v;
   }
   return JSON.stringify(out);
+}
+
+function parseCapabilitiesJson(raw: any): SkillCapabilities {
+  const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
+
+  const fromObject = (obj: any): SkillCapabilities => {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+    const secrets = Array.isArray(obj.secrets) ? obj.secrets.map((s: any) => normalize(s)).filter(Boolean) : [];
+    return {
+      network: obj.network === true ? true : undefined,
+      filesystem: obj.filesystem === true ? true : undefined,
+      external_write: obj.external_write === true ? true : undefined,
+      secrets: secrets.length ? secrets : undefined,
+    };
+  };
+
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return fromObject(raw);
+  if (typeof raw !== 'string') return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    return fromObject(JSON.parse(trimmed));
+  } catch {
+    return {};
+  }
+}
+
+function jsonStringifyCapabilities(value: SkillCapabilities): string {
+  const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
+  const out: any = {};
+  if (value.network) out.network = true;
+  if (value.filesystem) out.filesystem = true;
+  if (value.external_write) out.external_write = true;
+  const secrets = Array.isArray(value.secrets) ? value.secrets.map((s) => normalize(s)).filter(Boolean) : [];
+  if (secrets.length) out.secrets = secrets;
+  return JSON.stringify(out);
+}
+
+function skillRowToDto(r: any) {
+  return {
+    slug: String(r.slug),
+    display_name: r.display_name ?? null,
+    description: r.description ?? null,
+    tier: String(r.tier ?? 'community'),
+    enabled: Boolean(r.enabled),
+    source: String(r.source ?? 'manual'),
+    preset_key: r.preset_key ?? null,
+    sort_order: Number(r.sort_order ?? 0),
+    capabilities: parseCapabilitiesJson(r.capabilities_json),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+  };
 }
 
 function agentRowToDto(r: any) {
@@ -1351,6 +1408,238 @@ function main() {
 
         sseBroadcast({ type: 'runs.changed', payload: { runId, automationId: id } });
         return sendJson(res, 201, { runId }, corsHeaders);
+      }
+
+      // --- Skills (installed) ---
+      if (req.method === 'GET' && url.pathname === '/skills') {
+        const rows = db
+          .prepare(
+            `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+               FROM installed_skills
+              ORDER BY enabled DESC, sort_order ASC, COALESCE(display_name, slug) ASC, slug ASC`
+          )
+          .all() as any[];
+        return sendJson(res, 200, rows.map(skillRowToDto), corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/skills') {
+        const body = await readJson(req);
+        const slug = normalizeString(body?.slug);
+        if (!slug) return sendJson(res, 400, { error: 'slug is required' }, corsHeaders);
+
+        const existing = rowOrNull<{ slug: string }>(
+          db.prepare('SELECT slug FROM installed_skills WHERE slug = ? LIMIT 1').all(slug) as any
+        );
+        if (existing) return sendJson(res, 409, { error: 'Skill already installed' }, corsHeaders);
+
+        const displayName = normalizeString(body?.display_name ?? body?.displayName) || null;
+        const description = typeof body?.description === 'string' ? body.description : null;
+        const tier = normalizeString(body?.tier) || 'community';
+        const enabled = body?.enabled === false ? 0 : 1;
+        const capabilities = parseCapabilitiesJson(body?.capabilities ?? body?.capabilities_json);
+
+        db.prepare(
+          `INSERT INTO installed_skills(
+            slug, display_name, description, tier, enabled, source, preset_key, preset_defaults_json, sort_order, capabilities_json
+          ) VALUES (?, ?, ?, ?, ?, 'manual', NULL, NULL, 0, ?)`
+        ).run(slug, displayName, description, tier, enabled, jsonStringifyCapabilities(capabilities));
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+                 FROM installed_skills
+                WHERE slug = ?`
+            )
+            .all(slug) as any
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 201, row ? skillRowToDto(row) : { slug }, corsHeaders);
+      }
+
+      const skillPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/skills\/([^/]+)$/) : null;
+      if (skillPatchMatch) {
+        const slug = decodeURIComponent(skillPatchMatch[1]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.display_name !== undefined || body?.displayName !== undefined) {
+          const displayName = normalizeString(body?.display_name ?? body?.displayName) || null;
+          updates.push('display_name = ?');
+          params.push(displayName);
+        }
+
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+
+        if (body?.tier !== undefined) {
+          const tier = normalizeString(body.tier) || 'community';
+          updates.push('tier = ?');
+          params.push(tier);
+        }
+
+        if (body?.enabled !== undefined) {
+          updates.push('enabled = ?');
+          params.push(body.enabled === false ? 0 : 1);
+        }
+
+        if (body?.capabilities !== undefined || body?.capabilities_json !== undefined) {
+          const capabilities = parseCapabilitiesJson(body?.capabilities ?? body?.capabilities_json);
+          updates.push('capabilities_json = ?');
+          params.push(jsonStringifyCapabilities(capabilities));
+        }
+
+        if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
+
+        params.push(slug);
+        const info = db.prepare(`UPDATE installed_skills SET ${updates.join(', ')} WHERE slug = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Skill not found' }, corsHeaders);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+                 FROM installed_skills
+                WHERE slug = ?`
+            )
+            .all(slug) as any
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 200, row ? skillRowToDto(row) : { slug }, corsHeaders);
+      }
+
+      const skillResetMatch = req.method === 'POST' ? url.pathname.match(/^\/skills\/([^/]+)\/reset$/) : null;
+      if (skillResetMatch) {
+        const slug = decodeURIComponent(skillResetMatch[1]);
+        const row = rowOrNull<{ preset_key: string | null; preset_defaults_json: string | null }>(
+          db.prepare('SELECT preset_key, preset_defaults_json FROM installed_skills WHERE slug = ?').all(slug) as any
+        );
+        if (!row) return sendJson(res, 404, { error: 'Skill not found' }, corsHeaders);
+        if (!row.preset_key || !row.preset_defaults_json) {
+          return sendJson(res, 400, { error: 'Reset is only available for installed presets' }, corsHeaders);
+        }
+
+        const defaults = (() => {
+          try {
+            return JSON.parse(row.preset_defaults_json as string);
+          } catch {
+            return null;
+          }
+        })();
+        if (!defaults || typeof defaults !== 'object') return sendJson(res, 500, { error: 'Invalid preset defaults' }, corsHeaders);
+
+        db.prepare(
+          `UPDATE installed_skills
+             SET display_name = ?,
+                 description = ?,
+                 tier = ?,
+                 enabled = ?,
+                 source = ?,
+                 sort_order = ?,
+                 capabilities_json = ?
+           WHERE slug = ?`
+        ).run(
+          typeof (defaults as any).display_name === 'string' ? (defaults as any).display_name : null,
+          typeof (defaults as any).description === 'string' ? (defaults as any).description : null,
+          normalizeString((defaults as any).tier) || 'official',
+          (defaults as any).enabled === false ? 0 : 1,
+          normalizeString((defaults as any).source) || 'marketplace',
+          Number.isFinite(Number((defaults as any).sort_order)) ? Number((defaults as any).sort_order) : 0,
+          jsonStringifyCapabilities(parseCapabilitiesJson((defaults as any).capabilities)),
+          slug
+        );
+
+        const updated = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT slug, display_name, description, tier, enabled, source, preset_key, sort_order, capabilities_json, created_at, updated_at
+                 FROM installed_skills
+                WHERE slug = ?`
+            )
+            .all(slug) as any
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 200, updated ? skillRowToDto(updated) : { slug }, corsHeaders);
+      }
+
+      const skillDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/skills\/([^/]+)$/) : null;
+      if (skillDeleteMatch) {
+        const slug = decodeURIComponent(skillDeleteMatch[1]);
+        const info = db.prepare('DELETE FROM installed_skills WHERE slug = ?').run(slug);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Skill not found' }, corsHeaders);
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      // --- Skills marketplace ---
+      if (req.method === 'GET' && url.pathname === '/marketplace/skills') {
+        const installedRows = db.prepare('SELECT slug FROM installed_skills').all() as any[];
+        const installed = new Set<string>();
+        for (const r of installedRows) {
+          if (typeof r?.slug === 'string') installed.add(r.slug);
+        }
+
+        const payload = MARKETPLACE_SKILLS.map((p) => ({
+          ...p,
+          installed: installed.has(p.slug),
+        }));
+
+        return sendJson(res, 200, payload, corsHeaders);
+      }
+
+      const marketplaceSkillInstallMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/marketplace\/skills\/([^/]+)\/install$/)
+        : null;
+      if (marketplaceSkillInstallMatch) {
+        const presetKey = decodeURIComponent(marketplaceSkillInstallMatch[1]);
+        const preset = getMarketplaceSkillPreset(presetKey);
+        if (!preset) return sendJson(res, 404, { error: 'Preset not found' }, corsHeaders);
+        if (preset.requires_subscription) {
+          return sendJson(res, 403, { error: 'Subscription required' }, corsHeaders);
+        }
+
+        const existing = rowOrNull<{ slug: string }>(
+          db.prepare('SELECT slug FROM installed_skills WHERE slug = ? LIMIT 1').all(preset.slug) as any
+        );
+        if (existing?.slug) return sendJson(res, 200, { slug: existing.slug }, corsHeaders);
+
+        const presetDefaults = {
+          preset_key: preset.preset_key,
+          slug: preset.slug,
+          display_name: preset.display_name,
+          description: preset.description,
+          tier: preset.tier,
+          enabled: true,
+          source: 'marketplace',
+          sort_order: preset.sort_order,
+          capabilities: preset.capabilities,
+        };
+
+        db.prepare(
+          `INSERT INTO installed_skills(
+            slug, display_name, description, tier, enabled, source, preset_key, preset_defaults_json, sort_order, capabilities_json
+          ) VALUES (?, ?, ?, ?, 1, 'marketplace', ?, ?, ?, ?)`
+        ).run(
+          preset.slug,
+          preset.display_name,
+          preset.description,
+          preset.tier,
+          preset.preset_key,
+          JSON.stringify(presetDefaults),
+          preset.sort_order,
+          jsonStringifyCapabilities(preset.capabilities)
+        );
+
+        sseBroadcast({ type: 'skills.changed', payload: {} });
+        return sendJson(res, 201, { slug: preset.slug }, corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/marketplace/agents') {

@@ -126,13 +126,21 @@ DzzenOS Marketplace в UI показывает эти capabilities.
 - `capabilities` (json)
 - `policy_presets` (json)
 
-### `installed_skills`
-- `slug`
-- `version`
-- `enabled`
-- `installed_at`
-- `config` (json) — non-secret settings
-- `secret_refs` (json)
+### `installed_skills` (v1 implemented)
+Фактическая таблица в DzzenOS (local-first), используется страницей **Skills** (Installed/Available):
+- `slug` (PK) — skill id (это хранится в `agents.skills_json`)
+- `display_name`
+- `description`
+- `tier` (official|verified|community)
+- `enabled` (0/1)
+- `source` (manual|marketplace)
+- `preset_key` (nullable)
+- `preset_defaults_json` (nullable) — база для Reset
+- `sort_order`
+- `capabilities_json` (json) — flags + `secrets[]`
+- `created_at`, `updated_at`
+
+Примечание: модель с `version/config/secret_refs` остаётся актуальной для будущих версий, где DzzenOS будет реально устанавливать/обновлять skills и хранить конфиг/секреты.
 
 ---
 
@@ -144,3 +152,19 @@ DzzenOS Marketplace не обязан сам скачивать архивы.
 - писать конфиг presets в DzzenOS и/или OpenClaw
 
 MVP: достаточно установки/обновления + включение policy.
+
+---
+
+## 8) v1 API endpoints (local)
+Встроенный marketplace (без отдельной страницы marketplace):
+
+Installed:
+- `GET /skills`
+- `POST /skills`
+- `PATCH /skills/:slug`
+- `POST /skills/:slug/reset` (только preset)
+- `DELETE /skills/:slug` (uninstall)
+
+Available presets:
+- `GET /marketplace/skills`
+- `POST /marketplace/skills/:preset_key/install` (Pro locked → 403)

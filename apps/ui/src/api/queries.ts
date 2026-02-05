@@ -5,6 +5,9 @@ import type {
   AgentRunStatus,
   Agent,
   MarketplaceAgent,
+  InstalledSkill,
+  MarketplaceSkill,
+  SkillCapabilities,
   Approval,
   ApprovalStatus,
   Automation,
@@ -294,6 +297,47 @@ export function listMarketplaceAgents(): Promise<MarketplaceAgent[]> {
 
 export function installMarketplaceAgent(presetKey: string): Promise<{ id: string }> {
   return apiFetch(`/marketplace/agents/${encodeURIComponent(presetKey)}/install`, { method: 'POST' });
+}
+
+// --- Skills ---
+export function listSkills(): Promise<InstalledSkill[]> {
+  return apiFetch('/skills');
+}
+
+export function createSkill(input: {
+  slug: string;
+  display_name?: string | null;
+  description?: string | null;
+  tier?: InstalledSkill['tier'];
+  enabled?: boolean;
+  capabilities?: SkillCapabilities;
+}): Promise<InstalledSkill> {
+  return apiFetch('/skills', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export function patchSkill(
+  slug: string,
+  patch: Partial<Pick<InstalledSkill, 'display_name' | 'description' | 'tier' | 'enabled'>> & {
+    capabilities?: SkillCapabilities;
+  }
+): Promise<InstalledSkill> {
+  return apiFetch(`/skills/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export function resetSkill(slug: string): Promise<InstalledSkill> {
+  return apiFetch(`/skills/${encodeURIComponent(slug)}/reset`, { method: 'POST' });
+}
+
+export function deleteSkill(slug: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/skills/${encodeURIComponent(slug)}`, { method: 'DELETE' });
+}
+
+export function listMarketplaceSkills(): Promise<MarketplaceSkill[]> {
+  return apiFetch('/marketplace/skills');
+}
+
+export function installMarketplaceSkill(presetKey: string): Promise<{ slug: string }> {
+  return apiFetch(`/marketplace/skills/${encodeURIComponent(presetKey)}/install`, { method: 'POST' });
 }
 
 // --- Docs ---
