@@ -657,6 +657,61 @@ function main() {
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
+      if (req.method === 'GET' && url.pathname === '/agents') {
+        const rows = db
+          .prepare(
+            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+          )
+          .all() as any[];
+        const payload = rows.map((r) => ({
+          ...r,
+          enabled: Boolean(r.enabled),
+        }));
+        return sendJson(res, 200, payload, corsHeaders);
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/agents') {
+        const body = await readJson(req);
+        if (!Array.isArray(body)) return sendJson(res, 400, { error: 'Expected JSON array' }, corsHeaders);
+
+        const normalize = (s: any) => (typeof s === 'string' ? s.trim() : '');
+
+        db.exec('BEGIN');
+        try {
+          db.prepare('DELETE FROM agents').run();
+          const ins = db.prepare(
+            'INSERT INTO agents(id, display_name, emoji, openclaw_agent_id, enabled, role) VALUES (?, ?, ?, ?, ?, ?)'
+          );
+
+          for (const row of body) {
+            const id = normalize(row?.id) || randomUUID();
+            const displayName = normalize(row?.display_name ?? row?.displayName);
+            const emoji = normalize(row?.emoji) || null;
+            const openclawAgentId = normalize(row?.openclaw_agent_id ?? row?.openclawAgentId);
+            const role = normalize(row?.role) || null;
+            const enabled = row?.enabled === false ? 0 : 1;
+
+            if (!displayName) throw new Error('agent.display_name is required');
+            if (!openclawAgentId) throw new Error('agent.openclaw_agent_id is required');
+
+            ins.run(id, displayName, emoji, openclawAgentId, enabled, role);
+          }
+
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        const rows = db
+          .prepare(
+            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+          )
+          .all() as any[];
+        const payload = rows.map((r) => ({ ...r, enabled: Boolean(r.enabled) }));
+        return sendJson(res, 200, payload, corsHeaders);
+      }
+
       if (req.method === 'GET' && url.pathname === '/boards') {
         const boards = db
           .prepare(
