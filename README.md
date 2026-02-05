@@ -122,7 +122,7 @@ We track work in GitHub Issues + Project Board.
 ## Contributing
 
 - **English-only** issues and PRs.
-- Use the issue templates.
+- Use the [issue templates](.github/ISSUE_TEMPLATE/) for bugs and feature requests; for questions and open-ended ideas, use [Discussions](https://github.com/Dzzen-com/DzzenOS-OpenClaw/discussions).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
