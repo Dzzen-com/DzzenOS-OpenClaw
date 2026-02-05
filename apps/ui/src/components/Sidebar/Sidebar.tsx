@@ -10,6 +10,8 @@ export function Sidebar({
   onSelectPage,
   selectedBoardId,
   onSelectBoard,
+  mobileOpen = false,
+  onCloseMobile,
 }: {
   selectedPage: 'dashboard' | 'tasks' | 'automations' | 'docs' | 'agents';
   onSelectPage: (p: 'dashboard' | 'tasks' | 'automations' | 'docs' | 'agents') => void;
