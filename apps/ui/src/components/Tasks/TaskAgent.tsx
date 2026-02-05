@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge } from '../ui/Badge';
 import { StatusDot } from '../ui/StatusDot';
+import { Tooltip } from '../ui/Tooltip';
+import { IconInfo } from '../ui/Icons';
 import { listAgents, getTaskSession, upsertTaskSession } from '../../api/queries';
-import type { Agent, TaskSession } from '../../api/types';
+import type { Agent, ReasoningLevel, TaskSession } from '../../api/types';
 
 export function TaskAgent({ taskId, lastRunStatus }: { taskId: string; lastRunStatus: string | null }) {
   const qc = useQueryClient();
@@ -16,7 +18,8 @@ export function TaskAgent({ taskId, lastRunStatus }: { taskId: string; lastRunSt
   });
 
   const upsertM = useMutation({
-    mutationFn: async (agentId: string | null) => upsertTaskSession(taskId, { agentId }),
+    mutationFn: async (input: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null }) =>
+      upsertTaskSession(taskId, input),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['task-session', taskId] });
     },
@@ -35,6 +38,7 @@ export function TaskAgent({ taskId, lastRunStatus }: { taskId: string; lastRunSt
           : 'muted';
 
   const selectedAgentId = session?.agent_id ?? '';
+  const reasoningLevel = (session?.reasoning_level ?? 'auto') as ReasoningLevel;
 
   return (
     <div className="rounded-xl border border-border/70 bg-surface-2/40 p-4">
@@ -45,7 +49,7 @@ export function TaskAgent({ taskId, lastRunStatus }: { taskId: string; lastRunSt
           <select
             className="mt-1 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
             value={selectedAgentId}
-            onChange={(e) => upsertM.mutate(e.target.value || null)}
+            onChange={(e) => upsertM.mutate({ agentId: e.target.value || null })}
             disabled={agentsQ.isLoading || upsertM.isPending}
           >
             <option value="">Auto (recommended)</option>
@@ -58,6 +62,30 @@ export function TaskAgent({ taskId, lastRunStatus }: { taskId: string; lastRunSt
           <div className="mt-2 text-xs text-muted-foreground">
             Auto selects a default agent based on the task description. You can override before running.
           </div>
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground">
+            Reasoning
+            <Tooltip label="Reasoning enables deeper planning for complex tasks. Uses /think directive.">
+              <span className="ml-2 inline-flex rounded-full border border-border/70 bg-surface-1/70 p-1 text-muted-foreground">
+                <IconInfo className="h-3 w-3" />
+              </span>
+            </Tooltip>
+          </label>
+          <select
+            className="mt-1 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
+            value={reasoningLevel}
+            onChange={(e) => upsertM.mutate({ reasoningLevel: e.target.value as ReasoningLevel })}
+            disabled={upsertM.isPending}
+          >
+            <option value="auto">Auto (recommended)</option>
+            <option value="off">Off</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+          <div className="mt-2 text-xs text-muted-foreground">Auto enables reasoning for longer, complex tasks.</div>
         </div>
 
         <div className="flex items-center gap-2 text-xs text-muted-foreground">

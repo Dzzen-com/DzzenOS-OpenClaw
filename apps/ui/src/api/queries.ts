@@ -102,6 +102,10 @@ export function runTask(taskId: string, input: { mode: 'plan' | 'execute' | 'rep
   });
 }
 
+export function stopTask(taskId: string): Promise<{ ok: boolean; stopped: boolean; runId: string | null }> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' });
+}
+
 export function listTaskRuns(taskId: string): Promise<AgentRun[]> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/runs`);
 }
@@ -110,7 +114,10 @@ export function getTaskSession(taskId: string): Promise<TaskSession> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`);
 }
 
-export function upsertTaskSession(taskId: string, input: { agentId?: string | null }): Promise<TaskSession> {
+export function upsertTaskSession(
+  taskId: string,
+  input: { agentId?: string | null; reasoningLevel?: string | null }
+): Promise<TaskSession> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`, {
     method: 'POST',
     body: JSON.stringify(input),

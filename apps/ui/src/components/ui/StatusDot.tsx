@@ -2,7 +2,15 @@ import { cn } from '../../lib/cn';
 
 type StatusTone = 'muted' | 'success' | 'info' | 'warning' | 'danger';
 
-export function StatusDot({ tone = 'muted', className }: { tone?: StatusTone; className?: string }) {
+export function StatusDot({
+  tone = 'muted',
+  pulse = false,
+  className,
+}: {
+  tone?: StatusTone;
+  pulse?: boolean;
+  className?: string;
+}) {
   return (
     <span
       className={cn(
@@ -12,6 +20,7 @@ export function StatusDot({ tone = 'muted', className }: { tone?: StatusTone; cl
         tone === 'info' && 'bg-info',
         tone === 'warning' && 'bg-warning',
         tone === 'danger' && 'bg-danger',
+        pulse && 'animate-pulse',
         className,
       )}
     />

@@ -44,6 +44,14 @@
 - Quick add task
 - Status pill
 - Domain/priority chips
+- Agent status strip (running/idle + stage + mini bar)
+- Reasoning selector (auto/off/low/medium/high)
+- Stop run control (soft cancel)
+- Minimal activity ticker (latest steps)
+- Token usage hint (in/out or total)
+- Stage badge in status strip (glowing dot)
+- Agent heartbeat on card while running
+- Stage icons in activity ticker
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)
