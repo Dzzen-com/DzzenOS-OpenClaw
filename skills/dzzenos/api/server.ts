@@ -1470,7 +1470,36 @@ function main() {
 
         const tasks = db
           .prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE board_id = ? ORDER BY position ASC, created_at ASC'
+            `SELECT
+               t.id,
+               t.board_id,
+               t.title,
+               t.description,
+               t.status,
+               t.position,
+               t.due_at,
+               t.created_at,
+               t.updated_at,
+               s.agent_id,
+               s.status as session_status,
+               s.last_run_id,
+               a.display_name as agent_display_name,
+               r.status as run_status,
+               r.started_at as run_started_at,
+               r.updated_at as run_updated_at,
+               r.finished_at as run_finished_at,
+               rs.kind as run_step_kind
+             FROM tasks t
+             LEFT JOIN task_sessions s ON s.task_id = t.id
+             LEFT JOIN agents a ON a.id = s.agent_id
+             LEFT JOIN agent_runs r ON r.id = (
+               SELECT id FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
+             )
+             LEFT JOIN run_steps rs ON rs.id = (
+               SELECT id FROM run_steps WHERE run_id = r.id ORDER BY step_index DESC LIMIT 1
+             )
+             WHERE t.board_id = ?
+             ORDER BY t.position ASC, t.created_at ASC`
           )
           .all(boardId);
         return sendJson(res, 200, tasks, corsHeaders);

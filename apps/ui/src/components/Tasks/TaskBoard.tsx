@@ -6,7 +6,7 @@ import { IconButton } from '../ui/IconButton';
 import { StatusDot } from '../ui/StatusDot';
 import { cn } from '../../lib/cn';
 import { shortId } from './taskId';
-import { formatUpdatedAt } from './taskTime';
+import { formatElapsed, formatUpdatedAt } from './taskTime';
 import { statusLabel } from './status';
 import {
   DndContext,
@@ -46,6 +46,31 @@ const COLUMNS: ColumnMeta[] = [
   { status: 'done', title: 'Done', subtitle: 'Recently shipped', tone: 'success', emptyLabel: 'No completed tasks.' },
   { status: 'archived', title: 'Archive', subtitle: 'Closed & stored', tone: 'muted', emptyLabel: 'Nothing archived.' },
 ];
+
+function stageLabel(kind?: string | null) {
+  if (!kind) return null;
+  if (kind === 'plan') return 'Planning';
+  if (kind === 'execute') return 'Executing';
+  if (kind === 'report') return 'Reporting';
+  return kind;
+}
+
+function runTone(status?: string | null) {
+  if (status === 'running') return 'info';
+  if (status === 'failed') return 'danger';
+  if (status === 'succeeded') return 'success';
+  return 'muted';
+}
+
+function runLabel(status?: string | null, startedAt?: string | null) {
+  if (status === 'running') {
+    const t = formatElapsed(startedAt);
+    return t ? `Running ${t}` : 'Running';
+  }
+  if (status === 'failed') return 'Failed';
+  if (status === 'succeeded') return 'Done';
+  return 'Idle';
+}
 
 function sortByPosition(a: Task, b: Task) {
   if (a.position !== b.position) return a.position - b.position;
@@ -572,6 +597,9 @@ const TaskCard = React.forwardRef<
             ? 'muted'
             : 'muted';
 
+  const agentLabel = task.agent_display_name?.trim() || 'Unassigned';
+  const stage = task.run_status === 'running' ? stageLabel(task.run_step_kind) : null;
+
   return (
     <button
       ref={setRefs}
@@ -616,6 +644,16 @@ const TaskCard = React.forwardRef<
           <span>{statusLabel(task.status)}</span>
         </div>
         <span>Updated {formatUpdatedAt(task.updated_at)}</span>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]">
+        <div className="flex items-center gap-2">
+          <StatusDot tone={runTone(task.run_status)} pulse={task.run_status === 'running'} />
+          <span className="truncate">{agentLabel}</span>
+          <span>•</span>
+          <span>{runLabel(task.run_status, task.run_started_at)}</span>
+        </div>
+        {stage ? <span className="text-muted-foreground/80">Stage: {stage}</span> : null}
       </div>
     </button>
   );

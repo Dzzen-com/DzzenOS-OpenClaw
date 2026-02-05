@@ -21,6 +21,15 @@ export type Task = {
   due_at: string | null;
   created_at: string;
   updated_at: string;
+  agent_id?: string | null;
+  session_status?: 'idle' | 'running' | 'failed' | null;
+  last_run_id?: string | null;
+  agent_display_name?: string | null;
+  run_status?: AgentRunStatus | null;
+  run_started_at?: string | null;
+  run_updated_at?: string | null;
+  run_finished_at?: string | null;
+  run_step_kind?: string | null;
 };
 
 export type TaskSession = {
