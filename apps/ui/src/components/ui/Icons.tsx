@@ -83,3 +83,13 @@ export function IconExternal({ className, size, ...props }: IconProps) {
     </svg>
   );
 }
+
+export function IconInfo({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <circle cx="10" cy="10" r="7" />
+      <path d="M10 9v5" />
+      <circle cx="10" cy="6.5" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}

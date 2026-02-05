@@ -2,11 +2,11 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Approval, AgentRun, Task, TaskStatus } from '../../api/types';
-import { listApprovals, listTaskRuns, patchTask, requestTaskApproval } from '../../api/queries';
+import { listApprovals, listTaskRuns, patchTask, requestTaskApproval, stopTask } from '../../api/queries';
 import { runTask } from '../../api/queries';
 import { statusLabel } from './status';
 import { shortId } from './taskId';
-import { formatUpdatedAt } from './taskTime';
+import { formatElapsed, formatUpdatedAt } from './taskTime';
 import { InlineAlert } from '../ui/InlineAlert';
 import { Button } from '../ui/Button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/Tabs';
@@ -96,6 +96,14 @@ export function TaskDrawer({
     },
   });
 
+  const stopM = useMutation({
+    mutationFn: async (id: string) => stopTask(id),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
+      if (task?.board_id) await qc.invalidateQueries({ queryKey: ['tasks', task.board_id] });
+    },
+  });
+
   const requestApprovalM = useMutation({
     mutationFn: async () => requestTaskApproval(task!.id, { title: `Approve task: ${task!.title}` }),
     onSuccess: async () => {
@@ -103,6 +111,16 @@ export function TaskDrawer({
       await qc.invalidateQueries({ queryKey: ['approvals', 'task', task?.id] });
     },
   });
+
+  const activeRun = useMemo(() => {
+    const runs = runsQ.data ?? [];
+    return runs.find((r) => r.status === 'running') ?? runs[0] ?? null;
+  }, [runsQ.data]);
+  const activeStage = getRunStage(activeRun) ?? task?.run_step_kind ?? null;
+  const activeStageLabel = stageLabel(activeStage);
+  const runStatus = activeRun?.status ?? task?.run_status ?? null;
+  const runStartedAt = activeRun?.started_at ?? task?.run_started_at ?? null;
+  const elapsed = runStatus === 'running' ? formatElapsed(runStartedAt) : null;
 
   return (
     <Dialog.Root
@@ -187,6 +205,59 @@ export function TaskDrawer({
               <InlineAlert>{String(patchM.error ?? updateM.error ?? planM.error)}</InlineAlert>
             </div>
           ) : null}
+
+          <div className="mt-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between gap-3">
+                <CardTitle>Agent status</CardTitle>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!task?.id || runStatus !== 'running' || stopM.isPending}
+                  onClick={() => task?.id && stopM.mutate(task.id)}
+                >
+                  {stopM.isPending ? 'Stopping…' : 'Stop'}
+                </Button>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="flex flex-wrap items-center gap-3 text-sm text-foreground">
+                  <div className="flex items-center gap-2">
+                    <StatusDot tone={runTone(runStatus)} pulse={runStatus === 'running'} />
+                    <span>{runStatusLabel(runStatus)}</span>
+                  </div>
+                  {elapsed ? <span className="text-muted-foreground">• {elapsed}</span> : null}
+                  {activeStageLabel ? <span className="text-muted-foreground">• {activeStageLabel}</span> : null}
+                </div>
+
+                <div className="mt-3 grid grid-cols-3 gap-1">
+                  {['plan', 'execute', 'report'].map((step, idx) => {
+                    const state = stageState(step, activeRun);
+                    const isActive = runStatus === 'running' && activeStage === step;
+                    const base =
+                      state === 'done'
+                        ? 'bg-success/70'
+                        : state === 'failed'
+                          ? 'bg-danger/70'
+                          : isActive
+                            ? 'bg-info/70'
+                            : 'bg-border/70';
+                    return (
+                      <div
+                        key={step}
+                        className={`h-2 rounded-full ${base} ${isActive ? 'animate-pulse' : ''}`}
+                        aria-label={`Step ${idx + 1}`}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="mt-2 grid grid-cols-3 text-[11px] text-muted-foreground">
+                  <span>Plan</span>
+                  <span className="text-center">Execute</span>
+                  <span className="text-right">Report</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
           <div className="mt-5">
             <Tabs defaultValue="details" value={tab} onValueChange={(v) => setTab(v as TabKey)}>
@@ -447,4 +518,45 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+function stageLabel(kind?: string | null) {
+  if (!kind) return null;
+  if (kind === 'plan') return 'Planning';
+  if (kind === 'execute') return 'Executing';
+  if (kind === 'report') return 'Reporting';
+  return kind;
+}
+
+function getRunStage(run?: AgentRun | null) {
+  if (!run?.steps?.length) return null;
+  const running = run.steps.find((s) => s.status === 'running');
+  if (running?.kind) return running.kind;
+  return run.steps[run.steps.length - 1]?.kind ?? null;
+}
+
+function stageState(step: string, run?: AgentRun | null): 'idle' | 'running' | 'done' | 'failed' {
+  if (!run?.steps?.length) return 'idle';
+  const steps = run.steps.filter((s) => s.kind === step);
+  if (!steps.length) return 'idle';
+  if (steps.some((s) => s.status === 'failed')) return 'failed';
+  if (steps.some((s) => s.status === 'running')) return 'running';
+  if (steps.some((s) => s.status === 'succeeded')) return 'done';
+  return 'idle';
+}
+
+function runTone(status?: string | null) {
+  if (status === 'running') return 'info';
+  if (status === 'failed') return 'danger';
+  if (status === 'succeeded') return 'success';
+  if (status === 'cancelled') return 'muted';
+  return 'muted';
+}
+
+function runStatusLabel(status?: string | null) {
+  if (status === 'running') return 'Running';
+  if (status === 'failed') return 'Failed';
+  if (status === 'succeeded') return 'Completed';
+  if (status === 'cancelled') return 'Cancelled';
+  return 'Idle';
 }

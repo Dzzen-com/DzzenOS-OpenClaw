@@ -10,6 +10,7 @@ export type Board = {
 
 export type TaskStatus = 'ideas' | 'todo' | 'doing' | 'review' | 'release' | 'done' | 'archived';
 export type ChecklistState = 'todo' | 'doing' | 'done';
+export type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
 
 export type Task = {
   id: string;
@@ -38,6 +39,7 @@ export type TaskSession = {
   session_key: string;
   status: 'idle' | 'running' | 'failed';
   last_run_id: string | null;
+  reasoning_level?: ReasoningLevel | null;
   created_at: string;
   updated_at: string;
   agent_display_name?: string | null;
@@ -106,6 +108,9 @@ export type AgentRun = {
   finished_at: string | null;
   created_at: string;
   updated_at: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
   is_stuck: boolean;
   steps: RunStep[];
 };

@@ -44,6 +44,9 @@
 - Quick add task
 - Status pill
 - Domain/priority chips
+- Agent status strip (running/idle + stage + mini bar)
+- Reasoning selector (auto/off/low/medium/high)
+- Stop run control (soft cancel)
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)

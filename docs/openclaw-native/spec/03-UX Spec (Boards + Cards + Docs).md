@@ -76,6 +76,9 @@ Bulk actions:
 - Domain + Priority
 - какой агент выбран (и откуда: board default или override)
 - последний run: статус + время + (оценка стоимости, если есть)
+- Agent status strip: running/idle + stage (Plan/Execute/Report) + elapsed time
+- Reasoning control per task (auto/off/low/medium/high) with info tooltip
+- Stop run button (soft cancel) for active sessions
 
 ---
 
