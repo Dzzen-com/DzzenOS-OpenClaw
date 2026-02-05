@@ -73,7 +73,10 @@ export function getTaskSession(taskId: string): Promise<TaskSession> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`);
 }
 
-export function upsertTaskSession(taskId: string, input: { agentId?: string | null }): Promise<TaskSession> {
+export function upsertTaskSession(
+  taskId: string,
+  input: { agentId?: string | null }
+): Promise<TaskSession> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`, {
     method: 'POST',
     body: JSON.stringify(input),
@@ -199,6 +202,32 @@ export function updateAgents(input: Agent[]): Promise<Agent[]> {
     method: 'PUT',
     body: JSON.stringify(input),
   });
+}
+
+export function createAgent(input: Partial<Agent> & { display_name: string; openclaw_agent_id: string }): Promise<Agent> {
+  return apiFetch('/agents', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function patchAgent(id: string, patch: Partial<Agent>): Promise<{ ok: true }> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function resetAgent(id: string): Promise<{ ok: true }> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+}
+
+export function duplicateAgent(id: string): Promise<{ id: string }> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
+}
+
+export function deleteAgent(id: string): Promise<{ ok: true }> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 // --- Docs ---

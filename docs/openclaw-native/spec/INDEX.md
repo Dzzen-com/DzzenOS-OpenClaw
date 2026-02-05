@@ -10,6 +10,7 @@ Reading order:
 5) `07-Marketplace (Curated Skills).md`
 6) `08-Policies & Approvals (Skills + Actions).md`
 7) `09-Agent Packs & Squads (Presets).md`
+   - `09-Agent Library (Presets).md`
 8) `12-Chat Bindings (Telegram Topics + Slack Threads).md`
 9) `10-Roadmap (v1 vs later).md` + `11-Epics (v1).md`
 

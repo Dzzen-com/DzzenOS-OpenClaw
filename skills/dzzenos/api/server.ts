@@ -7,13 +7,18 @@
  *   GET   /tasks?boardId=
  *   GET   /runs?status=running|failed|...&stuckMinutes=
  *   GET   /approvals?status=pending|approved|rejected
+ *   GET   /agents
+ *   PUT   /agents
  *   POST  /approvals/:id/approve   { decidedBy?, reason? }
  *   POST  /approvals/:id/reject    { decidedBy?, reason? }
  *   POST  /tasks/:id/request-approval (stub) { title?, body?, stepId? }
  *   POST  /tasks                   { title, description?, boardId? }
  *   PATCH /tasks/:id               { status?, title?, description? }
+ *   GET   /tasks/:id/session
+ *   POST  /tasks/:id/session       { agentId?, packId?, packOverrides? }
  *   POST  /tasks/:id/simulate-run  (create run + steps; auto-advance)
  *   GET   /tasks/:id/runs          (runs + steps)
+ *   POST  /tasks/:id/run           { mode, agentId? }
  *
  * Usage:
  *   node --experimental-strip-types skills/dzzenos/api/server.ts
@@ -224,11 +229,54 @@ function tryParseJson(text: string): any | null {
   }
 }
 
+function safeParseJson(text: unknown, fallback: any) {
+  if (typeof text !== 'string') return fallback;
+  const trimmed = text.trim();
+  if (!trimmed) return fallback;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeStringArray(input: any): string[] {
+  const raw = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? input
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+  const out: string[] = [];
+  for (const it of raw) {
+    const s = typeof it === 'string' ? it.trim() : String(it ?? '').trim();
+    if (!s) continue;
+    out.push(s);
+  }
+  return Array.from(new Set(out));
+}
+
+function pickPromptOverrides(input: any): Record<string, string> {
+  const raw =
+    (input && typeof input === 'object' ? input : null) ??
+    safeParseJson(input?.prompt_overrides_json ?? input?.promptOverridesJson, {});
+  const allowed = new Set(['system', 'plan', 'execute', 'chat', 'report']);
+  const out: Record<string, string> = {};
+  const src = raw && typeof raw === 'object' ? raw : {};
+  for (const k of Object.keys(src)) {
+    if (!allowed.has(k)) continue;
+    const v = (src as any)[k];
+    if (typeof v === 'string') out[k] = v;
+  }
+  return out;
+}
+
 function isRequestSecure(req: http.IncomingMessage): boolean {
   if ((req.socket as any).encrypted) return true;
   const xf = String(req.headers['x-forwarded-proto'] ?? '');
   return xf.split(',')[0]?.trim().toLowerCase() === 'https';
-}
 }
 
 function seedIfEmpty(db: DatabaseSync) {
@@ -251,6 +299,227 @@ function seedIfEmpty(db: DatabaseSync) {
     db.prepare(
       'INSERT INTO boards(id, workspace_id, name, description, position) VALUES (?, ?, ?, ?, 0)'
     ).run(boardId, workspaceId, 'Default Board', 'Seeded on first run');
+    db.exec('COMMIT');
+  } catch (e) {
+    db.exec('ROLLBACK');
+    throw e;
+  }
+}
+
+function seedAgentsIfEmpty(db: DatabaseSync) {
+  try {
+    const row = rowOrNull<{ c: number }>(db.prepare('SELECT COUNT(*) as c FROM agents').all() as any);
+    const count = row?.c ?? 0;
+    if (count > 0) return;
+  } catch {
+    return;
+  }
+
+  const presets = [
+    {
+      preset_key: 'core.general',
+      sort_order: 0,
+      display_name: 'General Orchestrator',
+      emoji: '🧭',
+      description: 'Plan, execute, and drive a task end-to-end inside DzzenOS.',
+      category: 'general',
+      tags: ['orchestrator', 'founder', 'execution'],
+      skills: ['dzzenos-operator'],
+      openclaw_agent_id: 'main',
+      role: 'orchestrator',
+      prompt_overrides: {
+        system:
+          'You are DzzenOS General Orchestrator. Your goal is to complete the task end-to-end. ' +
+          'Always maintain a clear plan, update the task description with the latest brief, and keep the checklist actionable.',
+        plan:
+          'Return JSON: { "description": "...", "checklist": ["..."] }. Keep checklist items short and sequential.',
+        execute:
+          'Work through the checklist. Return JSON: { "status": "review" | "doing", "report": "..." }.',
+        chat: 'Be concise, ask for missing info, and propose next concrete actions.',
+        report: 'Return 2-5 concise Markdown bullet points summarizing what was done and what remains.',
+      },
+    },
+    {
+      preset_key: 'core.content',
+      sort_order: 10,
+      display_name: 'Content Orchestrator',
+      emoji: '✍️',
+      description: 'Create drafts, refine structure, and ship publish-ready content.',
+      category: 'content',
+      tags: ['writing', 'editing', 'content'],
+      skills: [],
+      openclaw_agent_id: 'dzzenos-content',
+      role: 'orchestrator',
+      prompt_overrides: {
+        system:
+          'You are DzzenOS Content Orchestrator. Produce high-quality content with clear structure, headings, and CTAs.',
+        plan:
+          'Return JSON: { "description": "...", "checklist": ["..."] }. Include outline/draft/review steps.',
+        execute:
+          'Write the content draft and propose a final version. Return JSON: { "status": "review", "report": "..." }.',
+        chat: 'Ask for audience, tone, constraints, and examples. Provide options.',
+        report: 'Return bullet points + next suggested iteration.',
+      },
+    },
+    {
+      preset_key: 'core.social',
+      sort_order: 20,
+      display_name: 'Social Orchestrator',
+      emoji: '📣',
+      description: 'Turn a brief into a cross-platform social pack (drafts + variations).',
+      category: 'social',
+      tags: ['social', 'distribution', 'copy'],
+      skills: [],
+      openclaw_agent_id: 'dzzenos-social',
+      role: 'orchestrator',
+      prompt_overrides: {
+        system:
+          'You are DzzenOS Social Orchestrator. Create platform-native posts with strong hooks, clarity, and CTAs.',
+        plan:
+          'Return JSON: { "description": "...", "checklist": ["..."] }. Include platform selection and variants.',
+        execute:
+          'Generate a social pack. Return JSON: { "status": "review", "report": "..." }.',
+        chat: 'Clarify target platforms, audience, and voice. Suggest 2-3 angles.',
+        report: 'Return bullet points with links/placeholders and recommended next step.',
+      },
+    },
+    {
+      preset_key: 'core.research',
+      sort_order: 30,
+      display_name: 'Research Orchestrator',
+      emoji: '🔎',
+      description: 'Run lightweight research, synthesize findings, and recommend next actions.',
+      category: 'research',
+      tags: ['research', 'analysis', 'strategy'],
+      skills: [],
+      openclaw_agent_id: 'dzzenos-research',
+      role: 'orchestrator',
+      prompt_overrides: {
+        system:
+          'You are DzzenOS Research Orchestrator. Focus on truth, assumptions, and decision-ready synthesis.',
+        plan:
+          'Return JSON: { "description": "...", "checklist": ["..."] }. Include questions, sources, synthesis.',
+        execute:
+          'Produce findings + recommendations. Return JSON: { "status": "review", "report": "..." }.',
+        chat: 'Ask for goal, scope, timeframe, and decision criteria.',
+        report: 'Return bullet points of findings, risks, and suggested next checks.',
+      },
+    },
+    {
+      preset_key: 'core.outreach',
+      sort_order: 40,
+      display_name: 'Sales / Outreach Orchestrator',
+      emoji: '🤝',
+      description: 'Define ICP, craft outreach sequences, and drive follow-ups.',
+      category: 'sales',
+      tags: ['sales', 'outreach', 'messaging'],
+      skills: [],
+      openclaw_agent_id: 'dzzenos-outreach',
+      role: 'orchestrator',
+      prompt_overrides: {
+        system:
+          'You are DzzenOS Outreach Orchestrator. Create concise, high-signal messaging and repeatable sequences.',
+        plan:
+          'Return JSON: { "description": "...", "checklist": ["..."] }. Include ICP, offer, sequence, tracking.',
+        execute:
+          'Draft sequences and templates. Return JSON: { "status": "review", "report": "..." }.',
+        chat: 'Ask for product, audience, proof, and desired action. Offer 2 variants.',
+        report: 'Return bullet points + ready-to-send templates.',
+      },
+    },
+    {
+      preset_key: 'core.support',
+      sort_order: 50,
+      display_name: 'Support / Inbox Orchestrator',
+      emoji: '📥',
+      description: 'Triage inbound, draft replies, and create a clear next-step checklist.',
+      category: 'support',
+      tags: ['support', 'triage', 'ops'],
+      skills: [],
+      openclaw_agent_id: 'dzzenos-inbox',
+      role: 'orchestrator',
+      prompt_overrides: {
+        system:
+          'You are DzzenOS Support/Inbox Orchestrator. Triage fast, propose safe responses, and ensure follow-through.',
+        plan:
+          'Return JSON: { "description": "...", "checklist": ["..."] }. Include triage, draft, follow-up steps.',
+        execute:
+          'Draft replies and next actions. Return JSON: { "status": "review", "report": "..." }.',
+        chat: 'Ask for context, constraints, and tone. Keep replies short.',
+        report: 'Return bullet points + suggested SLA and escalation triggers.',
+      },
+    },
+  ];
+
+  db.exec('BEGIN');
+  try {
+    const ins = db.prepare(
+      `INSERT INTO agents(
+         id,
+         display_name,
+         description,
+         emoji,
+         openclaw_agent_id,
+         enabled,
+         role,
+         category,
+         tags_json,
+         skills_json,
+         prompt_overrides_json,
+         preset_key,
+         preset_defaults_json,
+         sort_order
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+
+    for (const p of presets) {
+      const id = randomUUID();
+      const row = {
+        display_name: p.display_name,
+        description: p.description,
+        emoji: p.emoji,
+        openclaw_agent_id: p.openclaw_agent_id,
+        enabled: 1,
+        role: p.role,
+        category: p.category,
+        tags_json: JSON.stringify(p.tags),
+        skills_json: JSON.stringify(p.skills),
+        prompt_overrides_json: JSON.stringify(p.prompt_overrides),
+        preset_key: p.preset_key,
+        preset_defaults_json: JSON.stringify({
+          display_name: p.display_name,
+          description: p.description,
+          emoji: p.emoji,
+          openclaw_agent_id: p.openclaw_agent_id,
+          enabled: true,
+          role: p.role,
+          category: p.category,
+          tags: p.tags,
+          skills: p.skills,
+          prompt_overrides: p.prompt_overrides,
+          preset_key: p.preset_key,
+          sort_order: p.sort_order,
+        }),
+        sort_order: p.sort_order,
+      };
+
+      ins.run(
+        id,
+        row.display_name,
+        row.description,
+        row.emoji,
+        row.openclaw_agent_id,
+        row.enabled,
+        row.role,
+        row.category,
+        row.tags_json,
+        row.skills_json,
+        row.prompt_overrides_json,
+        row.preset_key,
+        row.preset_defaults_json,
+        row.sort_order
+      );
+    }
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -444,6 +713,7 @@ function main() {
   db.exec('PRAGMA journal_mode = WAL;');
 
   seedIfEmpty(db);
+  seedAgentsIfEmpty(db);
 
   function getTaskMeta(taskId: string) {
     return rowOrNull<{
@@ -499,15 +769,27 @@ function main() {
   }
 
   function ensureTaskSession(taskId: string, agentId?: string | null) {
-    const existing = rowOrNull<{ task_id: string; agent_id: string | null; session_key: string }>(
-      db.prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?').all(taskId) as any
+    const existing = rowOrNull<{
+      task_id: string;
+      agent_id: string | null;
+      session_key: string;
+    }>(
+      db
+        .prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?')
+        .all(taskId) as any
     );
     if (existing) {
-      if (agentId && existing.agent_id !== agentId) {
+      if (agentId !== undefined && existing.agent_id !== agentId) {
         db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(agentId, taskId);
       }
-      return rowOrNull<{ task_id: string; agent_id: string | null; session_key: string }>(
-        db.prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?').all(taskId) as any
+      return rowOrNull<{
+        task_id: string;
+        agent_id: string | null;
+        session_key: string;
+      }>(
+        db
+          .prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?')
+          .all(taskId) as any
       );
     }
 
@@ -517,8 +799,14 @@ function main() {
       agentId ?? null,
       sessionKey
     );
-    return rowOrNull<{ task_id: string; agent_id: string | null; session_key: string }>(
-      db.prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?').all(taskId) as any
+    return rowOrNull<{
+      task_id: string;
+      agent_id: string | null;
+      session_key: string;
+    }>(
+      db
+        .prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?')
+        .all(taskId) as any
     );
   }
 
@@ -540,13 +828,14 @@ function main() {
     }
   }
 
-  async function runTask(opts: { taskId: string; mode: 'plan' | 'execute' | 'report'; agentId?: string | null }) {
+  async function runTask(opts: { taskId: string; mode: 'plan' | 'execute' | 'report'; agentId?: string }) {
     const task = getTaskMeta(opts.taskId);
     if (!task) throw new Error('Task not found');
 
     const session = ensureTaskSession(task.id, opts.agentId ?? null);
     const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
-    const agentOpenClawId = agentRow?.openclaw_agent_id ?? defaultAgentId || null;
+
+    const agentOpenClawId = (agentRow?.openclaw_agent_id ?? defaultAgentId) || null;
     const agentDisplayName = agentRow?.display_name ?? 'orchestrator';
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
@@ -1278,14 +1567,423 @@ function main() {
       if (req.method === 'GET' && url.pathname === '/agents') {
         const rows = db
           .prepare(
-            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+            `SELECT
+               a.id,
+               a.display_name,
+               a.description,
+               a.emoji,
+               a.openclaw_agent_id,
+               a.enabled,
+               a.role,
+               a.category,
+               a.tags_json,
+               a.skills_json,
+               a.prompt_overrides_json,
+               a.preset_key,
+               a.sort_order,
+               a.created_at,
+               a.updated_at,
+               COALESCE(u.assigned_task_count, 0) as assigned_task_count,
+               u.last_used_at as last_used_at,
+               COALESCE(u.run_count_7d, 0) as run_count_7d
+             FROM agents a
+             LEFT JOIN (
+               SELECT
+                 s.agent_id as agent_id,
+                 COUNT(DISTINCT s.task_id) as assigned_task_count,
+                 MAX(r.created_at) as last_used_at,
+                 SUM(
+                   CASE
+                     WHEN r.id IS NOT NULL AND julianday(r.created_at) >= julianday('now') - 7 THEN 1
+                     ELSE 0
+                   END
+                 ) as run_count_7d
+               FROM task_sessions s
+               LEFT JOIN agent_runs r ON r.task_id = s.task_id
+               WHERE s.agent_id IS NOT NULL
+               GROUP BY s.agent_id
+             ) u ON u.agent_id = a.id
+             ORDER BY a.enabled DESC, a.sort_order ASC, a.created_at ASC`
           )
           .all() as any[];
+
         const payload = rows.map((r) => ({
-          ...r,
+          id: r.id,
+          display_name: r.display_name,
+          description: r.description ?? null,
+          emoji: r.emoji ?? null,
+          openclaw_agent_id: r.openclaw_agent_id,
           enabled: Boolean(r.enabled),
+          role: r.role ?? null,
+          category: r.category ?? 'general',
+          tags: Array.isArray(safeParseJson(r.tags_json, [])) ? safeParseJson(r.tags_json, []) : [],
+          skills: Array.isArray(safeParseJson(r.skills_json, [])) ? safeParseJson(r.skills_json, []) : [],
+          prompt_overrides: safeParseJson(r.prompt_overrides_json, {}),
+          preset_key: r.preset_key ?? null,
+          sort_order: Number(r.sort_order ?? 0) || 0,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          assigned_task_count: Number(r.assigned_task_count ?? 0) || 0,
+          run_count_7d: Number(r.run_count_7d ?? 0) || 0,
+          last_used_at: r.last_used_at ?? null,
         }));
+
         return sendJson(res, 200, payload, corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/agents') {
+        const body = await readJson(req);
+        const normalize = (s: any) => (typeof s === 'string' ? s.trim() : '');
+
+        const displayName = normalize(body?.display_name ?? body?.displayName);
+        const openclawAgentId = normalize(body?.openclaw_agent_id ?? body?.openclawAgentId);
+        if (!displayName) return sendJson(res, 400, { error: 'display_name is required' }, corsHeaders);
+        if (!openclawAgentId) return sendJson(res, 400, { error: 'openclaw_agent_id is required' }, corsHeaders);
+
+        const id = normalize(body?.id) || randomUUID();
+        const description = typeof body?.description === 'string' ? body.description : null;
+        const emoji = normalize(body?.emoji) || null;
+        const role = normalize(body?.role) || null;
+        const category = normalize(body?.category) || 'general';
+        const enabled = body?.enabled === false ? 0 : 1;
+        const tags = normalizeStringArray(body?.tags ?? safeParseJson(body?.tags_json, []));
+        const skills = normalizeStringArray(body?.skills ?? safeParseJson(body?.skills_json, []));
+        const promptOverrides = pickPromptOverrides(body?.prompt_overrides ?? body?.promptOverrides ?? safeParseJson(body?.prompt_overrides_json, {}));
+        const sortOrder = Number.isFinite(Number(body?.sort_order ?? body?.sortOrder)) ? Number(body.sort_order ?? body.sortOrder) : 0;
+
+        try {
+          db.prepare(
+            `INSERT INTO agents(
+               id,
+               display_name,
+               description,
+               emoji,
+               openclaw_agent_id,
+               enabled,
+               role,
+               category,
+               tags_json,
+               skills_json,
+               prompt_overrides_json,
+               preset_key,
+               preset_defaults_json,
+               sort_order
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          ).run(
+            id,
+            displayName,
+            description,
+            emoji,
+            openclawAgentId,
+            enabled,
+            role,
+            category,
+            JSON.stringify(tags),
+            JSON.stringify(skills),
+            JSON.stringify(promptOverrides),
+            sortOrder
+          );
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          if (msg.includes('UNIQUE') || msg.includes('constraint')) {
+            return sendJson(res, 409, { error: 'Agent already exists (unique constraint)' }, corsHeaders);
+          }
+          throw e;
+        }
+
+        sseBroadcast({ type: 'agents.changed', payload: { agentId: id } });
+        const row = rowOrNull<any>(db.prepare('SELECT id FROM agents WHERE id = ?').all(id) as any);
+        if (!row) return sendJson(res, 500, { error: 'Failed to create agent' }, corsHeaders);
+        // Return via GET shape for consistency
+        const all = (await (async () => {
+          const r = db
+            .prepare(
+              `SELECT id, display_name, description, emoji, openclaw_agent_id, enabled, role, category, tags_json, skills_json, prompt_overrides_json, preset_key, sort_order, created_at, updated_at
+               FROM agents WHERE id = ?`
+            )
+            .all(id) as any[];
+          return rowOrNull<any>(r);
+        })()) as any;
+        return sendJson(
+          res,
+          201,
+          {
+            id: all.id,
+            display_name: all.display_name,
+            description: all.description ?? null,
+            emoji: all.emoji ?? null,
+            openclaw_agent_id: all.openclaw_agent_id,
+            enabled: Boolean(all.enabled),
+            role: all.role ?? null,
+            category: all.category ?? 'general',
+            tags: safeParseJson(all.tags_json, []),
+            skills: safeParseJson(all.skills_json, []),
+            prompt_overrides: safeParseJson(all.prompt_overrides_json, {}),
+            preset_key: all.preset_key ?? null,
+            sort_order: Number(all.sort_order ?? 0) || 0,
+            created_at: all.created_at,
+            updated_at: all.updated_at,
+            assigned_task_count: 0,
+            run_count_7d: 0,
+            last_used_at: null,
+          },
+          corsHeaders
+        );
+      }
+
+      const agentPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
+      if (agentPatchMatch) {
+        const id = decodeURIComponent(agentPatchMatch[1]);
+        const body = await readJson(req);
+        const normalize = (s: any) => (typeof s === 'string' ? s.trim() : '');
+
+        const existing = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, preset_key, openclaw_agent_id
+               FROM agents WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        if (!existing) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.display_name !== undefined || body?.displayName !== undefined) {
+          const displayName = normalize(body?.display_name ?? body?.displayName);
+          if (!displayName) return sendJson(res, 400, { error: 'display_name must be non-empty string' }, corsHeaders);
+          updates.push('display_name = ?');
+          params.push(displayName);
+        }
+
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+
+        if (body?.emoji !== undefined) {
+          const emoji = body.emoji === null ? null : normalize(body.emoji) || null;
+          updates.push('emoji = ?');
+          params.push(emoji);
+        }
+
+        if (body?.openclaw_agent_id !== undefined || body?.openclawAgentId !== undefined) {
+          const openclawAgentId = normalize(body?.openclaw_agent_id ?? body?.openclawAgentId);
+          if (!openclawAgentId) return sendJson(res, 400, { error: 'openclaw_agent_id must be non-empty string' }, corsHeaders);
+          updates.push('openclaw_agent_id = ?');
+          params.push(openclawAgentId);
+        }
+
+        if (body?.enabled !== undefined) {
+          updates.push('enabled = ?');
+          params.push(body.enabled === false ? 0 : 1);
+        }
+
+        if (body?.role !== undefined) {
+          const role = body.role === null ? null : normalize(body.role) || null;
+          updates.push('role = ?');
+          params.push(role);
+        }
+
+        if (body?.category !== undefined) {
+          const category = normalize(body.category) || 'general';
+          updates.push('category = ?');
+          params.push(category);
+        }
+
+        if (body?.tags !== undefined || body?.tags_json !== undefined) {
+          const tags = normalizeStringArray(body?.tags ?? safeParseJson(body?.tags_json, []));
+          updates.push('tags_json = ?');
+          params.push(JSON.stringify(tags));
+        }
+
+        if (body?.skills !== undefined || body?.skills_json !== undefined) {
+          const skills = normalizeStringArray(body?.skills ?? safeParseJson(body?.skills_json, []));
+          updates.push('skills_json = ?');
+          params.push(JSON.stringify(skills));
+        }
+
+        if (body?.prompt_overrides !== undefined || body?.promptOverrides !== undefined || body?.prompt_overrides_json !== undefined) {
+          const promptOverrides = pickPromptOverrides(
+            body?.prompt_overrides ?? body?.promptOverrides ?? safeParseJson(body?.prompt_overrides_json, {})
+          );
+          updates.push('prompt_overrides_json = ?');
+          params.push(JSON.stringify(promptOverrides));
+        }
+
+        if (body?.sort_order !== undefined || body?.sortOrder !== undefined) {
+          const sortOrder = Number(body?.sort_order ?? body?.sortOrder);
+          if (!Number.isFinite(sortOrder)) return sendJson(res, 400, { error: 'sort_order must be a number' }, corsHeaders);
+          updates.push('sort_order = ?');
+          params.push(sortOrder);
+        }
+
+        if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
+
+        params.push(id);
+        try {
+          const info = db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+          if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          if (msg.includes('UNIQUE') || msg.includes('constraint')) {
+            return sendJson(res, 409, { error: 'Unique constraint failed' }, corsHeaders);
+          }
+          throw e;
+        }
+
+        sseBroadcast({ type: 'agents.changed', payload: { agentId: id } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const agentResetMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/reset$/) : null;
+      if (agentResetMatch) {
+        const id = decodeURIComponent(agentResetMatch[1]);
+        const row = rowOrNull<any>(
+          db
+            .prepare('SELECT id, preset_key, preset_defaults_json FROM agents WHERE id = ?')
+            .all(id) as any
+        );
+        if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!row.preset_key) return sendJson(res, 400, { error: 'Agent is not a preset' }, corsHeaders);
+
+        const defaults = safeParseJson(row.preset_defaults_json, null);
+        if (!defaults || typeof defaults !== 'object') return sendJson(res, 500, { error: 'Preset defaults missing' }, corsHeaders);
+
+        const tags = normalizeStringArray((defaults as any).tags);
+        const skills = normalizeStringArray((defaults as any).skills);
+        const promptOverrides = pickPromptOverrides((defaults as any).prompt_overrides);
+
+        try {
+          db.prepare(
+            `UPDATE agents SET
+               display_name = ?,
+               description = ?,
+               emoji = ?,
+               openclaw_agent_id = ?,
+               enabled = ?,
+               role = ?,
+               category = ?,
+               tags_json = ?,
+               skills_json = ?,
+               prompt_overrides_json = ?,
+               sort_order = ?
+             WHERE id = ?`
+          ).run(
+            String((defaults as any).display_name ?? ''),
+            (defaults as any).description ?? null,
+            (defaults as any).emoji ?? null,
+            String((defaults as any).openclaw_agent_id ?? ''),
+            (defaults as any).enabled === false ? 0 : 1,
+            (defaults as any).role ?? null,
+            String((defaults as any).category ?? 'general'),
+            JSON.stringify(tags),
+            JSON.stringify(skills),
+            JSON.stringify(promptOverrides),
+            Number((defaults as any).sort_order ?? 0) || 0,
+            id
+          );
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          if (msg.includes('UNIQUE') || msg.includes('constraint')) {
+            return sendJson(res, 409, { error: 'Unique constraint failed' }, corsHeaders);
+          }
+          throw e;
+        }
+
+        sseBroadcast({ type: 'agents.changed', payload: { agentId: id } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const agentDuplicateMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/duplicate$/) : null;
+      if (agentDuplicateMatch) {
+        const id = decodeURIComponent(agentDuplicateMatch[1]);
+        const src = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 id,
+                 display_name,
+                 description,
+                 emoji,
+                 openclaw_agent_id,
+                 enabled,
+                 role,
+                 category,
+                 tags_json,
+                 skills_json,
+                 prompt_overrides_json,
+                 sort_order
+               FROM agents WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        if (!src) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+
+        const newId = randomUUID();
+        const suffix = newId.slice(0, 6);
+        const newOpenclawAgentId = `${String(src.openclaw_agent_id)}-copy-${suffix}`;
+
+        const sortOrderRow = rowOrNull<{ m: number }>(db.prepare('SELECT MAX(sort_order) as m FROM agents').all() as any);
+        const nextSort = Number(sortOrderRow?.m ?? 0) + 1;
+
+        try {
+          db.prepare(
+            `INSERT INTO agents(
+               id,
+               display_name,
+               description,
+               emoji,
+               openclaw_agent_id,
+               enabled,
+               role,
+               category,
+               tags_json,
+               skills_json,
+               prompt_overrides_json,
+               preset_key,
+               preset_defaults_json,
+               sort_order
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          ).run(
+            newId,
+            `${String(src.display_name)} (copy)`,
+            src.description ?? null,
+            src.emoji ?? null,
+            newOpenclawAgentId,
+            src.enabled ?? 1,
+            src.role ?? null,
+            src.category ?? 'general',
+            src.tags_json ?? '[]',
+            src.skills_json ?? '[]',
+            src.prompt_overrides_json ?? '{}',
+            nextSort
+          );
+        } catch (e: any) {
+          const msg = String(e?.message ?? e);
+          if (msg.includes('UNIQUE') || msg.includes('constraint')) {
+            return sendJson(res, 409, { error: 'Unique constraint failed' }, corsHeaders);
+          }
+          throw e;
+        }
+
+        sseBroadcast({ type: 'agents.changed', payload: { agentId: newId } });
+        return sendJson(res, 201, { id: newId }, corsHeaders);
+      }
+
+      const agentDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
+      if (agentDeleteMatch) {
+        const id = decodeURIComponent(agentDeleteMatch[1]);
+        const row = rowOrNull<any>(db.prepare('SELECT id, preset_key FROM agents WHERE id = ?').all(id) as any);
+        if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (row.preset_key) return sendJson(res, 400, { error: 'Cannot delete preset agent (disable it instead)' }, corsHeaders);
+        const info = db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        sseBroadcast({ type: 'agents.changed', payload: { agentId: id } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       if (req.method === 'PUT' && url.pathname === '/agents') {
@@ -1588,7 +2286,7 @@ function main() {
         if (!['plan', 'execute', 'report'].includes(mode)) {
           return sendJson(res, 400, { error: 'mode must be one of: plan, execute, report' }, corsHeaders);
         }
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const agentId = typeof body?.agentId === 'string' ? body.agentId : undefined;
         try {
           const result = await runTask({ taskId, mode: mode as any, agentId });
           return sendJson(res, 200, result, corsHeaders);
@@ -1705,15 +2403,16 @@ function main() {
         const taskId = decodeURIComponent(chatPost[1]);
         const body = await readJson(req);
         const text = typeof body?.text === 'string' ? body.text.trim() : '';
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const agentId = typeof body?.agentId === 'string' ? body.agentId : undefined;
         if (!text) return sendJson(res, 400, { error: 'text is required' }, corsHeaders);
 
         const task = getTaskMeta(taskId);
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
 
-        const session = ensureTaskSession(taskId, agentId);
+        const session = ensureTaskSession(taskId, agentId ?? null);
         const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
-        const agentOpenClawId = agentRow?.openclaw_agent_id ?? defaultAgentId || null;
+
+        const agentOpenClawId = (agentRow?.openclaw_agent_id ?? defaultAgentId) || null;
 
         const userMsgId = randomUUID();
         db.prepare('INSERT INTO task_messages(id, task_id, role, content) VALUES (?, ?, ?, ?)').run(

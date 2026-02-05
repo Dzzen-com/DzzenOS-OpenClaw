@@ -60,10 +60,27 @@ export type DocContent = {
 export type Agent = {
   id: string;
   display_name: string;
+  description?: string | null;
   emoji: string | null;
   openclaw_agent_id: string;
   enabled: boolean;
   role: string | null;
+  category?: string;
+  tags?: string[];
+  skills?: string[];
+  prompt_overrides?: {
+    system?: string;
+    plan?: string;
+    execute?: string;
+    chat?: string;
+    report?: string;
+  };
+  preset_key?: string | null;
+  sort_order?: number;
+  // Usage (read-only)
+  assigned_task_count?: number;
+  run_count_7d?: number;
+  last_used_at?: string | null;
   created_at: string;
   updated_at: string;
 };
