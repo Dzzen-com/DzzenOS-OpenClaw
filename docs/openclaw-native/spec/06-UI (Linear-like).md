@@ -48,6 +48,7 @@
 - Reasoning selector (auto/off/low/medium/high)
 - Stop run control (soft cancel)
 - Minimal activity ticker (latest steps)
+- Token usage hint (in/out or total)
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)

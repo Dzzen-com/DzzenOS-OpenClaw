@@ -35,6 +35,8 @@ export function TaskDrawer({
   const [tab, setTab] = useState<TabKey>('details');
   const [titleDraft, setTitleDraft] = useState('');
   const [descDraft, setDescDraft] = useState('');
+  const [stopConfirm, setStopConfirm] = useState(false);
+  const stopTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
 
@@ -125,6 +127,38 @@ export function TaskDrawer({
     const steps = activeRun?.steps ?? [];
     return steps.slice(-3).reverse();
   }, [activeRun?.steps]);
+  const inputTokens = activeRun?.input_tokens ?? null;
+  const outputTokens = activeRun?.output_tokens ?? null;
+  const totalTokens = activeRun?.total_tokens ?? null;
+  const tokenLabel = formatTokenLabel({ inputTokens, outputTokens, totalTokens });
+
+  useEffect(() => {
+    if (runStatus !== 'running') {
+      setStopConfirm(false);
+      if (stopTimer.current) {
+        clearTimeout(stopTimer.current);
+        stopTimer.current = null;
+      }
+    }
+  }, [runStatus]);
+
+  useEffect(() => {
+    if (!open || runStatus !== 'running') return;
+    const handler = (e: KeyboardEvent) => {
+      if (!e.shiftKey) return;
+      if (e.key.toLowerCase() !== 's') return;
+      e.preventDefault();
+      if (stopConfirm) {
+        if (task?.id) stopM.mutate(task.id);
+        return;
+      }
+      setStopConfirm(true);
+      if (stopTimer.current) clearTimeout(stopTimer.current);
+      stopTimer.current = setTimeout(() => setStopConfirm(false), 6000);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [open, runStatus, stopConfirm, task?.id, stopM]);
 
   return (
     <Dialog.Root
@@ -214,14 +248,46 @@ export function TaskDrawer({
             <Card>
               <CardHeader className="flex flex-row items-center justify-between gap-3">
                 <CardTitle>Agent status</CardTitle>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={!task?.id || runStatus !== 'running' || stopM.isPending}
-                  onClick={() => task?.id && stopM.mutate(task.id)}
-                >
-                  {stopM.isPending ? 'Stopping…' : 'Stop'}
-                </Button>
+                <div className="flex items-center gap-2">
+                  {stopConfirm ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        disabled={!task?.id || runStatus !== 'running' || stopM.isPending}
+                        onClick={() => task?.id && stopM.mutate(task.id)}
+                      >
+                        {stopM.isPending ? 'Stopping…' : 'Confirm stop'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setStopConfirm(false);
+                          if (stopTimer.current) {
+                            clearTimeout(stopTimer.current);
+                            stopTimer.current = null;
+                          }
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!task?.id || runStatus !== 'running' || stopM.isPending}
+                      onClick={() => {
+                        setStopConfirm(true);
+                        if (stopTimer.current) clearTimeout(stopTimer.current);
+                        stopTimer.current = setTimeout(() => setStopConfirm(false), 6000);
+                      }}
+                    >
+                      {stopM.isPending ? 'Stopping…' : 'Stop'}
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="pt-0">
                 <div className="flex flex-wrap items-center gap-3 text-sm text-foreground">
@@ -231,9 +297,7 @@ export function TaskDrawer({
                   </div>
                   {elapsed ? <span className="text-muted-foreground">• {elapsed}</span> : null}
                   {activeStageLabel ? <span className="text-muted-foreground">• {activeStageLabel}</span> : null}
-                  {Number.isFinite(activeRun?.total_tokens) ? (
-                    <span className="text-muted-foreground">• {activeRun?.total_tokens} tokens</span>
-                  ) : null}
+                  {tokenLabel ? <span className="text-muted-foreground">• {tokenLabel}</span> : null}
                 </div>
 
                 <div className="mt-3 grid grid-cols-3 gap-1">
@@ -246,7 +310,7 @@ export function TaskDrawer({
                         : state === 'failed'
                           ? 'bg-danger/70'
                           : isActive
-                            ? 'bg-info/70'
+                            ? 'bg-gradient-to-r from-info/80 via-primary/70 to-accent/70 shadow-inner'
                             : 'bg-border/70';
                     return (
                       <div
@@ -584,4 +648,22 @@ function runStatusLabel(status?: string | null) {
   if (status === 'succeeded') return 'Completed';
   if (status === 'cancelled') return 'Cancelled';
   return 'Idle';
+}
+
+function formatTokens(value: number | null | undefined) {
+  if (!Number.isFinite(value)) return null;
+  const n = Number(value);
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}m`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(Math.round(n));
+}
+
+function formatTokenLabel(input: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) {
+  const input = formatTokens(input.inputTokens);
+  const output = formatTokens(input.outputTokens);
+  const total = formatTokens(input.totalTokens);
+  if (input || output) {
+    return `${input ?? '—'} in / ${output ?? '—'} out`;
+  }
+  return total ? `${total} tokens` : null;
 }

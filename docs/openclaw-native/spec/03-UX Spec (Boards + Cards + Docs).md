@@ -80,6 +80,8 @@ Bulk actions:
 - Reasoning control per task (auto/off/low/medium/high) with info tooltip
 - Stop run button (soft cancel) for active sessions
 - Minimal activity ticker (last 2–3 steps) inside the task drawer
+- Token usage hint (input/output or total) when available
+- Stop confirmation (two-step) + Shift+S shortcut in drawer
 
 ---
 
