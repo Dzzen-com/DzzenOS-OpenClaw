@@ -26,6 +26,11 @@ import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 
+type SseClient = {
+  id: string;
+  res: http.ServerResponse;
+};
+
 import { migrate } from '../db/migrate.ts';
 import {
   defaultAuthFile,
@@ -137,6 +142,33 @@ function getDefaultBoardId(db: DatabaseSync): string | null {
 }
 
 function main() {
+  const sseClients = new Map<string, SseClient>();
+
+  function sseBroadcast(event: { type: string; payload?: any }) {
+    const data = JSON.stringify({ ts: Date.now(), ...event });
+    for (const c of sseClients.values()) {
+      try {
+        c.res.write(`event: dzzenos\n`);
+        c.res.write(`data: ${data}\n\n`);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function sseHeartbeat() {
+    for (const c of sseClients.values()) {
+      try {
+        c.res.write(`: ping ${Date.now()}\n\n`);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  // Keep SSE connections alive (some proxies close idle connections)
+  setInterval(sseHeartbeat, 15_000).unref?.();
+
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const repoRoot = path.resolve(__dirname, '../../..');
@@ -357,6 +389,33 @@ function main() {
         return;
       }
 
+      // --- Events (SSE) ---
+      if (req.method === 'GET' && url.pathname === '/events') {
+        // Basic SSE endpoint for real-time UI updates.
+        // Client: EventSource(`${API_BASE}/events`).
+        const id = randomUUID();
+
+        res.writeHead(200, {
+          ...corsHeaders,
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-store, must-revalidate',
+          connection: 'keep-alive',
+          // Disable buffering in some proxies
+          'x-accel-buffering': 'no',
+        });
+
+        res.write(`event: dzzenos\n`);
+        res.write(`data: ${JSON.stringify({ ts: Date.now(), type: 'hello' })}\n\n`);
+
+        sseClients.set(id, { id, res });
+
+        req.on('close', () => {
+          sseClients.delete(id);
+        });
+
+        return;
+      }
+
       // --- API ---
       if (req.method === 'GET' && url.pathname === '/runs') {
         const status = url.searchParams.get('status');
@@ -491,6 +550,8 @@ function main() {
              WHERE id = ? AND status = 'pending'`
           )
           .run(nextStatus, decidedBy, reason, id);
+
+        sseBroadcast({ type: 'approvals.changed', payload: { approvalId: id, status: nextStatus } });
         if (info.changes === 0) {
           return sendJson(res, 409, { error: 'Approval already decided' }, corsHeaders);
         }
@@ -654,6 +715,7 @@ function main() {
           throw e;
         }
 
+        sseBroadcast({ type: 'runs.changed', payload: { runId, automationId: id } });
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
@@ -752,6 +814,8 @@ function main() {
           description
         );
 
+        sseBroadcast({ type: 'tasks.changed', payload: { boardId, taskId: id } });
+
         const task = rowOrNull<any>(
           db.prepare(
             'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
@@ -802,6 +866,8 @@ function main() {
           db.prepare(
             'INSERT INTO approvals(id, run_id, step_id, status, request_title, request_body) VALUES (?, ?, ?, ?, ?, ?)'
           ).run(approvalId, runId, stepId, 'pending', requestTitle, requestBody);
+
+          sseBroadcast({ type: 'approvals.changed', payload: { approvalId, status: 'pending', taskId } });
 
           db.exec('COMMIT');
 
@@ -893,6 +959,7 @@ function main() {
           }
         })();
 
+        sseBroadcast({ type: 'runs.changed', payload: { runId, taskId } });
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
@@ -982,6 +1049,8 @@ function main() {
         params.push(id);
         const info = db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...params);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id } });
 
         const task = rowOrNull<any>(
           db.prepare(

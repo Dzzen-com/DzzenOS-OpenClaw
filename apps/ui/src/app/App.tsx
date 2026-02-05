@@ -14,6 +14,7 @@ import { Spinner } from '../components/ui/Spinner';
 
 import type { Task } from '../api/types';
 import { createTask, listTasks } from '../api/queries';
+import { startRealtime } from './realtime';
 
 export function App() {
   const qc = useQueryClient();
@@ -46,6 +47,13 @@ export function App() {
   useEffect(() => {
     setSelectedTaskId(null);
   }, [selectedBoardId]);
+
+  // Real-time updates (SSE)
+  useEffect(() => {
+    const apiBase = (import.meta as any).env?.VITE_API_BASE as string | undefined;
+    const base = typeof apiBase === 'string' && apiBase.trim() ? apiBase.trim() : 'http://127.0.0.1:8787';
+    return startRealtime({ apiBase: base, qc });
+  }, [qc]);
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
