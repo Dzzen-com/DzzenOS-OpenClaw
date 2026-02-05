@@ -1,0 +1,6 @@
+# When opening a new issue, GitHub will offer: Bug report, Feature request (and Blank if enabled).
+blank_issues_enabled: true
+contact_links:
+  - name: 💬 Discussions
+    url: https://github.com/Dzzen-com/DzzenOS-OpenClaw/discussions
+    about: Questions and open-ended ideas (use instead of a blank issue)
