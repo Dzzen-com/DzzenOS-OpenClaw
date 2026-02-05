@@ -14,6 +14,9 @@ REPO_DIR="${REPO_DIR:-$HOME/dzzenos-openclaw}"
 AUTH_FILE="${AUTH_FILE:-/etc/dzzenos/auth.json}"
 USERNAME="${USERNAME:-}"
 PASSWORD="${PASSWORD:-}"
+AUTH_TTL_SECONDS="${AUTH_TTL_SECONDS:-604800}"
+AUTH_PASSWORD_POLICY="${AUTH_PASSWORD_POLICY:-strict}"
+AUTH_COOKIE_SAMESITE="${AUTH_COOKIE_SAMESITE:-Strict}"
 
 # HSTS: off | on | auto
 # - auto: enable only after HTTPS works (certificate issued)
@@ -43,10 +46,32 @@ if [ -z "$GATEWAY_TOKEN" ]; then
   exit 2
 fi
 
+if command -v getent >/dev/null 2>&1; then
+  echo "[dzzenos] DNS check: resolving $DOMAIN..."
+  getent ahosts "$DOMAIN" | head -n 3 || true
+else
+  echo "WARN: getent not available; DNS check skipped." >&2
+fi
+
+# Warn if gateway bind looks non-loopback
+GATEWAY_BIND=""
+if [ -f "$OPENCLAW_CONFIG_PATH" ]; then
+  GATEWAY_BIND=$(node -e 'try{const j=require(process.env.OPENCLAW_CONFIG_PATH);const v=j?.gateway?.bind??j?.gateway?.host??j?.gateway?.listen??"";process.stdout.write(String(v||""));}catch(e){process.exit(0)}')
+fi
+if [ -n "$GATEWAY_BIND" ]; then
+  case "$GATEWAY_BIND" in
+    127.0.0.1|localhost|::1) ;;
+    *) echo "WARN: OpenClaw Gateway bind appears non-loopback ($GATEWAY_BIND). Recommended: loopback only." >&2 ;;
+  esac
+fi
+
 # 1) init auth file
 mkdir -p /etc/dzzenos
 chmod 700 /etc/dzzenos
-node --experimental-strip-types "$REPO_DIR/scripts/init-auth.mjs" --file "$AUTH_FILE" --username "$USERNAME" --password "$PASSWORD" >/dev/null
+AUTH_TTL_SECONDS="$AUTH_TTL_SECONDS" AUTH_PASSWORD_POLICY="$AUTH_PASSWORD_POLICY" \
+  node --experimental-strip-types "$REPO_DIR/scripts/init-auth.mjs" \
+  --file "$AUTH_FILE" --username "$USERNAME" --password "$PASSWORD" \
+  --ttl-seconds "$AUTH_TTL_SECONDS" --password-policy "$AUTH_PASSWORD_POLICY" >/dev/null
 chmod 600 "$AUTH_FILE"
 
 # 2) systemd unit for dzzenos api
@@ -61,6 +86,8 @@ WorkingDirectory=$REPO_DIR
 Environment=PORT=$API_PORT
 Environment=HOST=$API_HOST
 Environment=DZZENOS_AUTH_FILE=$AUTH_FILE
+Environment=AUTH_TTL_SECONDS=$AUTH_TTL_SECONDS
+Environment=AUTH_COOKIE_SAMESITE=$AUTH_COOKIE_SAMESITE
 ExecStart=/usr/bin/node --experimental-strip-types $REPO_DIR/skills/dzzenos/api/server.ts --port $API_PORT --host $API_HOST --db $REPO_DIR/data/dzzenos.db
 Restart=on-failure
 RestartSec=2

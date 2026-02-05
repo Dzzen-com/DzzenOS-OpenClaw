@@ -45,6 +45,10 @@ What it does:
 Open:
 - `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if required)
 
+Note:
+- In **domain mode**, unauthenticated users only see the login page.
+- After login, DzzenOS opens, and the **OpenClaw UI** is accessible from the menu.
+
 ---
 
 ## Notes

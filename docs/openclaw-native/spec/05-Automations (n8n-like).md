@@ -15,6 +15,12 @@
 3) **Observability**: execution trace, step logs, error handling, retries.
 4) **Security-first**: webhooks подписаны; JS sandbox; external actions через approvals.
 
+UI стиль (обязательное):
+- единые токены/цвета/типографика как в Kanban
+- общие компоненты: карточки, кнопки, инлайн‑алерты, skeleton
+- адаптивность: mobile‑nav, корректные паддинги, без горизонтального скролла
+- быстрый UX: локальный cache, минимальные перерисовки
+
 ---
 
 ## 1) Что такое Flow

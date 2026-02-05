@@ -1,5 +1,6 @@
 import type { Task } from '../../api/types';
 import { Badge } from '../ui/Badge';
+import { StatusDot } from '../ui/StatusDot';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/Table';
 import { statusLabel } from './status';
 import { shortId } from './taskId';
@@ -66,9 +67,27 @@ function StatusPill({ status }: { status: Task['status'] }) {
       ? 'success'
       : status === 'doing'
         ? 'info'
-        : status === 'blocked'
-          ? 'danger'
+        : status === 'review' || status === 'release'
+          ? 'warning'
+          : status === 'archived'
+            ? 'default'
           : 'default';
 
-  return <Badge variant={variant as any}>{statusLabel(status)}</Badge>;
+  const tone =
+    variant === 'success'
+      ? 'success'
+      : variant === 'info'
+        ? 'info'
+        : variant === 'warning'
+          ? 'warning'
+          : variant === 'danger'
+            ? 'danger'
+            : 'muted';
+
+  return (
+    <div className="inline-flex items-center gap-2">
+      <StatusDot tone={tone} />
+      <Badge variant={variant as any}>{statusLabel(status)}</Badge>
+    </div>
+  );
 }

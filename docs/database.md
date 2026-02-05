@@ -32,7 +32,12 @@ Entities included:
 - `workspaces`
 - `boards`
 - `tasks`
+- `task_sessions` (agent session per task)
+- `task_checklist_items`
+- `task_messages` (chat cache)
 - `agent_runs`
 - `run_steps`
 - `approvals` (`pending` / `approved` / `rejected`)
 - `artifacts` (metadata only)
+- `agents`
+- `automations`

@@ -18,6 +18,41 @@ export type AuthConfigV1 = {
   };
 };
 
+const DEFAULT_TTL_SECONDS = 60 * 60 * 24 * 7;
+const DEFAULT_PASSWORD_POLICY = 'strict';
+
+function enforcePasswordPolicy(password: string, policy: string) {
+  const p = policy?.trim().toLowerCase() || DEFAULT_PASSWORD_POLICY;
+  if (p === 'none') return;
+
+  if (p === 'moderate') {
+    const ok =
+      password.length >= 10 &&
+      /[a-z]/.test(password) &&
+      /[A-Z]/.test(password) &&
+      /[0-9]/.test(password);
+    if (!ok) {
+      throw new Error(
+        'password policy: at least 10 chars with upper, lower, and number'
+      );
+    }
+    return;
+  }
+
+  // strict (default)
+  const ok =
+    password.length >= 12 &&
+    /[a-z]/.test(password) &&
+    /[A-Z]/.test(password) &&
+    /[0-9]/.test(password) &&
+    /[^A-Za-z0-9]/.test(password);
+  if (!ok) {
+    throw new Error(
+      'password policy: at least 12 chars with upper, lower, number, and symbol'
+    );
+  }
+}
+
 export function defaultAuthFile(repoRoot: string): string {
   return path.join(repoRoot, 'data', 'auth.json');
 }
@@ -30,7 +65,8 @@ export function loadAuthConfig(filePath: string): AuthConfigV1 | null {
     if (typeof parsed.username !== 'string' || !parsed.username.trim()) return null;
     if (!parsed.password || typeof parsed.password.salt !== 'string' || typeof parsed.password.hash !== 'string') return null;
     if (!parsed.cookie || typeof parsed.cookie.secret !== 'string') return null;
-    const ttlSeconds = typeof parsed.cookie.ttlSeconds === 'number' ? parsed.cookie.ttlSeconds : 60 * 60 * 24 * 30;
+    const ttlSeconds =
+      typeof parsed.cookie.ttlSeconds === 'number' ? parsed.cookie.ttlSeconds : DEFAULT_TTL_SECONDS;
     const name = typeof parsed.cookie.name === 'string' && parsed.cookie.name.trim() ? parsed.cookie.name.trim() : 'dzzenos_session';
 
     return {
@@ -66,10 +102,13 @@ export function createAuthConfig(params: {
   password: string;
   cookieName?: string;
   ttlSeconds?: number;
+  passwordPolicy?: string;
 }): AuthConfigV1 {
   const username = params.username.trim();
   if (!username) throw new Error('username is required');
   if (!params.password) throw new Error('password is required');
+
+  enforcePasswordPolicy(params.password, params.passwordPolicy ?? DEFAULT_PASSWORD_POLICY);
 
   const salt = crypto.randomBytes(16);
   const keylen = 64;
@@ -89,7 +128,7 @@ export function createAuthConfig(params: {
     cookie: {
       secret: secret.toString('hex'),
       name: params.cookieName?.trim() || 'dzzenos_session',
-      ttlSeconds: params.ttlSeconds ?? 60 * 60 * 24 * 30,
+      ttlSeconds: params.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     },
   };
 }

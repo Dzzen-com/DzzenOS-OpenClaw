@@ -8,7 +8,8 @@ export type Board = {
   updated_at: string;
 };
 
-export type TaskStatus = 'todo' | 'doing' | 'done' | 'blocked';
+export type TaskStatus = 'ideas' | 'todo' | 'doing' | 'review' | 'release' | 'done' | 'archived';
+export type ChecklistState = 'todo' | 'doing' | 'done';
 
 export type Task = {
   id: string;
@@ -18,6 +19,51 @@ export type Task = {
   status: TaskStatus;
   position: number;
   due_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskSession = {
+  task_id: string;
+  agent_id: string | null;
+  session_key: string;
+  status: 'idle' | 'running' | 'failed';
+  last_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+  agent_display_name?: string | null;
+  agent_openclaw_id?: string | null;
+};
+
+export type TaskChecklistItem = {
+  id: string;
+  task_id: string;
+  title: string;
+  state: ChecklistState;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskMessage = {
+  id: string;
+  task_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  created_at: string;
+};
+
+export type DocContent = {
+  content: string;
+};
+
+export type Agent = {
+  id: string;
+  display_name: string;
+  emoji: string | null;
+  openclaw_agent_id: string;
+  enabled: boolean;
+  role: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -3,12 +3,17 @@ import type {
   AgentRun,
   AgentRunListItem,
   AgentRunStatus,
+  Agent,
   Approval,
   ApprovalStatus,
   Automation,
   Board,
+  DocContent,
   Task,
+  TaskChecklistItem,
+  TaskMessage,
   TaskStatus,
+  TaskSession,
 } from './types';
 
 export function listBoards(): Promise<Board[]> {
@@ -20,17 +25,32 @@ export function listTasks(boardId: string): Promise<Task[]> {
   return apiFetch(`/tasks?${qs.toString()}`);
 }
 
-export function createTask(input: { title: string; description?: string; boardId: string }): Promise<Task> {
+export function createTask(input: { title: string; description?: string; boardId: string; status?: TaskStatus }): Promise<Task> {
   return apiFetch('/tasks', {
     method: 'POST',
-    body: JSON.stringify({ title: input.title, description: input.description ?? null, boardId: input.boardId }),
+    body: JSON.stringify({
+      title: input.title,
+      description: input.description ?? null,
+      boardId: input.boardId,
+      status: input.status,
+    }),
   });
 }
 
-export function patchTask(id: string, patch: { status?: TaskStatus; title?: string; description?: string | null }): Promise<Task> {
+export function patchTask(
+  id: string,
+  patch: { status?: TaskStatus; title?: string; description?: string | null; position?: number }
+): Promise<Task> {
   return apiFetch(`/tasks/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+  });
+}
+
+export function reorderTasks(input: { boardId: string; orderedIds: string[] }): Promise<{ ok: boolean }> {
+  return apiFetch('/tasks/reorder', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }
 
@@ -38,8 +58,68 @@ export function simulateRun(taskId: string): Promise<{ runId: string }> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/simulate-run`, { method: 'POST' });
 }
 
+export function runTask(taskId: string, input: { mode: 'plan' | 'execute' | 'report'; agentId?: string }): Promise<any> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/run`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
 export function listTaskRuns(taskId: string): Promise<AgentRun[]> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/runs`);
+}
+
+export function getTaskSession(taskId: string): Promise<TaskSession> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`);
+}
+
+export function upsertTaskSession(taskId: string, input: { agentId?: string | null }): Promise<TaskSession> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function listChecklist(taskId: string): Promise<TaskChecklistItem[]> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/checklist`);
+}
+
+export function createChecklistItem(taskId: string, input: { title: string; state?: string; position?: number }): Promise<TaskChecklistItem> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/checklist`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateChecklistItem(
+  taskId: string,
+  itemId: string,
+  input: { title?: string; state?: string; position?: number }
+): Promise<TaskChecklistItem> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/checklist/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteChecklistItem(taskId: string, itemId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/checklist/${encodeURIComponent(itemId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function getTaskChat(taskId: string): Promise<TaskMessage[]> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/chat`);
+}
+
+export function sendTaskChat(
+  taskId: string,
+  input: { text: string; agentId?: string }
+): Promise<{ reply: string }> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/chat`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
 
 export function listRuns(input?: { status?: AgentRunStatus; stuckMinutes?: number }): Promise<AgentRunListItem[]> {
@@ -107,4 +187,50 @@ export function updateAutomation(id: string, patch: { name?: string; description
 
 export function runAutomation(id: string): Promise<{ runId: string }> {
   return apiFetch(`/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
+}
+
+// --- Agents ---
+export function listAgents(): Promise<Agent[]> {
+  return apiFetch('/agents');
+}
+
+export function updateAgents(input: Agent[]): Promise<Agent[]> {
+  return apiFetch('/agents', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+// --- Docs ---
+export function getOverviewDoc(): Promise<DocContent> {
+  return apiFetch('/docs/overview');
+}
+
+export function updateOverviewDoc(content: string): Promise<{ ok: boolean }> {
+  return apiFetch('/docs/overview', {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function getBoardDoc(boardId: string): Promise<DocContent> {
+  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}`);
+}
+
+export function updateBoardDoc(boardId: string, content: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function getBoardChangelog(boardId: string): Promise<DocContent> {
+  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}/changelog`);
+}
+
+export function appendBoardSummary(boardId: string, input: { title: string; summary: string }): Promise<{ ok: boolean }> {
+  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}/summary`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
 }
