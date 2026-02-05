@@ -84,6 +84,7 @@ Bulk actions:
 - Stop confirmation (two-step) + Shift+S shortcut in drawer
 - Stage badge in status strip (glowing dot)
 - Subtle agent heartbeat on kanban cards while running
+- Stage icons in activity ticker
 
 ---
 

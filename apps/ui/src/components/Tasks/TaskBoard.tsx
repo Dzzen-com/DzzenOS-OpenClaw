@@ -69,6 +69,7 @@ function runLabel(status?: string | null, startedAt?: string | null) {
   }
   if (status === 'failed') return 'Failed';
   if (status === 'succeeded') return 'Done';
+  if (status === 'cancelled') return 'Paused';
   return 'Idle';
 }
 

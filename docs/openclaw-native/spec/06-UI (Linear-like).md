@@ -51,6 +51,7 @@
 - Token usage hint (in/out or total)
 - Stage badge in status strip (glowing dot)
 - Agent heartbeat on card while running
+- Stage icons in activity ticker
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)

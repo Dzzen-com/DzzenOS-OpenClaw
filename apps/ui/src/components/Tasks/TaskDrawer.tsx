@@ -14,6 +14,7 @@ import { TaskChat } from './TaskChat';
 import { Badge } from '../ui/Badge';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { StatusDot } from '../ui/StatusDot';
+import { IconExecute, IconPlan, IconReport } from '../ui/Icons';
 import { Input } from '../ui/Input';
 import { Checklist } from './Checklist';
 import { TaskAgent } from './TaskAgent';
@@ -300,7 +301,7 @@ export function TaskDrawer({
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
-                <div className="flex flex-wrap items-center gap-3 text-sm text-foreground">
+                <div className="flex flex-col items-start gap-2 text-sm text-foreground sm:flex-row sm:items-center sm:gap-3">
                   <div className="flex items-center gap-2">
                     <StatusDot tone={runTone(runStatus)} pulse={runStatus === 'running'} />
                     <span>{runStatusLabel(runStatus)}</span>
@@ -312,7 +313,9 @@ export function TaskDrawer({
                       {activeStageLabel}
                     </span>
                   ) : null}
-                  {tokenLabel && showTokenLabel ? <span className="text-muted-foreground">• {tokenLabel}</span> : null}
+                  {tokenLabel && showTokenLabel ? (
+                    <span className="hidden text-muted-foreground sm:inline">• {tokenLabel}</span>
+                  ) : null}
                 </div>
 
                 <div className="mt-3 grid grid-cols-3 gap-1">
@@ -330,7 +333,7 @@ export function TaskDrawer({
                     return (
                       <div
                         key={step}
-                        className={`h-2 rounded-full ${base} ${isActive ? 'animate-pulse' : ''}`}
+                        className={`h-1.5 rounded-full sm:h-2 ${base} ${isActive ? 'animate-pulse' : ''}`}
                         aria-label={`Step ${idx + 1}`}
                       />
                     );
@@ -342,7 +345,7 @@ export function TaskDrawer({
                   <span className="text-right">Report</span>
                 </div>
 
-                <div className="mt-3 rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2">
+                <div className="mt-3 hidden rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2 sm:block">
                   <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
                     Latest activity
                   </div>
@@ -350,7 +353,10 @@ export function TaskDrawer({
                     <div className="mt-2 grid gap-1 text-xs text-foreground">
                       {recentActivity.map((step) => (
                         <div key={step.id} className="flex items-center justify-between gap-3">
-                          <span className="truncate">{stageLabel(step.kind) ?? step.kind}</span>
+                          <span className="flex items-center gap-2 truncate">
+                            <span className="text-muted-foreground">{stageIcon(step.kind)}</span>
+                            {stageLabel(step.kind) ?? step.kind}
+                          </span>
                           <span className="text-muted-foreground">{step.status}</span>
                         </div>
                       ))}
@@ -661,8 +667,15 @@ function runStatusLabel(status?: string | null) {
   if (status === 'running') return 'Running';
   if (status === 'failed') return 'Failed';
   if (status === 'succeeded') return 'Completed';
-  if (status === 'cancelled') return 'Cancelled';
+  if (status === 'cancelled') return 'Paused';
   return 'Idle';
+}
+
+function stageIcon(kind?: string | null) {
+  if (kind === 'plan') return <IconPlan className="h-3 w-3" />;
+  if (kind === 'execute') return <IconExecute className="h-3 w-3" />;
+  if (kind === 'report') return <IconReport className="h-3 w-3" />;
+  return <IconPlan className="h-3 w-3" />;
 }
 
 function formatTokens(value: number | null | undefined) {
