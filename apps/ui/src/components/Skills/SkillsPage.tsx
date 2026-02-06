@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { InstalledSkill, MarketplaceSkill, SkillCapabilities } from '../../api/types';
 import {
@@ -62,6 +63,7 @@ function skillHaystack(s: { slug: string; display_name?: string | null; descript
 }
 
 export function SkillsPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
 
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -146,14 +148,14 @@ export function SkillsPage() {
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="Skills"
-        subtitle="Installed skills and available presets."
+        title={t('Skills')}
+        subtitle={t('Installed skills and available presets.')}
         actions={
           <div className="w-full sm:w-auto">
             <div className="rounded-xl border border-border/70 bg-gradient-to-b from-surface-2/70 to-surface-1/70 p-2 shadow-panel backdrop-blur">
               <div className="flex w-full flex-col gap-2 lg:w-[620px] lg:flex-row lg:items-end">
                 <div className="min-w-0 flex-1">
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Search skills</label>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Search skills')}</label>
                   <div className="relative">
                     <svg
                       viewBox="0 0 20 20"
@@ -170,7 +172,7 @@ export function SkillsPage() {
                       ref={searchRef}
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Name, slug, description, tier, capabilities..."
+                      placeholder={t('Name, slug, description, tier, capabilities...')}
                       className="bg-background/35 pl-9 pr-12"
                     />
                     <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 bg-surface-2/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -180,7 +182,7 @@ export function SkillsPage() {
                 </div>
                 {showClear ? (
                   <Button variant="ghost" className="lg:self-end" onClick={() => setSearch('')}>
-                    Clear
+                    {t('Clear')}
                   </Button>
                 ) : null}
                 <Button
@@ -190,7 +192,7 @@ export function SkillsPage() {
                     setDrawerOpen(true);
                   }}
                 >
-                  Add skill
+                  {t('Add skill')}
                 </Button>
               </div>
             </div>
@@ -208,17 +210,17 @@ export function SkillsPage() {
         <div className="flex items-end justify-between gap-3">
           <div>
             <div className="text-sm font-semibold">Installed</div>
-            <div className="mt-1 text-xs text-muted-foreground">Skills installed in your local SQLite database.</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t('Skills installed in your local SQLite database.')}</div>
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span>{installedFiltered.length} shown</span>
+            <span>{t('{{count}} shown', { count: installedFiltered.length })}</span>
             {installedDisabled.length > 0 ? (
               <button
                 type="button"
                 className="rounded-md border border-border/70 bg-surface-2/40 px-2 py-1 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
                 onClick={() => setShowDisabled((v) => !v)}
               >
-                {showDisabled ? 'Hide disabled' : `Show disabled (${installedDisabled.length})`}
+                {showDisabled ? t('Hide disabled') : t('Show disabled ({{count}})', { count: installedDisabled.length })}
               </button>
             ) : null}
           </div>
@@ -228,7 +230,7 @@ export function SkillsPage() {
           {skillsQ.isLoading && installedSkills.length === 0 ? (
             <CardsSkeleton />
           ) : installedActive.length === 0 && installedDisabled.length === 0 ? (
-            <EmptyState title="No skills installed" subtitle="Install presets below or add one manually." />
+            <EmptyState title={t('No skills installed')} subtitle={t('Install presets below or add one manually.')} />
           ) : (
             <div className="grid gap-6">
               {installedActive.length > 0 ? (
@@ -251,7 +253,7 @@ export function SkillsPage() {
                   ))}
                 </div>
               ) : (
-                <EmptyState title="No active skills" subtitle="Enable an installed skill, install a preset, or add a new one." />
+                <EmptyState title={t('No active skills')} subtitle={t('Enable an installed skill, install a preset, or add a new one.')} />
               )}
 
               {showDisabled && installedDisabled.length > 0 ? (
@@ -288,19 +290,19 @@ export function SkillsPage() {
       <section className="mt-2">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold">Available presets</div>
+            <div className="text-sm font-semibold">{t('Available presets')}</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Install official presets. Pro items are visible but locked until subscriptions ship.
+              {t('Install official presets. Pro items are visible but locked until subscriptions ship.')}
             </div>
           </div>
-          <div className="text-xs text-muted-foreground">{availableFiltered.length} shown</div>
+          <div className="text-xs text-muted-foreground">{t('{{count}} shown', { count: availableFiltered.length })}</div>
         </div>
 
         <div className="mt-3">
           {marketplaceQ.isLoading && availablePresets.length === 0 ? (
             <CardsSkeleton />
           ) : availableFiltered.length === 0 ? (
-            <EmptyState title="No presets found" subtitle="Try clearing search." />
+            <EmptyState title={t('No presets found')} subtitle={t('Try clearing search.')} />
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {availableFiltered.map((p) => (
@@ -345,6 +347,7 @@ function CardsSkeleton() {
 }
 
 function CapabilityBadges({ caps }: { caps: SkillCapabilities }) {
+  const { t } = useTranslation();
   const labels = capabilityLabels(caps);
   if (!labels.length) return null;
   const secretsCount = caps.secrets?.length ?? 0;
@@ -352,22 +355,22 @@ function CapabilityBadges({ caps }: { caps: SkillCapabilities }) {
     <>
       {caps.network ? (
         <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-          Network
+          {t('Network')}
         </Badge>
       ) : null}
       {caps.filesystem ? (
         <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-          Files
+          {t('Files')}
         </Badge>
       ) : null}
       {caps.external_write ? (
         <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-          Write
+          {t('Write')}
         </Badge>
       ) : null}
       {secretsCount > 0 ? (
         <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-          Secrets:{' '}
+          {t('Secrets:')}{' '}
           <span className="ml-1 font-mono text-foreground/90">{secretsCount}</span>
         </Badge>
       ) : null}
@@ -388,6 +391,7 @@ function InstalledSkillCard({
   onUninstall: () => void;
   busy?: boolean;
 }) {
+  const { t } = useTranslation();
   const name = skill.display_name ?? skill.slug;
   const tier = (skill.tier ?? 'community') as InstalledSkill['tier'];
   const caps = skill.capabilities ?? {};
@@ -408,7 +412,7 @@ function InstalledSkillCard({
           </div>
         </div>
         <Button size="sm" variant="secondary" onClick={onConfigure}>
-          Configure
+          {t('Configure')}
         </Button>
       </div>
 
@@ -424,7 +428,7 @@ function InstalledSkillCard({
         ) : null}
         {!skill.enabled ? (
           <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-            Disabled
+            {t('Disabled')}
           </Badge>
         ) : null}
       </div>
@@ -437,11 +441,11 @@ function InstalledSkillCard({
           disabled={busy}
           title="Uninstall skill"
         >
-          Uninstall
+          {t('Uninstall')}
         </button>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={skill.enabled} onChange={(e) => onToggleEnabled(e.target.checked)} disabled={busy} />
-          Enabled
+          {t('Enabled')}
         </label>
       </div>
     </div>
@@ -457,8 +461,9 @@ function AvailableSkillCard({
   onInstall: () => void;
   installing: boolean;
 }) {
+  const { t } = useTranslation();
   const locked = preset.requires_subscription;
-  const badgeLabel = locked ? 'Pro' : 'Free';
+  const badgeLabel = locked ? t('Pro') : t('Free');
   const caps = preset.capabilities ?? {};
 
   return (
@@ -472,7 +477,7 @@ function AvailableSkillCard({
           </div>
         </div>
         <Button size="sm" onClick={onInstall} disabled={locked || installing}>
-          {locked ? 'Locked' : installing ? 'Installing…' : 'Install'}
+          {locked ? t('Locked') : installing ? t('Installing…') : t('Install')}
         </Button>
       </div>
 
@@ -487,7 +492,7 @@ function AvailableSkillCard({
       </div>
 
       {locked ? (
-        <div className="mt-3 text-xs text-muted-foreground">Subscription required (soon).</div>
+        <div className="mt-3 text-xs text-muted-foreground">{t('Subscription required (soon).')}</div>
       ) : null}
     </div>
   );

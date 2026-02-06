@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../Layout/PageHeader';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/cn';
+import { useTranslation } from 'react-i18next';
 
 type Locale = 'en' | 'ru';
 
@@ -808,7 +809,8 @@ function sectionMarkdown(section: DocsSection, locale: Locale): string {
 }
 
 export function DocsPage() {
-  const [locale, setLocale] = useState<Locale>('en');
+  const { i18n } = useTranslation();
+  const locale: Locale = i18n.resolvedLanguage === 'ru' ? 'ru' : 'en';
   const [query, setQuery] = useState('');
   const [activeSectionId, setActiveSectionId] = useState(DOCS_SECTIONS[0]?.id ?? '');
   const [pageFeedback, setPageFeedback] = useState('');
@@ -882,33 +884,8 @@ export function DocsPage() {
   return (
     <div className="flex w-full flex-col gap-5 text-slate-100">
       <PageHeader
-        title="Docs"
+        title={locale === 'ru' ? 'Документация' : 'Docs'}
         subtitle={l(UI_COPY.pageSubtitle, locale)}
-        actions={
-          <div className="flex items-center gap-2 rounded-md bg-slate-900/65 px-2 py-1">
-            <span className="text-xs text-slate-400">{l(UI_COPY.language, locale)}</span>
-            <button
-              type="button"
-              onClick={() => setLocale('en')}
-              className={cn(
-                'rounded px-2 py-1 text-xs transition',
-                locale === 'en' ? 'bg-sky-500/20 text-sky-300' : 'text-slate-400 hover:text-slate-100',
-              )}
-            >
-              EN
-            </button>
-            <button
-              type="button"
-              onClick={() => setLocale('ru')}
-              className={cn(
-                'rounded px-2 py-1 text-xs transition',
-                locale === 'ru' ? 'bg-sky-500/20 text-sky-300' : 'text-slate-400 hover:text-slate-100',
-              )}
-            >
-              RU
-            </button>
-          </div>
-        }
       />
 
       <div className="border-b border-slate-800/80 pb-3">

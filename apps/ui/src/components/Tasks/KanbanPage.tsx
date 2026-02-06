@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { Board, Task, TaskStatus } from '../../api/types';
 import { createBoard, patchTask } from '../../api/queries';
@@ -16,16 +17,9 @@ import { EmptyState } from '../ui/EmptyState';
 import { TaskBoard } from './TaskBoard';
 import { TaskBoardSkeleton } from './TaskBoardSkeleton';
 import { NewTask } from './NewTask';
+import { statusLabel } from './status';
 
-const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
-  { value: 'ideas', label: 'Ideas' },
-  { value: 'todo', label: 'To do' },
-  { value: 'doing', label: 'In progress' },
-  { value: 'review', label: 'Review' },
-  { value: 'release', label: 'Release' },
-  { value: 'done', label: 'Done' },
-  { value: 'archived', label: 'Archived' },
-];
+const STATUS_OPTIONS: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
 
 export function KanbanPage({
   boards,
@@ -66,6 +60,7 @@ export function KanbanPage({
   moveError: unknown | null;
   reorderError: unknown | null;
 }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
@@ -81,7 +76,7 @@ export function KanbanPage({
   const createM = useMutation({
     mutationFn: async () => {
       const trimmed = name.trim();
-      if (!trimmed) throw new Error('Board name is required');
+      if (!trimmed) throw new Error(t('Board name is required'));
       return createBoard({ name: trimmed, description: description.trim() || null });
     },
     onSuccess: async (board) => {
@@ -212,8 +207,8 @@ export function KanbanPage({
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Kanban"
-        subtitle="Boards and task execution"
+        title={t('Kanban')}
+        subtitle={t('Boards and task execution')}
         actions={
           <Dialog.Root open={createOpen} onOpenChange={setCreateOpen}>
             <Dialog.Trigger asChild>
@@ -222,23 +217,23 @@ export function KanbanPage({
             <Dialog.Portal>
               <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
               <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[92vw] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-surface-1/90 p-5 shadow-popover backdrop-blur">
-                <Dialog.Title className="text-sm font-semibold text-foreground">Create board</Dialog.Title>
+                <Dialog.Title className="text-sm font-semibold text-foreground">{t('Create board')}</Dialog.Title>
                 <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-                  Organize tasks by workflow. You can rename it later.
+                  {t('Organize tasks by workflow. You can rename it later.')}
                 </Dialog.Description>
 
                 <div className="mt-4 grid gap-3">
                   <div>
-                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Name</label>
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Startup launch" />
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Name')}</label>
+                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('Create board')} />
                   </div>
                   <div>
-                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Description</label>
+                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Description')}</label>
                     <textarea
                       className="min-h-[90px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      placeholder="What this board is for"
+                      placeholder={t('Description')}
                     />
                   </div>
                   {createM.isError ? <InlineAlert>{String(createM.error)}</InlineAlert> : null}
@@ -246,10 +241,10 @@ export function KanbanPage({
 
                 <div className="mt-5 flex items-center justify-end gap-2">
                   <Button variant="ghost" onClick={() => setCreateOpen(false)}>
-                    Cancel
+                    {t('Cancel')}
                   </Button>
                   <Button onClick={() => createM.mutate()} disabled={createM.isPending || !name.trim()}>
-                    {createM.isPending ? 'Creating…' : 'Create board'}
+                    {createM.isPending ? t('Creating…') : t('Create board')}
                   </Button>
                 </div>
               </Dialog.Content>
@@ -271,30 +266,30 @@ export function KanbanPage({
                   handleQuickAdd();
                 }
               }}
-              placeholder="Capture a quick idea… (Press N)"
+              placeholder={t('Capture a quick idea… (Press N)')}
             />
           </div>
           <Button onClick={handleQuickAdd} disabled={!quickTitle.trim()}>
-            Add idea
+            {t('Add idea')}
           </Button>
         </div>
-        <div className="mt-2 text-xs text-muted-foreground">Fast capture goes to Ideas for the selected board.</div>
+        <div className="mt-2 text-xs text-muted-foreground">{t('Fast capture goes to Ideas for the selected board.')}</div>
       </div>
 
       <div className="flex flex-col gap-3">
         <div>
-          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Boards</div>
-          <div className="mt-1 text-sm text-muted-foreground">Pick a board or create a new workspace for tasks.</div>
+          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{t('Boards')}</div>
+          <div className="mt-1 text-sm text-muted-foreground">{t('Pick a board or create a new workspace for tasks.')}</div>
         </div>
 
         {!boardsLoading && !boardsError && !hasBoards ? (
           <div className="rounded-2xl border border-dashed border-border/70 bg-surface-1/60 p-6 text-sm text-muted-foreground shadow-panel">
-            <div className="text-base font-semibold text-foreground">Create your first board</div>
+            <div className="text-base font-semibold text-foreground">{t('Create your first board')}</div>
             <div className="mt-2 max-w-lg text-sm text-muted-foreground">
-              Boards keep tasks grouped by workflow (product, content, ops). You can edit the name and description later.
+              {t('Boards keep tasks grouped by workflow (product, content, ops). You can edit the name and description later.')}
             </div>
             <div className="mt-4">
-              <Button onClick={() => setCreateOpen(true)}>Create board</Button>
+              <Button onClick={() => setCreateOpen(true)}>{t('Create board')}</Button>
             </div>
           </div>
         ) : (
@@ -319,12 +314,12 @@ export function KanbanPage({
                     <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 bg-surface-2/70 text-base">
                       +
                     </span>
-                    Create board
+                    {t('Create board')}
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground">
-                    Start a new workflow for a project, team, or domain.
+                    {t('Start a new workflow for a project, team, or domain.')}
                   </div>
-                  <div className="mt-auto text-xs text-primary/80 group-hover:text-primary">Open creator</div>
+                  <div className="mt-auto text-xs text-primary/80 group-hover:text-primary">{t('Open creator')}</div>
                 </button>
 
                 {sortedBoards.map((board) => {
@@ -342,10 +337,10 @@ export function KanbanPage({
                     >
                       <div className="text-sm font-semibold tracking-tight text-foreground">{board.name}</div>
                       <div className="max-h-10 overflow-hidden text-xs text-muted-foreground">
-                        {board.description || 'No description yet.'}
+                        {board.description || t('No description yet.')}
                       </div>
                       <div className="mt-auto text-[11px] text-muted-foreground">
-                        Updated {formatUpdatedAt(board.updated_at)}
+                        {t('Updated {{time}}', { time: formatUpdatedAt(board.updated_at) })}
                       </div>
                     </button>
                   );
@@ -359,14 +354,14 @@ export function KanbanPage({
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected board</div>
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{t('Selected board')}</div>
             <h2 className="mt-1 text-base font-semibold tracking-tight">
-              {selectedBoard ? selectedBoard.name : 'No board selected'}
+              {selectedBoard ? selectedBoard.name : t('No board selected')}
             </h2>
             <p className="mt-1 text-sm text-muted-foreground">
               {selectedBoard
-                ? selectedBoard.description || 'Move cards to advance the work.'
-                : 'Select a board above to view tasks.'}
+                ? selectedBoard.description || t('Move cards to advance the work.')
+                : t('Select a board above to view tasks.')}
             </p>
           </div>
           <div className="w-full sm:max-w-md">
@@ -379,7 +374,7 @@ export function KanbanPage({
                     size="sm"
                     onClick={() => setSelectionMode((prev) => !prev)}
                   >
-                    {selectionMode ? 'Done selecting' : 'Select'}
+                    {selectionMode ? t('Done selecting') : t('Select')}
                   </Button>
                   <Button
                     variant="ghost"
@@ -387,13 +382,13 @@ export function KanbanPage({
                     onClick={toggleSelectAll}
                     disabled={!filteredTasks.length}
                   >
-                    {allVisibleSelected ? 'Clear selection' : 'Select all visible'}
+                    {allVisibleSelected ? t('Clear selection') : t('Select all visible')}
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="rounded-md border border-border/70 bg-surface-1/50 px-3 py-2 text-xs text-muted-foreground">
-                Select a board to create tasks.
+                {t('Select a board to create tasks.')}
               </div>
             )}
           </div>
@@ -406,7 +401,7 @@ export function KanbanPage({
                 ref={searchRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search tasks… (Ctrl+K or /)"
+                placeholder={t('Search tasks… (Ctrl+K or /)')}
               />
             </div>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -415,12 +410,12 @@ export function KanbanPage({
                 checked={showArchived}
                 onChange={(e) => setShowArchived(e.target.checked)}
               />
-              Show archived
+              {t('Show archived')}
             </label>
           </div>
           {selectionMode ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>{selectedIds.length} selected</span>
+              <span>{t('{{count}} selected', { count: selectedIds.length })}</span>
               <select
                 className="h-8 rounded-md border border-input/70 bg-surface-1/70 px-2 text-xs text-foreground"
                 value=""
@@ -431,10 +426,10 @@ export function KanbanPage({
                   setSelectedIds([]);
                 }}
               >
-                <option value="">Move to…</option>
+                <option value="">{t('Move to…')}</option>
                 {STATUS_OPTIONS.map((s) => (
-                  <option key={s.value} value={s.value}>
-                    {s.label}
+                  <option key={s} value={s}>
+                    {statusLabel(s, t)}
                   </option>
                 ))}
               </select>
@@ -448,7 +443,7 @@ export function KanbanPage({
                 }}
                 disabled={selectedIds.length === 0}
               >
-                Archive
+                {t('Archive')}
               </Button>
             </div>
           ) : null}
@@ -458,15 +453,15 @@ export function KanbanPage({
         {moveError || reorderError ? <InlineAlert>{String(moveError ?? reorderError)}</InlineAlert> : null}
 
         {!hasBoards ? (
-          <EmptyState title="No boards yet" subtitle="Create your first board to start." />
+          <EmptyState title={t('No boards yet')} subtitle={t('Create your first board to start.')} />
         ) : !selectedBoardId ? (
-          <EmptyState title="Select a board" subtitle="Choose a board above to view tasks." />
+          <EmptyState title={t('Select a board')} subtitle={t('Select a board above to view tasks.')} />
         ) : tasksLoading ? (
           <TaskBoardSkeleton />
         ) : tasksError ? (
           <InlineAlert>{String(tasksError)}</InlineAlert>
         ) : filteredTasks.length === 0 ? (
-          <EmptyState title="No tasks yet" subtitle="Create one with the input above." />
+          <EmptyState title={t('No tasks yet')} subtitle={t('Create one with the input above.')} />
         ) : (
           <TaskBoard
             tasks={filteredTasks}

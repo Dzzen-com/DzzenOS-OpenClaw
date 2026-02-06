@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import { approveApproval, listApprovals, listBoards, listRuns, listTasks, rejectApproval } from '../../api/queries';
 import type { AgentRunListItem, Approval, Task, TaskStatus } from '../../api/types';
@@ -23,6 +24,7 @@ export function Dashboard({
 }: {
   onSelectTask: (input: { boardId: string; taskId: string }) => void;
 }) {
+  const { t } = useTranslation();
   const [boardId, setBoardId] = useState<string | null>(null);
 
   const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
@@ -102,11 +104,11 @@ export function Dashboard({
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Dashboard"
-        subtitle="Stuck runs, recent failures, and pending approvals."
+        title={t('Dashboard')}
+        subtitle={t('Stuck runs, recent failures, and pending approvals.')}
         actions={
           <div className="min-w-[220px]">
-            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Board</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Board')}</label>
             <select
               className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
               value={boardId ?? ''}
@@ -114,7 +116,7 @@ export function Dashboard({
               disabled={!boardsQ.data?.length}
             >
               {(boardsQ.data ?? []).length === 0 ? (
-                <option value="">No boards</option>
+                <option value="">{t('No boards')}</option>
               ) : (
                 (boardsQ.data ?? []).map((b) => (
                   <option key={b.id} value={b.id}>
@@ -124,14 +126,14 @@ export function Dashboard({
               )}
             </select>
             {boardsQ.isError ? (
-              <div className="mt-2 text-xs text-danger">Failed to load boards.</div>
+              <div className="mt-2 text-xs text-danger">{t('Failed to load boards.')}</div>
             ) : null}
           </div>
         }
       />
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="Board status" subtitle={boardId ? 'Counts by status' : 'Select a board'}>
+        <Panel title={t('Board status')} subtitle={boardId ? t('Counts by status') : t('Select a board')}>
           {boardTasksQ.isLoading ? (
             <div className="p-3">
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -147,13 +149,13 @@ export function Dashboard({
           ) : (
             <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4">
               {statusOrder.map((s) => (
-                <StatPill key={s} label={statusLabel(s)} value={statusCounts[s]} />
+                <StatPill key={s} label={statusLabel(s, t)} value={statusCounts[s]} />
               ))}
             </div>
           )}
         </Panel>
 
-        <Panel title="Recent tasks" subtitle={boardId ? 'Latest updates' : 'Select a board'}>
+        <Panel title={t('Recent tasks')} subtitle={boardId ? t('Latest updates') : t('Select a board')}>
           {boardTasksQ.isLoading ? (
             <div className="p-3">
               <div className="flex flex-col gap-2">
@@ -163,17 +165,18 @@ export function Dashboard({
               </div>
             </div>
           ) : (
-            <TaskList tasks={recentTasks} onClick={(t) => onSelectTask({ boardId: t.board_id, taskId: t.id })} />
+            <TaskList tasks={recentTasks} t={t} onClick={(task) => onSelectTask({ boardId: task.board_id, taskId: task.id })} />
           )}
         </Panel>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Panel title="Stuck runs" subtitle="running ≥ 10 minutes">
+        <Panel title={t('Stuck runs')} subtitle={t('running ≥ 10 minutes')}>
           <RunList
+            t={t}
             q={stuckQ}
             runs={stuckQ.data ?? []}
-            emptyLabel="No stuck runs."
+            emptyLabel={t('No stuck runs.')}
             onClick={(r) => {
               if (!r.task_id || !r.board_id) return;
               onSelectTask({ boardId: r.board_id, taskId: r.task_id });
@@ -181,11 +184,12 @@ export function Dashboard({
           />
         </Panel>
 
-        <Panel title="Failed runs" subtitle="last 24 hours">
+        <Panel title={t('Failed runs')} subtitle={t('last 24 hours')}>
           <RunList
+            t={t}
             q={failedQ}
             runs={failedLast24h}
-            emptyLabel="No failed runs in the last 24h."
+            emptyLabel={t('No failed runs in the last 24h.')}
             onClick={(r) => {
               if (!r.task_id || !r.board_id) return;
               onSelectTask({ boardId: r.board_id, taskId: r.task_id });
@@ -193,11 +197,12 @@ export function Dashboard({
           />
         </Panel>
 
-        <Panel title="Pending approvals" subtitle="need attention">
+        <Panel title={t('Pending approvals')} subtitle={t('need attention')}>
           <ApprovalList
+            t={t}
             q={approvalsQ}
             approvals={approvalsQ.data ?? []}
-            emptyLabel="No pending approvals."
+            emptyLabel={t('No pending approvals.')}
             deciding={approveM.isPending || rejectM.isPending}
             onApprove={(a) => approveM.mutate(a.id)}
             onReject={(a) => rejectM.mutate(a.id)}
@@ -260,16 +265,16 @@ function StatPill({ label, value }: { label: string; value: number }) {
   );
 }
 
-function TaskList({ tasks, onClick }: { tasks: Task[]; onClick: (t: Task) => void }) {
-  if (!tasks.length) return <div className="p-3 text-sm text-muted-foreground">No recent tasks.</div>;
+function TaskList({ tasks, onClick, t }: { tasks: Task[]; onClick: (task: Task) => void; t: (key: string, options?: any) => string }) {
+  if (!tasks.length) return <div className="p-3 text-sm text-muted-foreground">{t('No recent tasks.')}</div>;
   return (
     <div className="flex flex-col gap-2 p-2">
-      {tasks.map((t) => (
+      {tasks.map((task) => (
         <RowButton
-          key={t.id}
-          title={t.title}
-          subtitle={`${statusLabel(t.status)} • ${new Date(t.updated_at).toLocaleString()}`}
-          onClick={() => onClick(t)}
+          key={task.id}
+          title={task.title}
+          subtitle={`${statusLabel(task.status, t)} • ${new Date(task.updated_at).toLocaleString()}`}
+          onClick={() => onClick(task)}
         />
       ))}
     </div>
@@ -277,17 +282,19 @@ function TaskList({ tasks, onClick }: { tasks: Task[]; onClick: (t: Task) => voi
 }
 
 function RunList({
+  t,
   q,
   runs,
   emptyLabel,
   onClick,
 }: {
+  t: (key: string, options?: any) => string;
   q: { isLoading: boolean; isError: boolean; error: unknown };
   runs: AgentRunListItem[];
   emptyLabel: string;
   onClick: (r: AgentRunListItem) => void;
 }) {
-  if (q.isLoading) return <div className="p-3"><Spinner label="Loading…" /></div>;
+  if (q.isLoading) return <div className="p-3"><Spinner label={t('Loading…')} /></div>;
   if (q.isError) return <div className="p-3"><InlineAlert>{String(q.error)}</InlineAlert></div>;
   if (!runs.length) return <div className="p-3 text-sm text-muted-foreground">{emptyLabel}</div>;
 
@@ -307,6 +314,7 @@ function RunList({
 }
 
 function ApprovalList({
+  t,
   q,
   approvals,
   emptyLabel,
@@ -315,6 +323,7 @@ function ApprovalList({
   onReject,
   onClick,
 }: {
+  t: (key: string, options?: any) => string;
   q: { isLoading: boolean; isError: boolean; error: unknown };
   approvals: Approval[];
   emptyLabel: string;
@@ -323,7 +332,7 @@ function ApprovalList({
   onReject: (a: Approval) => void;
   onClick: (a: Approval) => void;
 }) {
-  if (q.isLoading) return <div className="p-3"><Spinner label="Loading…" /></div>;
+  if (q.isLoading) return <div className="p-3"><Spinner label={t('Loading…')} /></div>;
   if (q.isError) return <div className="p-3"><InlineAlert>{String(q.error)}</InlineAlert></div>;
   if (!approvals.length) return <div className="p-3 text-sm text-muted-foreground">{emptyLabel}</div>;
 
@@ -335,7 +344,7 @@ function ApprovalList({
           <div key={a.id} className="flex items-stretch gap-2">
             <RowButton
               title={a.request_title ?? a.task_title ?? a.task_id ?? a.id}
-              subtitle={`pending • ${new Date(a.requested_at).toLocaleString()}`}
+              subtitle={`${t('pending')} • ${new Date(a.requested_at).toLocaleString()}`}
               disabled={disabled}
               onClick={() => onClick(a)}
             />
@@ -349,7 +358,7 @@ function ApprovalList({
                   onApprove(a);
                 }}
               >
-                Approve
+                {t('Approve')}
               </Button>
               <Button
                 size="sm"
@@ -360,7 +369,7 @@ function ApprovalList({
                   onReject(a);
                 }}
               >
-                Reject
+                {t('Reject')}
               </Button>
             </div>
           </div>

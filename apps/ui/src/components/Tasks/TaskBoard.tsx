@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useEffect, useMemo, useState, useRef } from 'react';
 import type { Task, TaskStatus } from '../../api/types';
+import { useTranslation } from 'react-i18next';
 import { Badge } from '../ui/Badge';
 import { IconButton } from '../ui/IconButton';
 import { StatusDot } from '../ui/StatusDot';
@@ -31,27 +32,25 @@ import { useDroppable } from '@dnd-kit/core';
 
 type ColumnMeta = {
   status: TaskStatus;
-  title: string;
-  subtitle: string;
   tone: 'muted' | 'info' | 'danger' | 'success' | 'warning';
-  emptyLabel: string;
 };
 
 const COLUMNS: ColumnMeta[] = [
-  { status: 'ideas', title: 'Ideas', subtitle: 'Captured thoughts', tone: 'muted', emptyLabel: 'No ideas yet.' },
-  { status: 'todo', title: 'To do', subtitle: 'Ready to start', tone: 'muted', emptyLabel: 'No planned work.' },
-  { status: 'doing', title: 'In progress', subtitle: 'Active runs', tone: 'info', emptyLabel: 'Nothing in progress.' },
-  { status: 'review', title: 'Review', subtitle: 'Needs checks', tone: 'warning', emptyLabel: 'No reviews.' },
-  { status: 'release', title: 'Release', subtitle: 'Preparing launch', tone: 'warning', emptyLabel: 'No release items.' },
-  { status: 'done', title: 'Done', subtitle: 'Recently shipped', tone: 'success', emptyLabel: 'No completed tasks.' },
-  { status: 'archived', title: 'Archive', subtitle: 'Closed & stored', tone: 'muted', emptyLabel: 'Nothing archived.' },
+  { status: 'ideas', tone: 'muted' },
+  { status: 'todo', tone: 'muted' },
+  { status: 'doing', tone: 'info' },
+  { status: 'review', tone: 'warning' },
+  { status: 'release', tone: 'warning' },
+  { status: 'done', tone: 'success' },
+  { status: 'archived', tone: 'muted' },
 ];
 
-function stageLabel(kind?: string | null) {
+function stageLabel(kind?: string | null, t?: (key: string) => string) {
+  const tr = t ?? ((key: string) => key);
   if (!kind) return null;
-  if (kind === 'plan') return 'Planning';
-  if (kind === 'execute') return 'Executing';
-  if (kind === 'report') return 'Reporting';
+  if (kind === 'plan') return tr('Planning');
+  if (kind === 'execute') return tr('Executing');
+  if (kind === 'report') return tr('Reporting');
   return kind;
 }
 
@@ -62,15 +61,16 @@ function runTone(status?: string | null) {
   return 'muted';
 }
 
-function runLabel(status?: string | null, startedAt?: string | null) {
+function runLabel(status?: string | null, startedAt?: string | null, t?: (key: string) => string) {
+  const tr = t ?? ((key: string) => key);
   if (status === 'running') {
     const t = formatElapsed(startedAt);
-    return t ? `Running ${t}` : 'Running';
+    return t ? `${tr('Running')} ${t}` : tr('Running');
   }
-  if (status === 'failed') return 'Failed';
-  if (status === 'succeeded') return 'Done';
-  if (status === 'cancelled') return 'Paused';
-  return 'Idle';
+  if (status === 'failed') return tr('Failed');
+  if (status === 'succeeded') return tr('Done');
+  if (status === 'cancelled') return tr('Paused');
+  return tr('Idle');
 }
 
 function sortByPosition(a: Task, b: Task) {
@@ -104,7 +104,20 @@ export function TaskBoard({
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
 }) {
+  const { t } = useTranslation();
   const columnIds = useMemo(() => COLUMNS.map((c) => c.status), []);
+  const columnLabels = useMemo<Record<TaskStatus, { title: string; subtitle: string; empty: string }>>(
+    () => ({
+      ideas: { title: t('Ideas'), subtitle: t('Captured thoughts'), empty: t('No ideas yet.') },
+      todo: { title: t('To do'), subtitle: t('Ready to start'), empty: t('No planned work.') },
+      doing: { title: t('In progress'), subtitle: t('Active runs'), empty: t('Nothing in progress.') },
+      review: { title: t('Review'), subtitle: t('Needs checks'), empty: t('No reviews.') },
+      release: { title: t('Release'), subtitle: t('Preparing launch'), empty: t('No release items.') },
+      done: { title: t('Done'), subtitle: t('Recently shipped'), empty: t('No completed tasks.') },
+      archived: { title: t('Archive'), subtitle: t('Closed & stored'), empty: t('Nothing archived.') },
+    }),
+    [t],
+  );
 
   const tasksById = useMemo(() => {
     const map = new Map<string, Task>();
@@ -253,6 +266,8 @@ export function TaskBoard({
               selectionMode={selectionMode}
               selectedIds={selectedIds}
               onToggleSelect={onToggleSelect}
+              labels={columnLabels[col.status]}
+              t={t}
             />
           );
         })}
@@ -267,6 +282,8 @@ export function TaskBoard({
 
 function TaskColumn({
   col,
+  labels,
+  t,
   ids,
   items,
   selectedTaskId,
@@ -279,6 +296,8 @@ function TaskColumn({
   onToggleSelect,
 }: {
   col: ColumnMeta;
+  labels: { title: string; subtitle: string; empty: string };
+  t: (key: string, options?: any) => string;
   ids: string[];
   items: Task[];
   selectedTaskId: string | null;
@@ -400,15 +419,15 @@ function TaskColumn({
           <div>
             <div className="flex items-center gap-2 text-[13px] font-semibold text-foreground sm:text-sm">
               <StatusDot tone={col.tone} />
-              <span>{col.title}</span>
+              <span>{labels.title}</span>
             </div>
-            <div className="mt-0.5 text-[11px] text-muted-foreground sm:text-xs">{col.subtitle}</div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground sm:text-xs">{labels.subtitle}</div>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="h-6 rounded-md px-2 text-[11px]">
               {items.length}
             </Badge>
-            <IconButton size="sm" variant="ghost" aria-label="Column options" title="Column options">
+            <IconButton size="sm" variant="ghost" aria-label={t('Column options')} title={t('Column options')}>
               <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
                 <circle cx="4" cy="10" r="1.6" />
                 <circle cx="10" cy="10" r="1.6" />
@@ -431,7 +450,7 @@ function TaskColumn({
                 <SortableContext items={ids} strategy={verticalListSortingStrategy}>
                   {items.length === 0 ? (
                     <div className="rounded-lg border border-dashed border-border/70 bg-surface-2/40 px-3 py-4 text-xs text-muted-foreground">
-                      {col.emptyLabel}
+                      {labels.empty}
                     </div>
                   ) : (
                     visibleItems.map((task, idx) => (
@@ -452,7 +471,7 @@ function TaskColumn({
                 </SortableContext>
               </div>
             </div>
-            {onQuickCreate ? <QuickCreate status={col.status} onCreate={onQuickCreate} /> : null}
+            {onQuickCreate ? <QuickCreate status={col.status} onCreate={onQuickCreate} t={t} /> : null}
           </div>
         </div>
       </div>
@@ -463,9 +482,11 @@ function TaskColumn({
 function QuickCreate({
   status,
   onCreate,
+  t,
 }: {
   status: TaskStatus;
   onCreate: (status: TaskStatus, title: string) => void;
+  t: (key: string, options?: any) => string;
 }) {
   const [value, setValue] = useState('');
 
@@ -482,11 +503,11 @@ function QuickCreate({
     >
       <input
         className="h-7 flex-1 bg-transparent text-xs text-foreground outline-none"
-        placeholder="New card…"
+        placeholder={t('New card…')}
         value={value}
         onChange={(e) => setValue(e.target.value)}
       />
-      <IconButton size="sm" variant="ghost" aria-label="Add card" disabled={!value.trim()}>
+      <IconButton size="sm" variant="ghost" aria-label={t('Add card')} disabled={!value.trim()}>
         <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
           <path d="M10 4v12M4 10h12" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
@@ -564,6 +585,7 @@ const TaskCard = React.forwardRef<
     onMeasure?: (id: string, h: number) => void;
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
 >(function TaskCard({ task, selected, bulkSelected, selectionMode, dragging, style, onClick, onMeasure, ...props }, ref) {
+  const { t } = useTranslation();
   const localRef = React.useRef<HTMLButtonElement | null>(null);
   const setRefs = (node: HTMLButtonElement | null) => {
     localRef.current = node;
@@ -598,8 +620,8 @@ const TaskCard = React.forwardRef<
             ? 'muted'
             : 'muted';
 
-  const agentLabel = task.agent_display_name?.trim() || 'Unassigned';
-  const stage = task.run_status === 'running' ? stageLabel(task.run_step_kind) : null;
+  const agentLabel = task.agent_display_name?.trim() || t('Unassigned');
+  const stage = task.run_status === 'running' ? stageLabel(task.run_step_kind, t) : null;
 
   return (
     <button
@@ -636,15 +658,15 @@ const TaskCard = React.forwardRef<
       </div>
 
       <div className="mt-2 max-h-10 overflow-hidden text-[11px] leading-relaxed text-muted-foreground sm:text-xs">
-        {task.description?.trim() ? task.description : 'No description'}
+        {task.description?.trim() ? task.description : t('No description')}
       </div>
 
       <div className="mt-2.5 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]">
         <div className="flex items-center gap-2">
           <StatusDot tone={tone} />
-          <span>{statusLabel(task.status)}</span>
+          <span>{statusLabel(task.status, t)}</span>
         </div>
-        <span>Updated {formatUpdatedAt(task.updated_at)}</span>
+        <span>{t('Updated {{time}}', { time: formatUpdatedAt(task.updated_at) })}</span>
       </div>
 
       <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]">
@@ -652,9 +674,9 @@ const TaskCard = React.forwardRef<
           <StatusDot tone={runTone(task.run_status)} pulse={task.run_status === 'running'} />
           <span className={cn('truncate', task.run_status === 'running' && 'animate-pulse')}>{agentLabel}</span>
           <span>•</span>
-          <span>{runLabel(task.run_status, task.run_started_at)}</span>
+          <span>{runLabel(task.run_status, task.run_started_at, t)}</span>
         </div>
-        {stage ? <span className="text-muted-foreground/80">Stage: {stage}</span> : null}
+        {stage ? <span className="text-muted-foreground/80">{t('Stage: {{stage}}', { stage })}</span> : null}
       </div>
     </button>
   );

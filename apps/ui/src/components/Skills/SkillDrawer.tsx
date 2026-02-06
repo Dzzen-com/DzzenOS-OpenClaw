@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { InstalledSkill, SkillCapabilities } from '../../api/types';
 import { createSkill, deleteSkill, patchSkill, resetSkill } from '../../api/queries';
@@ -40,6 +41,7 @@ function ChipInput({
   onChange: (next: string[]) => void;
   placeholder?: string;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState('');
 
   return (
@@ -66,7 +68,7 @@ function ChipInput({
       <div className="mt-2 flex gap-2">
         <Input
           value={draft}
-          placeholder={placeholder ?? 'Add…'}
+          placeholder={placeholder ?? t('Add…')}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
@@ -86,7 +88,7 @@ function ChipInput({
           }}
           disabled={!draft.trim()}
         >
-          Add
+          {t('Add')}
         </Button>
       </div>
     </div>
@@ -106,6 +108,7 @@ export function SkillDrawer({
   onOpenChange: (open: boolean) => void;
   skill: InstalledSkill | null;
 }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const isCreate = !skill;
 
@@ -214,7 +217,7 @@ export function SkillDrawer({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Dialog.Title className="truncate text-base font-semibold tracking-tight">
-                {isCreate ? 'Add skill' : (skill?.display_name ?? skill?.slug ?? 'Skill')}
+                {isCreate ? t('Add skill') : (skill?.display_name ?? skill?.slug ?? t('Skill'))}
               </Dialog.Title>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {!isCreate ? (
@@ -230,7 +233,7 @@ export function SkillDrawer({
               </div>
             </div>
             <Dialog.Close asChild aria-label="Close">
-              <Button variant="ghost">Close</Button>
+              <Button variant="ghost">{t('Close')}</Button>
             </Dialog.Close>
           </div>
 
@@ -241,32 +244,32 @@ export function SkillDrawer({
           ) : null}
 
           <div className="mt-5 grid gap-3">
-            <Row label="Slug (id)">
+            <Row label={t('Slug (id)')}>
               <Input
                 value={slug}
                 onChange={(e) => setSlug(e.target.value)}
                 placeholder="github"
                 disabled={!isCreate}
               />
-              <div className="mt-2 text-xs text-muted-foreground">Used as the skill id (stored in agent profiles).</div>
+              <div className="mt-2 text-xs text-muted-foreground">{t('Used as the skill id (stored in agent profiles).')}</div>
             </Row>
 
-            <Row label="Display name (optional)">
+            <Row label={t('Display name (optional)')}>
               <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="GitHub" />
             </Row>
 
-            <Row label="Description (optional)">
+            <Row label={t('Description (optional)')}>
               <textarea
                 className="w-full resize-y rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none focus:border-primary/60 focus:ring-2 focus:ring-ring/40"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={4}
-                placeholder="What this skill does…"
+                placeholder={t('Description')}
               />
             </Row>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <Row label="Tier">
+              <Row label={t('Tier')}>
                 <select
                   className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
                   value={tier}
@@ -277,16 +280,16 @@ export function SkillDrawer({
                   <option value="community">community</option>
                 </select>
               </Row>
-              <Row label="Enabled">
+              <Row label={t('Enabled')}>
                 <div className="flex items-center gap-2">
                   <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-                  <span className="text-sm text-muted-foreground">Active</span>
+                  <span className="text-sm text-muted-foreground">{t('Active')}</span>
                 </div>
               </Row>
             </div>
 
             <div className="rounded-xl border border-border/70 bg-surface-2/40 p-4">
-              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Capabilities</div>
+              <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('Capabilities')}</div>
               <div className="mt-3 grid gap-2">
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input
@@ -294,7 +297,7 @@ export function SkillDrawer({
                     checked={Boolean(caps.network)}
                     onChange={(e) => setCaps((c) => ({ ...c, network: e.target.checked }))}
                   />
-                  Network access
+                  {t('Network access')}
                 </label>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input
@@ -302,7 +305,7 @@ export function SkillDrawer({
                     checked={Boolean(caps.filesystem)}
                     onChange={(e) => setCaps((c) => ({ ...c, filesystem: e.target.checked }))}
                   />
-                  Filesystem access
+                  {t('Filesystem access')}
                 </label>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <input
@@ -310,10 +313,10 @@ export function SkillDrawer({
                     checked={Boolean(caps.external_write)}
                     onChange={(e) => setCaps((c) => ({ ...c, external_write: e.target.checked }))}
                   />
-                  External write actions
+                  {t('External write actions')}
                 </label>
                 <div className="pt-2">
-                  <ChipInput label="Secrets (names)" value={secrets} onChange={setSecrets} placeholder="GITHUB_TOKEN" />
+                  <ChipInput label={t('Secrets (names)')} value={secrets} onChange={setSecrets} placeholder="GITHUB_TOKEN" />
                 </div>
               </div>
             </div>
@@ -325,24 +328,24 @@ export function SkillDrawer({
                 <>
                   {canReset ? (
                     <Button variant="secondary" onClick={() => resetM.mutate()} disabled={resetM.isPending}>
-                      {resetM.isPending ? 'Resetting…' : 'Reset'}
+                      {resetM.isPending ? t('Resetting…') : t('Reset')}
                     </Button>
                   ) : null}
                   <Button
                     variant="secondary"
                     onClick={() => {
-                      if (!window.confirm(`Uninstall skill "${skill!.display_name ?? skill!.slug}"?`)) return;
+                      if (!window.confirm(t('Uninstall skill "{{name}}"?', { name: skill!.display_name ?? skill!.slug }))) return;
                       uninstallM.mutate();
                     }}
                     disabled={uninstallM.isPending}
                   >
-                    {uninstallM.isPending ? 'Uninstalling…' : 'Uninstall'}
+                    {uninstallM.isPending ? t('Uninstalling…') : t('Uninstall')}
                   </Button>
                 </>
               ) : null}
             </div>
             <Button onClick={() => saveM.mutate()} disabled={saveM.isPending || (isCreate && !payload.slug)}>
-              {saveM.isPending ? 'Saving…' : 'Save'}
+              {saveM.isPending ? t('Saving…') : t('Save')}
             </Button>
           </div>
         </Dialog.Content>
@@ -359,4 +362,3 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
     </div>
   );
 }
-

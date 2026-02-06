@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { Agent, MarketplaceAgent } from '../../api/types';
 import { installMarketplaceAgent, listAgents, listMarketplaceAgents, patchAgent } from '../../api/queries';
@@ -85,6 +86,7 @@ function countPromptOverrides(agent: Agent) {
 }
 
 export function AgentsPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
 
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -176,7 +178,7 @@ export function AgentsPage() {
       <div className="rounded-xl border border-border/70 bg-gradient-to-b from-surface-2/70 to-surface-1/70 p-2 shadow-panel backdrop-blur">
         <div className="flex w-full flex-col gap-2 lg:w-[720px] lg:flex-row lg:items-end">
           <div className="min-w-0 flex-1">
-            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Search agents</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Search agents')}</label>
             <div className="relative">
               <svg
                 viewBox="0 0 20 20"
@@ -193,7 +195,7 @@ export function AgentsPage() {
                 ref={searchRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Name, description, tags, OpenClaw id, skills..."
+                placeholder={t('Name, description, tags, OpenClaw id, skills...')}
                 className="bg-background/35 pl-9 pr-12"
               />
               <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 bg-surface-2/80 px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -202,13 +204,13 @@ export function AgentsPage() {
             </div>
           </div>
           <div className="w-full lg:w-[180px]">
-            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Category</label>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Category')}</label>
             <select
               className="h-9 w-full rounded-md border border-input/70 bg-background/35 px-3 text-sm text-foreground"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
             >
-              <option value="all">All</option>
+              <option value="all">{t('All')}</option>
               {categories.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -225,7 +227,7 @@ export function AgentsPage() {
                 setCategory('all');
               }}
             >
-              Clear
+              {t('Clear')}
             </Button>
           ) : null}
           <Button
@@ -235,7 +237,7 @@ export function AgentsPage() {
               setDrawerOpen(true);
             }}
           >
-            New agent
+            {t('New agent')}
           </Button>
         </div>
       </div>
@@ -245,8 +247,8 @@ export function AgentsPage() {
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Agents"
-        subtitle="Agent profiles (templates for OpenClaw sessions). Install presets below."
+        title={t('Agents')}
+        subtitle={t('Agent profiles (templates for OpenClaw sessions). Install presets below.')}
         actions={headerActions}
       />
 
@@ -261,18 +263,18 @@ export function AgentsPage() {
       <section className="mt-6">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold">Installed</div>
-            <div className="mt-1 text-xs text-muted-foreground">Agents stored in your local SQLite database.</div>
+            <div className="text-sm font-semibold">{t('Installed')}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{t('Agents stored in your local SQLite database.')}</div>
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span>{installedFiltered.length} shown</span>
+            <span>{t('{{count}} shown', { count: installedFiltered.length })}</span>
             {installedDisabled.length > 0 ? (
               <button
                 type="button"
                 className="rounded-md border border-border/70 bg-surface-2/40 px-2 py-1 text-[11px] text-muted-foreground hover:bg-surface-2 hover:text-foreground"
                 onClick={() => setShowDisabled((v) => !v)}
               >
-                {showDisabled ? 'Hide disabled' : `Show disabled (${installedDisabled.length})`}
+                {showDisabled ? t('Hide disabled') : t('Show disabled ({{count}})', { count: installedDisabled.length })}
               </button>
             ) : null}
           </div>
@@ -284,8 +286,8 @@ export function AgentsPage() {
           ) : installedActive.length === 0 && installedDisabled.length === 0 ? (
             <div className="grid gap-3 rounded-2xl border border-border/70 bg-surface-1/70 p-6 shadow-panel">
               <EmptyState
-                title="No agents installed"
-                subtitle="Install a preset below, or create a new custom agent."
+                title={t('No agents installed')}
+                subtitle={t('Install a preset below, or create a new custom agent.')}
               />
               <div>
                 <Button
@@ -294,7 +296,7 @@ export function AgentsPage() {
                     setDrawerOpen(true);
                   }}
                 >
-                  Create agent
+                  {t('Create agent')}
                 </Button>
               </div>
             </div>
@@ -317,8 +319,8 @@ export function AgentsPage() {
                 </div>
               ) : (
                 <EmptyState
-                  title="No active agents"
-                  subtitle="Enable an installed agent, install a preset, or create a new custom agent."
+                  title={t('No active agents')}
+                  subtitle={t('Enable an installed agent, install a preset, or create a new custom agent.')}
                 />
               )}
 
@@ -352,12 +354,12 @@ export function AgentsPage() {
       <section className="mt-8">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold">Available presets</div>
+            <div className="text-sm font-semibold">{t('Available presets')}</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              Install official presets. Pro items are visible but locked until subscriptions ship.
+              {t('Install official presets. Pro items are visible but locked until subscriptions ship.')}
             </div>
           </div>
-          <div className="text-xs text-muted-foreground">{availableFiltered.length} shown</div>
+          <div className="text-xs text-muted-foreground">{t('{{count}} shown', { count: availableFiltered.length })}</div>
         </div>
 
         <div className="mt-3">
@@ -365,8 +367,8 @@ export function AgentsPage() {
             <CardsSkeleton />
           ) : availableFiltered.length === 0 ? (
             <EmptyState
-              title="No presets found"
-              subtitle="Try clearing search or changing the category filter."
+              title={t('No presets found')}
+              subtitle={t('Try clearing search or changing the category filter.')}
             />
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -426,6 +428,7 @@ function InstalledCard({
   onToggleEnabled: (enabled: boolean) => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   const skillsCount = agent.skills?.length ?? 0;
   const promptCount = countPromptOverrides(agent);
   const techParts = [
@@ -435,9 +438,9 @@ function InstalledCard({
   ];
 
   const usageParts: string[] = [];
-  usageParts.push(`Used in ${agent.assigned_task_count ?? 0} tasks`);
-  if ((agent.run_count_7d ?? 0) > 0) usageParts.push(`Runs 7d: ${agent.run_count_7d}`);
-  if (agent.last_used_at) usageParts.push(`Last used: ${formatRelative(agent.last_used_at)}`);
+  usageParts.push(t('Used in {{count}} tasks', { count: agent.assigned_task_count ?? 0 }));
+  if ((agent.run_count_7d ?? 0) > 0) usageParts.push(t('Runs 7d: {{count}}', { count: agent.run_count_7d }));
+  if (agent.last_used_at) usageParts.push(t('Last used: {{value}}', { value: formatRelative(agent.last_used_at) }));
 
   return (
     <div
@@ -471,7 +474,7 @@ function InstalledCard({
           </div>
         </div>
         <Button size="sm" variant="secondary" onClick={onConfigure}>
-          Configure
+          {t('Configure')}
         </Button>
       </div>
 
@@ -486,12 +489,12 @@ function InstalledCard({
         ))}
         {agent.preset_key ? (
           <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-            Preset
+            {t('Preset')}
           </Badge>
         ) : null}
         {!agent.enabled ? (
           <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-            Disabled
+            {t('Disabled')}
           </Badge>
         ) : null}
       </div>
@@ -505,7 +508,7 @@ function InstalledCard({
             onChange={(e) => onToggleEnabled(e.target.checked)}
             disabled={disabled}
           />
-          Enabled
+          {t('Enabled')}
         </label>
       </div>
     </div>
@@ -521,8 +524,9 @@ function AvailableCard({
   onInstall: () => void;
   installing: boolean;
 }) {
+  const { t } = useTranslation();
   const locked = preset.requires_subscription;
-  const badgeLabel = locked ? 'Pro' : 'Free';
+  const badgeLabel = locked ? t('Pro') : t('Free');
 
   return (
     <div className="rounded-xl border border-border/70 bg-surface-1/70 p-4 shadow-panel backdrop-blur">
@@ -535,7 +539,7 @@ function AvailableCard({
           <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{preset.description}</div>
         </div>
         <Button size="sm" onClick={onInstall} disabled={locked || installing}>
-          {locked ? 'Locked' : installing ? 'Installing…' : 'Install'}
+          {locked ? t('Locked') : installing ? t('Installing…') : t('Install')}
         </Button>
       </div>
 
@@ -554,9 +558,9 @@ function AvailableCard({
       </div>
 
       {locked ? (
-        <div className="mt-3 text-xs text-muted-foreground">Subscription required (soon).</div>
+        <div className="mt-3 text-xs text-muted-foreground">{t('Subscription required (soon).')}</div>
       ) : (
-        <div className="mt-3 text-xs text-muted-foreground">Installs with OpenClaw agent id = “main”.</div>
+        <div className="mt-3 text-xs text-muted-foreground">{t('Installs with OpenClaw agent id = “main”.')}</div>
       )}
     </div>
   );
