@@ -20,10 +20,9 @@ export type Task = {
   status: TaskStatus;
   position: number;
   due_at: string | null;
-  agent_id: string | null;
+  agent_id?: string | null;
   created_at: string;
   updated_at: string;
-  agent_id?: string | null;
   session_status?: 'idle' | 'running' | 'failed' | null;
   last_run_id?: string | null;
   agent_display_name?: string | null;
@@ -88,6 +87,15 @@ export type Agent = {
   assigned_task_count: number;
   run_count_7d: number;
   last_used_at: string | null;
+  model?: string | null;
+  tools_json?: string | null;
+  policy_json?: string | null;
+  skills_json?: string | null;
+  guardrails_json?: string | null;
+  parsed_tools?: unknown;
+  parsed_policy?: unknown;
+  parsed_skills?: unknown;
+  parsed_guardrails?: unknown;
 };
 
 export type PromptOverrides = Partial<Record<'system' | 'plan' | 'execute' | 'chat' | 'report', string>>;
@@ -209,26 +217,6 @@ export type Automation = {
   name: string;
   description: string | null;
   graph_json?: string; // present on GET /automations/:id
-  created_at: string;
-  updated_at: string;
-};
-
-export type Agent = {
-  id: string;
-  display_name: string;
-  emoji: string | null;
-  openclaw_agent_id: string;
-  enabled: boolean;
-  role: string | null;
-  model: string | null;
-  tools_json: string | null;
-  policy_json: string | null;
-  skills_json: string | null;
-  guardrails_json: string | null;
-  tools?: unknown;
-  policy?: unknown;
-  skills?: unknown;
-  guardrails?: unknown;
   created_at: string;
   updated_at: string;
 };
