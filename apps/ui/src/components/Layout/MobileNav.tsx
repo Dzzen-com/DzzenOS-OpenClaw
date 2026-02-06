@@ -1,13 +1,13 @@
 import { StatusDot } from '../ui/StatusDot';
 
-type PageKey = 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills';
+type PageKey = 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills' | 'models';
 
 const ITEMS: { key: PageKey; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
   { key: 'kanban', label: 'Kanban' },
   { key: 'automations', label: 'Flows' },
   { key: 'agents', label: 'Agents' },
-  { key: 'docs', label: 'Docs' },
+  { key: 'models', label: 'Models' },
 ];
 
 export function MobileNav({

@@ -4,6 +4,10 @@ import type {
   AgentRunListItem,
   AgentRunStatus,
   Agent,
+  ModelsOverview,
+  OpenClawOAuthStartResult,
+  OpenClawOAuthStatusResult,
+  OpenClawProviderInput,
   MarketplaceAgent,
   InstalledSkill,
   MarketplaceSkill,
@@ -345,6 +349,56 @@ export function listMarketplaceSkills(): Promise<MarketplaceSkill[]> {
 
 export function installMarketplaceSkill(presetKey: string): Promise<{ slug: string }> {
   return apiFetch(`/marketplace/skills/${encodeURIComponent(presetKey)}/install`, { method: 'POST' });
+}
+
+// --- OpenClaw Models / Providers ---
+export function listModelsOverview(): Promise<ModelsOverview> {
+  return apiFetch('/openclaw/models/overview');
+}
+
+export function createModelProvider(input: OpenClawProviderInput): Promise<ModelsOverview> {
+  return apiFetch('/openclaw/models/providers', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateModelProvider(id: string, patch: Partial<OpenClawProviderInput>): Promise<ModelsOverview> {
+  return apiFetch(`/openclaw/models/providers/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteModelProvider(id: string): Promise<{ ok: boolean; overview: ModelsOverview }> {
+  return apiFetch(`/openclaw/models/providers/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function scanModels(): Promise<ModelsOverview> {
+  return apiFetch('/openclaw/models/scan', { method: 'POST', body: JSON.stringify({}) });
+}
+
+export function applyModelsConfig(): Promise<ModelsOverview> {
+  return apiFetch('/openclaw/models/apply', { method: 'POST', body: JSON.stringify({}) });
+}
+
+export function startModelProviderOAuth(id: string): Promise<OpenClawOAuthStartResult> {
+  return apiFetch(`/openclaw/models/providers/${encodeURIComponent(id)}/oauth/start`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function getModelProviderOAuthStatus(
+  id: string,
+  input?: { attemptId?: string | null }
+): Promise<OpenClawOAuthStatusResult> {
+  const qs = new URLSearchParams();
+  if (input?.attemptId) qs.set('attemptId', input.attemptId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/openclaw/models/providers/${encodeURIComponent(id)}/oauth/status${suffix}`);
 }
 
 // --- Docs ---

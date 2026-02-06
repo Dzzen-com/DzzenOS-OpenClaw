@@ -48,6 +48,14 @@ import {
   getMarketplaceSkillPreset,
   type SkillCapabilities,
 } from './marketplace/skills.ts';
+import {
+  OpenClawGatewayError,
+  createOpenClawGatewayClient,
+  normalizeModelsOverview,
+  redactSecrets,
+  sanitizeProviderUpsertInput,
+  type ProviderUpsertInput,
+} from './openclaw-gateway.ts';
 
 type Options = {
   port: number;
@@ -320,6 +328,123 @@ function requireUuid(value: string, label: string): string {
   return v;
 }
 
+function asObject(value: any): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function getRequestAuthorizationHeader(req: http.IncomingMessage): string {
+  const raw = req.headers.authorization;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function isGatewayFallbackError(err: unknown): boolean {
+  if (!(err instanceof OpenClawGatewayError)) return false;
+  if (err.status === 400 || err.status === 404 || err.status === 405 || err.status === 501) return true;
+  const msg = String(err.message ?? '').toLowerCase();
+  return msg.includes('method not found') || msg.includes('unsupported') || msg.includes('not implemented');
+}
+
+function gatewayErrorToHttp(err: unknown): { status: number; message: string } {
+  if (err instanceof OpenClawGatewayError) {
+    const status = Number.isFinite(err.status) ? Math.min(599, Math.max(400, err.status)) : 502;
+    return { status, message: err.message || 'OpenClaw gateway error' };
+  }
+  return { status: 502, message: String((err as any)?.message ?? err ?? 'OpenClaw gateway error') };
+}
+
+type ProvidersContainer =
+  | { path: 'providers'; providers: Record<string, unknown> }
+  | { path: 'model_providers'; providers: Record<string, unknown> }
+  | { path: 'models.providers'; providers: Record<string, unknown> };
+
+function resolveProvidersContainer(config: Record<string, unknown>): ProvidersContainer {
+  const rootProviders = asObject(config.providers);
+  if (rootProviders) return { path: 'providers', providers: { ...rootProviders } };
+
+  const modelProviders = asObject((config as any).model_providers);
+  if (modelProviders) return { path: 'model_providers', providers: { ...modelProviders } };
+
+  const models = asObject((config as any).models);
+  const nestedProviders = asObject(models?.providers);
+  if (nestedProviders) return { path: 'models.providers', providers: { ...nestedProviders } };
+
+  return { path: 'providers', providers: {} };
+}
+
+function buildProvidersPatch(container: ProvidersContainer, providers: Record<string, unknown>): Record<string, unknown> {
+  if (container.path === 'providers') return { providers };
+  if (container.path === 'model_providers') return { model_providers: providers };
+  return { models: { providers } };
+}
+
+function buildProviderConfigEntry(input: ProviderUpsertInput, previousRaw: unknown): Record<string, unknown> {
+  const previous = asObject(previousRaw) ?? {};
+  const next: Record<string, unknown> = { ...previous };
+
+  next.enabled = input.enabled;
+  next.auth_mode = input.auth_mode;
+
+  // Preserve existing schema conventions where possible.
+  if ('type' in next || !('kind' in next)) next.type = input.kind;
+  if ('kind' in next || !('type' in next)) next.kind = input.kind;
+
+  if (input.api_base_url) {
+    if ('base_url' in next || !('api_base_url' in next)) next.base_url = input.api_base_url;
+    next.api_base_url = input.api_base_url;
+  }
+
+  if (input.auth_mode === 'api_key' && input.api_key) {
+    const authObj = asObject((next as any).auth);
+    if (authObj) {
+      next.auth = { ...authObj, mode: 'api_key', api_key: input.api_key };
+    } else {
+      next.api_key = input.api_key;
+    }
+  }
+
+  if (input.auth_mode === 'oauth') {
+    const authObj = asObject((next as any).auth) ?? {};
+    next.auth = { ...authObj, mode: 'oauth' };
+    if (input.oauth) {
+      const existingOAuth = asObject((next as any).oauth) ?? {};
+      next.oauth = { ...existingOAuth, ...input.oauth };
+    }
+  }
+
+  if (input.options) {
+    const existingOptions = asObject((next as any).options) ?? {};
+    next.options = { ...existingOptions, ...input.options };
+  }
+
+  return next;
+}
+
+async function upsertProviderViaConfig(gateway: any, input: ProviderUpsertInput): Promise<void> {
+  const config = await gateway.configGet();
+  const container = resolveProvidersContainer(config);
+  const nextProviders: Record<string, unknown> = { ...container.providers };
+  nextProviders[input.id] = buildProviderConfigEntry(input, nextProviders[input.id]);
+
+  const patch = buildProvidersPatch(container, nextProviders);
+  await gateway.configPatch(patch);
+  await gateway.configApply();
+}
+
+async function deleteProviderViaConfig(gateway: any, providerId: string): Promise<boolean> {
+  const config = await gateway.configGet();
+  const container = resolveProvidersContainer(config);
+  if (!(providerId in container.providers)) return false;
+
+  const nextProviders: Record<string, unknown> = { ...container.providers };
+  delete nextProviders[providerId];
+  const patch = buildProvidersPatch(container, nextProviders);
+
+  await gateway.configPatch(patch);
+  await gateway.configApply();
+  return true;
+}
+
 function parseStringArrayJson(raw: any): string[] {
   if (Array.isArray(raw)) return raw.map((v) => String(v)).filter(Boolean);
   if (typeof raw !== 'string') return [];
@@ -501,8 +626,28 @@ function main() {
     process.env.OPENRESPONSES_TOKEN ?? process.env.DZZENOS_OPENRESPONSES_TOKEN ?? '';
   const openResponsesModel =
     process.env.OPENRESPONSES_MODEL ?? process.env.DZZENOS_OPENRESPONSES_MODEL ?? 'openclaw:main';
+  const gatewayBaseUrl =
+    process.env.DZZENOS_GATEWAY_URL ??
+    process.env.OPENCLAW_GATEWAY_URL ??
+    `http://127.0.0.1:${process.env.GATEWAY_PORT ?? 18789}`;
+  const gatewayToken =
+    process.env.DZZENOS_GATEWAY_TOKEN ??
+    process.env.OPENCLAW_GATEWAY_TOKEN ??
+    process.env.GATEWAY_TOKEN ??
+    '';
+  const gatewayTimeoutMsRaw = Number(process.env.DZZENOS_GATEWAY_TIMEOUT_MS ?? '');
+  const gatewayTimeoutMs = Number.isFinite(gatewayTimeoutMsRaw) && gatewayTimeoutMsRaw > 0 ? gatewayTimeoutMsRaw : 15_000;
   const defaultAgentId = process.env.DZZENOS_DEFAULT_AGENT_ID ?? '';
   const taskAbortControllers = new Map<string, AbortController>();
+
+  function makeGatewayClient(req: http.IncomingMessage) {
+    return createOpenClawGatewayClient({
+      baseUrl: gatewayBaseUrl,
+      token: gatewayToken || undefined,
+      authorizationHeader: gatewayToken ? undefined : getRequestAuthorizationHeader(req),
+      timeoutMs: gatewayTimeoutMs,
+    });
+  }
 
   function boardDocPath(boardId: string) {
     return path.join(docsDir, 'boards', `${boardId}.md`);
@@ -990,7 +1135,7 @@ const server = http.createServer(async (req, res) => {
   const origin = (req.headers.origin as string | undefined) ?? '';
   const corsHeaders: Record<string, string> = {
     'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type,authorization',
   };
     if (origin && isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
       corsHeaders['access-control-allow-origin'] = origin;
@@ -1294,6 +1439,236 @@ const server = http.createServer(async (req, res) => {
         });
 
         return;
+      }
+
+      // --- OpenClaw models / providers bridge ---
+      if (req.method === 'GET' && url.pathname === '/openclaw/models/overview') {
+        const gateway = makeGatewayClient(req);
+        try {
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            const config = await gateway.configGet();
+            overview = normalizeModelsOverview(redactSecrets(config));
+          }
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/openclaw/models/providers') {
+        const body = await readJson(req);
+        let input: ProviderUpsertInput;
+        try {
+          input = sanitizeProviderUpsertInput(body);
+        } catch (err: any) {
+          return sendJson(res, 400, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+
+        const gateway = makeGatewayClient(req);
+        try {
+          try {
+            await gateway.providerCreate(input);
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            await upsertProviderViaConfig(gateway, input);
+          }
+
+          try {
+            await gateway.configApply();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+          }
+
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 201, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelProviderPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)$/) : null;
+      if (modelProviderPatchMatch) {
+        const providerId = safeDecodeURIComponent(modelProviderPatchMatch[1]);
+        const body = await readJson(req);
+        const gateway = makeGatewayClient(req);
+
+        const candidate = { ...(asObject(body) ?? {}), id: providerId } as any;
+        try {
+          if (!normalizeString(candidate.kind) || !normalizeString(candidate.auth_mode) || candidate.enabled === undefined) {
+            let existing: any = null;
+            try {
+              const overview = await gateway.modelsOverview();
+              existing = overview.providers.find((p: any) => p.id === providerId) ?? null;
+            } catch (err) {
+              if (!isGatewayFallbackError(err)) throw err;
+              const overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+              existing = overview.providers.find((p: any) => p.id === providerId) ?? null;
+            }
+
+            if (!existing) return sendJson(res, 404, { error: 'Provider not found' }, corsHeaders);
+            if (!normalizeString(candidate.kind)) candidate.kind = existing.kind;
+            if (!normalizeString(candidate.auth_mode)) candidate.auth_mode = existing.auth_mode;
+            if (candidate.enabled === undefined) candidate.enabled = existing.enabled;
+          }
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+
+        let input: ProviderUpsertInput;
+        try {
+          input = sanitizeProviderUpsertInput(candidate);
+        } catch (err: any) {
+          return sendJson(res, 400, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+
+        try {
+          try {
+            await gateway.providerUpdate(providerId, input);
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            await upsertProviderViaConfig(gateway, input);
+          }
+
+          try {
+            await gateway.configApply();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+          }
+
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelProviderDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)$/) : null;
+      if (modelProviderDeleteMatch) {
+        const providerId = safeDecodeURIComponent(modelProviderDeleteMatch[1]);
+        const gateway = makeGatewayClient(req);
+
+        try {
+          try {
+            await gateway.providerDelete(providerId);
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            const removed = await deleteProviderViaConfig(gateway, providerId);
+            if (!removed) return sendJson(res, 404, { error: 'Provider not found' }, corsHeaders);
+          }
+
+          try {
+            await gateway.configApply();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+          }
+
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, { ok: true, overview }, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/openclaw/models/scan') {
+        const gateway = makeGatewayClient(req);
+        try {
+          let overview;
+          try {
+            overview = await gateway.modelsScan();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            await gateway.configApply();
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/openclaw/models/apply') {
+        const gateway = makeGatewayClient(req);
+        try {
+          await gateway.configApply();
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelOauthStartMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)\/oauth\/start$/)
+        : null;
+      if (modelOauthStartMatch) {
+        const providerId = safeDecodeURIComponent(modelOauthStartMatch[1]);
+        const gateway = makeGatewayClient(req);
+        try {
+          const payload = await gateway.oauthStart(providerId);
+          return sendJson(res, 200, payload, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelOauthStatusMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)\/oauth\/status$/)
+        : null;
+      if (modelOauthStatusMatch) {
+        const providerId = safeDecodeURIComponent(modelOauthStatusMatch[1]);
+        const attemptId = normalizeString(url.searchParams.get('attemptId') ?? '');
+        const gateway = makeGatewayClient(req);
+        try {
+          const payload = await gateway.oauthStatus(providerId, attemptId || null);
+          return sendJson(res, 200, payload, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
       }
 
       // --- API ---

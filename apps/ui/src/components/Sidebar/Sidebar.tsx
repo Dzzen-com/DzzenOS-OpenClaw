@@ -6,6 +6,7 @@ import {
   IconFile,
   IconKanban,
   IconLayout,
+  IconModel,
   IconSpark,
   IconSettings,
   IconWorkflow,
@@ -26,8 +27,8 @@ export function Sidebar({
   mobileOpen = false,
   onCloseMobile,
 }: {
-  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills';
-  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills') => void;
+  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills' | 'models';
+  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills' | 'models') => void;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
@@ -131,6 +132,16 @@ export function Sidebar({
           icon={<IconBot />}
         >
           Agent Library
+        </NavItem>
+        <NavItem
+          active={selectedPage === 'models'}
+          onClick={() => {
+            onSelectPage('models');
+            onCloseMobile?.();
+          }}
+          icon={<IconModel />}
+        >
+          Models
         </NavItem>
         <NavItem
           active={selectedPage === 'skills'}
