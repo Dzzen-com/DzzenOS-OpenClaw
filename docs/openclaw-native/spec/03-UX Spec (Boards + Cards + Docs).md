@@ -40,6 +40,15 @@
 Status columns:
 - Ideas / To do / In progress / Review / Release / Done / Archived
 
+Empty state:
+- If no boards exist, show a primary CTA (“Create your first board”) and keep the flow minimal.
+
+Quick capture:
+- A fast input to capture ideas directly into **Ideas** without opening a modal.
+
+Bulk actions:
+- Multi-select cards for status changes or archive.
+
 ### 2.2 Views (фильтры)
 Важно сделать сохранённые представления:
 - Founder Ops view (Domain=Founder Ops)
@@ -67,6 +76,17 @@ Status columns:
 - Domain + Priority
 - какой агент выбран (и откуда: board default или override)
 - последний run: статус + время + (оценка стоимости, если есть)
+- Agent status strip: running/idle + stage (Plan/Execute/Report) + elapsed time
+- Reasoning control per task (auto/off/low/medium/high) with info tooltip
+- Stop run button (soft cancel) for active sessions
+- Minimal activity ticker (last 2–3 steps) inside the task drawer
+- Token usage hint (input/output or total) when available
+- Stop confirmation (two-step) + Shift+S shortcut in drawer
+- Stage badge in status strip (glowing dot)
+- Subtle agent heartbeat on kanban cards while running
+- Stage icons in activity ticker
+- Agent selector inside task drawer; if no enabled agents, show CTA “Manage agents”
+- Skills/tools/prompts are configured on the agent profile (not per task)
 
 ---
 

@@ -282,10 +282,22 @@ export function AgentsPage() {
           {agentsQ.isLoading && installedAgents.length === 0 ? (
             <CardsSkeleton />
           ) : installedActive.length === 0 && installedDisabled.length === 0 ? (
-            <EmptyState
-              title="No agents installed"
-              subtitle="Install a preset below, or create a new custom agent."
-            />
+            <div className="grid gap-3 rounded-2xl border border-border/70 bg-surface-1/70 p-6 shadow-panel">
+              <EmptyState
+                title="No agents installed"
+                subtitle="Install a preset below, or create a new custom agent."
+              />
+              <div>
+                <Button
+                  onClick={() => {
+                    setDrawerAgent(null);
+                    setDrawerOpen(true);
+                  }}
+                >
+                  Create agent
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="grid gap-6">
               {installedActive.length > 0 ? (

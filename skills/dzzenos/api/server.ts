@@ -13,6 +13,7 @@
  *   POST  /tasks                   { title, description?, boardId? }
  *   PATCH /tasks/:id               { status?, title?, description? }
  *   POST  /tasks/:id/simulate-run  (create run + steps; auto-advance)
+ *   POST  /tasks/:id/stop          (soft cancel active run)
  *   GET   /tasks/:id/runs          (runs + steps)
  *
  * Usage:
@@ -81,6 +82,8 @@ type AllowedOrigins = {
   hostPorts: Set<string>;
 };
 
+type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+
 function parseAllowedOrigins(raw: string | undefined): AllowedOrigins {
   const origins = new Set<string>();
   const hosts = new Set<string>();
@@ -145,11 +148,41 @@ function sendText(res: http.ServerResponse, status: number, text: string, header
   res.end(text);
 }
 
-async function readJson(req: http.IncomingMessage): Promise<any> {
+const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+
+function isJsonContentType(raw: string): boolean {
+  const ct = raw.split(';')[0]?.trim().toLowerCase();
+  if (!ct) return false;
+  if (ct === 'application/json') return true;
+  return ct.startsWith('application/') && ct.endsWith('+json');
+}
+
+async function readBodyText(req: http.IncomingMessage, maxBytes = DEFAULT_MAX_BODY_BYTES): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new HttpError(413, `Request body too large (max ${maxBytes} bytes)`);
+    }
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+async function readJson(req: http.IncomingMessage): Promise<any> {
+  const maxBytesRaw = Number(process.env.DZZENOS_MAX_BODY_BYTES ?? '');
+  const maxBytes = Number.isFinite(maxBytesRaw) && maxBytesRaw > 0 ? maxBytesRaw : DEFAULT_MAX_BODY_BYTES;
+
+  const raw = (await readBodyText(req, maxBytes)).trim();
   if (!raw) return {};
+
+  const ct = String(req.headers['content-type'] ?? '');
+  if (!isJsonContentType(ct)) {
+    throw new HttpError(415, 'Expected Content-Type: application/json');
+  }
+
   try {
     return JSON.parse(raw);
   } catch {
@@ -167,6 +200,7 @@ function sleep(ms: number) {
 
 const TASK_STATUSES = new Set(['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived']);
 const CHECKLIST_STATES = new Set(['todo', 'doing', 'done']);
+const REASONING_LEVELS = new Set<ReasoningLevel>(['auto', 'off', 'low', 'medium', 'high']);
 
 function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -268,6 +302,22 @@ const PROMPT_OVERRIDE_KEYS = new Set(['system', 'plan', 'execute', 'chat', 'repo
 
 function normalizeString(value: any): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new HttpError(400, 'Invalid URL encoding');
+  }
+}
+
+function requireUuid(value: string, label: string): string {
+  const v = String(value ?? '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
+    throw new HttpError(400, `${label} must be a UUID`);
+  }
+  return v;
 }
 
 function parseStringArrayJson(raw: any): string[] {
@@ -452,6 +502,7 @@ function main() {
   const openResponsesModel =
     process.env.OPENRESPONSES_MODEL ?? process.env.DZZENOS_OPENRESPONSES_MODEL ?? 'openclaw:main';
   const defaultAgentId = process.env.DZZENOS_DEFAULT_AGENT_ID ?? '';
+  const taskAbortControllers = new Map<string, AbortController>();
 
   function boardDocPath(boardId: string) {
     return path.join(docsDir, 'boards', `${boardId}.md`);
@@ -469,6 +520,7 @@ function main() {
     sessionKey: string;
     text: string;
     agentOpenClawId?: string | null;
+    signal?: AbortSignal;
   }): Promise<{ text: string; raw: any }> {
     if (!openResponsesUrl) {
       throw new Error('OpenResponses URL is not configured (set OPENRESPONSES_URL).');
@@ -490,6 +542,7 @@ function main() {
       method: 'POST',
       headers,
       body: JSON.stringify({ model: openResponsesModel, input: input.text }),
+      signal: input.signal,
     });
 
     const rawText = await res.text();
@@ -632,27 +685,56 @@ function main() {
     );
   }
 
-  function ensureTaskSession(taskId: string, agentId?: string | null) {
-    const existing = rowOrNull<{ task_id: string; agent_id: string | null; session_key: string }>(
-      db.prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?').all(taskId) as any
+  function ensureTaskSession(
+    taskId: string,
+    opts?: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null }
+  ) {
+    const existing = rowOrNull<{
+      task_id: string;
+      agent_id: string | null;
+      session_key: string;
+      reasoning_level: ReasoningLevel | null;
+    }>(
+      db
+        .prepare('SELECT task_id, agent_id, session_key, reasoning_level FROM task_sessions WHERE task_id = ?')
+        .all(taskId) as any
     );
     if (existing) {
-      if (agentId && existing.agent_id !== agentId) {
-        db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(agentId, taskId);
+      if (opts?.agentId && existing.agent_id !== opts.agentId) {
+        db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(opts.agentId, taskId);
       }
-      return rowOrNull<{ task_id: string; agent_id: string | null; session_key: string }>(
-        db.prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?').all(taskId) as any
+      if (opts?.reasoningLevel && existing.reasoning_level !== opts.reasoningLevel) {
+        db.prepare('UPDATE task_sessions SET reasoning_level = ? WHERE task_id = ?').run(opts.reasoningLevel, taskId);
+      }
+      return rowOrNull<{
+        task_id: string;
+        agent_id: string | null;
+        session_key: string;
+        reasoning_level: ReasoningLevel | null;
+      }>(
+        db
+          .prepare('SELECT task_id, agent_id, session_key, reasoning_level FROM task_sessions WHERE task_id = ?')
+          .all(taskId) as any
       );
     }
 
     const sessionKey = taskId;
-    db.prepare('INSERT INTO task_sessions(task_id, agent_id, session_key) VALUES (?, ?, ?)').run(
+    const reasoningLevel = opts?.reasoningLevel ?? 'auto';
+    db.prepare('INSERT INTO task_sessions(task_id, agent_id, session_key, reasoning_level) VALUES (?, ?, ?, ?)').run(
       taskId,
-      agentId ?? null,
-      sessionKey
+      opts?.agentId ?? null,
+      sessionKey,
+      reasoningLevel
     );
-    return rowOrNull<{ task_id: string; agent_id: string | null; session_key: string }>(
-      db.prepare('SELECT task_id, agent_id, session_key FROM task_sessions WHERE task_id = ?').all(taskId) as any
+    return rowOrNull<{
+      task_id: string;
+      agent_id: string | null;
+      session_key: string;
+      reasoning_level: ReasoningLevel | null;
+    }>(
+      db
+        .prepare('SELECT task_id, agent_id, session_key, reasoning_level FROM task_sessions WHERE task_id = ?')
+        .all(taskId) as any
     );
   }
 
@@ -674,19 +756,36 @@ function main() {
     }
   }
 
+  function resolveReasoning(level: ReasoningLevel | null | undefined, description?: string | null): ReasoningLevel | null {
+    const safe = level ?? 'auto';
+    if (safe === 'off') return null;
+    if (safe === 'auto') {
+      const len = (description ?? '').trim().length;
+      return len >= 240 ? 'medium' : null;
+    }
+    return safe;
+  }
+
+  function isAbortError(err: any): boolean {
+    return err?.name === 'AbortError' || String(err?.message ?? '').toLowerCase().includes('aborted');
+  }
+
   async function runTask(opts: { taskId: string; mode: 'plan' | 'execute' | 'report'; agentId?: string | null }) {
     const task = getTaskMeta(opts.taskId);
     if (!task) throw new Error('Task not found');
 
-    const session = ensureTaskSession(task.id, opts.agentId ?? null);
+    const session = ensureTaskSession(task.id, { agentId: opts.agentId ?? null });
     const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
-    const agentOpenClawId = (agentRow?.openclaw_agent_id ?? defaultAgentId) || null;
+    const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
     const agentDisplayName = agentRow?.display_name ?? 'orchestrator';
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
 
     const runId = randomUUID();
     const stepId = randomUUID();
+
+    const controller = new AbortController();
+    taskAbortControllers.set(task.id, controller);
 
     db.exec('BEGIN');
     try {
@@ -713,10 +812,17 @@ function main() {
             ? 'You are executing the task. Return JSON: { "status": "review" | "doing", "report": "..." }.'
             : 'Summarize the completion for changelog. Return bullet points.';
 
-      const { text } = await callOpenResponses({
+      const reasoning = resolveReasoning(session?.reasoning_level ?? 'auto', task.description);
+      const reasoningPrefix = reasoning ? `/think ${reasoning}` : '';
+      const inputText =
+        `${reasoningPrefix ? `${reasoningPrefix}\n` : ''}${prompt}\n\n` +
+        `Task title: ${task.title}\nTask description: ${task.description ?? ''}`;
+
+      const { text, raw } = await callOpenResponses({
         sessionKey: session?.session_key ?? task.id,
         agentOpenClawId,
-        text: `${prompt}\n\nTask title: ${task.title}\nTask description: ${task.description ?? ''}`,
+        text: inputText,
+        signal: controller.signal,
       });
 
       outputText = text;
@@ -724,11 +830,36 @@ function main() {
 
       db.prepare(
         "UPDATE run_steps SET status = 'succeeded', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-      ).run(JSON.stringify({ text: outputText, parsed }), stepId);
+      ).run(JSON.stringify({ text: outputText, parsed, usage: raw?.usage ?? null }), stepId);
+
+      const usage = raw?.usage ?? null;
+      if (usage && typeof usage === 'object') {
+        const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? null);
+        const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? null);
+        const totalTokens = Number(usage.total_tokens ?? null);
+        db.prepare(
+          'UPDATE agent_runs SET input_tokens = ?, output_tokens = ?, total_tokens = ? WHERE id = ?'
+        ).run(
+          Number.isFinite(inputTokens) ? inputTokens : null,
+          Number.isFinite(outputTokens) ? outputTokens : null,
+          Number.isFinite(totalTokens) ? totalTokens : null,
+          runId
+        );
+      }
+
       db.prepare(
         "UPDATE agent_runs SET status = 'succeeded', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
       ).run(runId);
     } catch (err: any) {
+      if (isAbortError(err)) {
+        db.prepare(
+          "UPDATE run_steps SET status = 'cancelled', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+        ).run(JSON.stringify({ error: 'cancelled' }), stepId);
+        db.prepare(
+          "UPDATE agent_runs SET status = 'cancelled', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+        ).run(runId);
+        return { runId, outputText: '', parsed: null, cancelled: true };
+      }
       db.prepare(
         "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
       ).run(JSON.stringify({ error: String(err?.message ?? err) }), stepId);
@@ -737,6 +868,7 @@ function main() {
       ).run(runId);
       throw err;
     } finally {
+      taskAbortControllers.delete(task.id);
       db.prepare('UPDATE task_sessions SET last_run_id = ?, status = ? WHERE task_id = ?').run(
         runId,
         'idle',
@@ -775,34 +907,91 @@ function main() {
     return { runId, outputText, parsed };
   }
 
-  function isSameOrigin(req: http.IncomingMessage): boolean {
-    const origin = req.headers.origin as string | undefined;
-    const referer = req.headers.referer as string | undefined;
-    const host = req.headers.host ?? '';
-    const proto = String(req.headers['x-forwarded-proto'] ?? 'http');
-    const base = `${proto}://${host}`;
-    const normalize = (v: string) => v.replace(/\/$/, '');
+function isSameOrigin(req: http.IncomingMessage): boolean {
+  const origin = req.headers.origin as string | undefined;
+  const referer = req.headers.referer as string | undefined;
+  const host = req.headers.host ?? '';
+  const proto = String(req.headers['x-forwarded-proto'] ?? 'http');
+  const base = `${proto}://${host}`;
+  const normalize = (v: string) => v.replace(/\/$/, '');
 
-    if (origin) {
-      return normalize(origin) === normalize(base);
+  if (origin) {
+    return normalize(origin) === normalize(base);
+  }
+  if (referer) {
+    try {
+      const u = new URL(referer);
+      return normalize(u.origin) === normalize(base);
+    } catch {
+      return false;
     }
-    if (referer) {
-      try {
-        const u = new URL(referer);
-        return normalize(u.origin) === normalize(base);
-      } catch {
-        return false;
-      }
+  }
+  return false;
+}
+
+function isStateChangingMethod(method: string | undefined): boolean {
+  return method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+}
+
+function getEffectiveOrigin(req: http.IncomingMessage): string | null {
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin.trim() : '';
+  if (origin) return origin;
+  const referer = typeof req.headers.referer === 'string' ? req.headers.referer.trim() : '';
+  if (!referer) return null;
+  try {
+    return new URL(referer).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackAddress(addr: string | undefined): boolean {
+  if (!addr) return false;
+  const a = addr.startsWith('::ffff:') ? addr.slice('::ffff:'.length) : addr;
+  if (a === '::1' || a === '::') return true;
+  if (a === '127.0.0.1') return true;
+  return a.startsWith('127.');
+}
+
+function requireAllowedOriginForStateChange(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  corsHeaders: Record<string, string>,
+  allowedOrigins: AllowedOrigins
+): boolean {
+  if (!isStateChangingMethod(req.method)) return true;
+
+  const origin = getEffectiveOrigin(req);
+  if (origin) {
+    if (!isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
+      sendText(res, 403, 'Invalid origin', corsHeaders);
+      return false;
     }
+    return true;
+  }
+
+  // Browsers typically send Sec-Fetch-*; if present but no Origin/Referer, reject.
+  const secFetchSite = req.headers['sec-fetch-site'];
+  if (typeof secFetchSite === 'string' && secFetchSite.trim()) {
+    sendText(res, 403, 'Missing origin', corsHeaders);
     return false;
   }
 
-  const server = http.createServer(async (req, res) => {
-    const origin = (req.headers.origin as string | undefined) ?? '';
-    const corsHeaders: Record<string, string> = {
-      'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-      'access-control-allow-headers': 'content-type',
-    };
+  // Allow originless state changes only from loopback (e.g., CLI tools on the same host).
+  if (!isLoopbackAddress(req.socket.remoteAddress)) {
+    sendText(res, 403, 'Missing origin', corsHeaders);
+    return false;
+  }
+
+  return true;
+}
+
+const server = http.createServer(async (req, res) => {
+  const origin = (req.headers.origin as string | undefined) ?? '';
+  const corsHeaders: Record<string, string> = {
+    'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
+    'access-control-allow-headers': 'content-type',
+  };
     if (origin && isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
       corsHeaders['access-control-allow-origin'] = origin;
       corsHeaders['vary'] = 'Origin';
@@ -814,14 +1003,29 @@ function main() {
       return;
     }
 
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
 
-    try {
-      // --- Auth (for domain / reverse-proxy installs) ---
-      // This API can act as a Caddy `forward_auth` target.
-      // If no auth config exists, we keep auth endpoints usable but do not block API calls here.
-      if (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) {
-        if (!auth) {
+  try {
+    if (!requireAllowedOriginForStateChange(req, res, corsHeaders, allowedOrigins)) return;
+    if (auth) {
+      const isAuthExempt =
+        (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) ||
+        url.pathname.startsWith('/auth/');
+      if (!isAuthExempt) {
+        const cookies = parseCookies(req.headers.cookie as string | undefined);
+        const v = cookies[auth.cookie.name];
+        const ok = v ? verifySessionCookie(auth, v) : null;
+        if (!ok) {
+          return sendText(res, 401, 'unauthorized', { ...corsHeaders, 'x-auth-login': '/login' });
+        }
+      }
+    }
+
+    // --- Auth (for domain / reverse-proxy installs) ---
+    // This API can act as a Caddy `forward_auth` target.
+    // If no auth config exists, we keep auth endpoints usable but do not block API calls here.
+    if (req.method === 'GET' && (url.pathname === '/login' || url.pathname === '/')) {
+      if (!auth) {
           return sendText(
             res,
             200,
@@ -1133,6 +1337,9 @@ function main() {
             r.finished_at,
             r.created_at,
             r.updated_at,
+            r.input_tokens,
+            r.output_tokens,
+            r.total_tokens,
             t.title as task_title,
             CASE
               WHEN r.status = 'running' AND julianday(r.created_at) < julianday('now') - (? / 1440.0) THEN 1
@@ -2140,13 +2347,13 @@ function main() {
 
       const boardDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
       if (boardDocsGet) {
-        const boardId = decodeURIComponent(boardDocsGet[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardDocsGet[1]), 'boardId');
         return sendJson(res, 200, { content: readTextFile(boardDocPath(boardId)) }, corsHeaders);
       }
 
       const boardDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
       if (boardDocsPut) {
-        const boardId = decodeURIComponent(boardDocsPut[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardDocsPut[1]), 'boardId');
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
         writeTextFile(boardDocPath(boardId), content);
@@ -2156,13 +2363,13 @@ function main() {
 
       const boardChangelogGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/changelog$/) : null;
       if (boardChangelogGet) {
-        const boardId = decodeURIComponent(boardChangelogGet[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardChangelogGet[1]), 'boardId');
         return sendJson(res, 200, { content: readTextFile(boardChangelogPath(boardId)) }, corsHeaders);
       }
 
       const boardSummaryPost = req.method === 'POST' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/summary$/) : null;
       if (boardSummaryPost) {
-        const boardId = decodeURIComponent(boardSummaryPost[1]);
+        const boardId = requireUuid(safeDecodeURIComponent(boardSummaryPost[1]), 'boardId');
         const body = await readJson(req);
         const title = typeof body?.title === 'string' ? body.title.trim() : 'Untitled';
         const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
@@ -2265,7 +2472,36 @@ function main() {
 
         const tasks = db
           .prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE board_id = ? ORDER BY position ASC, created_at ASC'
+            `SELECT
+               t.id,
+               t.board_id,
+               t.title,
+               t.description,
+               t.status,
+               t.position,
+               t.due_at,
+               t.created_at,
+               t.updated_at,
+               s.agent_id,
+               s.status as session_status,
+               s.last_run_id,
+               a.display_name as agent_display_name,
+               r.status as run_status,
+               r.started_at as run_started_at,
+               r.updated_at as run_updated_at,
+               r.finished_at as run_finished_at,
+               rs.kind as run_step_kind
+             FROM tasks t
+             LEFT JOIN task_sessions s ON s.task_id = t.id
+             LEFT JOIN agents a ON a.id = s.agent_id
+             LEFT JOIN agent_runs r ON r.id = (
+               SELECT id FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
+             )
+             LEFT JOIN run_steps rs ON rs.id = (
+               SELECT id FROM run_steps WHERE run_id = r.id ORDER BY step_index DESC LIMIT 1
+             )
+             WHERE t.board_id = ?
+             ORDER BY t.position ASC, t.created_at ASC`
           )
           .all(boardId);
         return sendJson(res, 200, tasks, corsHeaders);
@@ -2334,7 +2570,8 @@ function main() {
         const row = rowOrNull<any>(
           db
             .prepare(
-              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.created_at, s.updated_at,
+              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.reasoning_level,
+                      s.created_at, s.updated_at,
                       a.display_name as agent_display_name, a.openclaw_agent_id as agent_openclaw_id
                FROM task_sessions s
                LEFT JOIN agents a ON a.id = s.agent_id
@@ -2351,6 +2588,7 @@ function main() {
         const taskId = decodeURIComponent(taskSessionPost[1]);
         const body = await readJson(req);
         const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const reasoningLevel = typeof body?.reasoningLevel === 'string' ? body.reasoningLevel : null;
 
         const task = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM tasks WHERE id = ?').all(taskId) as any);
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
@@ -2358,12 +2596,16 @@ function main() {
         if (agentId && !getAgentRowById(agentId)) {
           return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
         }
+        if (reasoningLevel && !REASONING_LEVELS.has(reasoningLevel as ReasoningLevel)) {
+          return sendJson(res, 400, { error: 'Invalid reasoningLevel' }, corsHeaders);
+        }
 
-        ensureTaskSession(taskId, agentId);
+        ensureTaskSession(taskId, { agentId, reasoningLevel: (reasoningLevel as ReasoningLevel | null) ?? undefined });
         const row = rowOrNull<any>(
           db
             .prepare(
-              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.created_at, s.updated_at,
+              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.reasoning_level,
+                      s.created_at, s.updated_at,
                       a.display_name as agent_display_name, a.openclaw_agent_id as agent_openclaw_id
                FROM task_sessions s
                LEFT JOIN agents a ON a.id = s.agent_id
@@ -2390,6 +2632,32 @@ function main() {
         } catch (err: any) {
           return sendJson(res, 500, { error: String(err?.message ?? err) }, corsHeaders);
         }
+      }
+
+      const taskStopMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/stop$/) : null;
+      if (taskStopMatch) {
+        const taskId = decodeURIComponent(taskStopMatch[1]);
+        const session = rowOrNull<{ task_id: string; last_run_id: string | null }>(
+          db.prepare('SELECT task_id, last_run_id FROM task_sessions WHERE task_id = ?').all(taskId) as any
+        );
+        if (!session) return sendJson(res, 404, { error: 'Task session not found' }, corsHeaders);
+
+        const controller = taskAbortControllers.get(taskId);
+        if (controller) controller.abort();
+
+        if (session.last_run_id) {
+          db.prepare(
+            "UPDATE run_steps SET status = 'cancelled', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE run_id = ? AND status = 'running'"
+          ).run(session.last_run_id);
+          db.prepare(
+            "UPDATE agent_runs SET status = 'cancelled', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ? AND status = 'running'"
+          ).run(session.last_run_id);
+        }
+
+        db.prepare("UPDATE task_sessions SET status = 'idle' WHERE task_id = ?").run(taskId);
+        sseBroadcast({ type: 'runs.changed', payload: { taskId, runId: session.last_run_id } });
+        sseBroadcast({ type: 'tasks.changed', payload: { taskId } });
+        return sendJson(res, 200, { ok: true, stopped: Boolean(controller), runId: session.last_run_id }, corsHeaders);
       }
 
       const checklistGet = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/checklist$/) : null;
@@ -2508,7 +2776,7 @@ function main() {
 
         const session = ensureTaskSession(taskId, agentId);
         const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
-        const agentOpenClawId = (agentRow?.openclaw_agent_id ?? defaultAgentId) || null;
+        const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
 
         const userMsgId = randomUUID();
         db.prepare('INSERT INTO task_messages(id, task_id, role, content) VALUES (?, ?, ?, ?)').run(
@@ -2689,6 +2957,7 @@ function main() {
         const runs = db
           .prepare(
             `SELECT id, workspace_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
+                    input_tokens, output_tokens, total_tokens,
                     CASE
                       WHEN status = 'running' AND julianday(created_at) < julianday('now') - (? / 1440.0) THEN 1
                       ELSE 0

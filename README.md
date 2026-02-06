@@ -131,6 +131,10 @@ Useful flags:
 SMOKE_KEEP_TEMP=1 pnpm dzzenos:smoke:local
 ```
 
+## Security checks
+
+- Auth/session smoke test: `pnpm test:security`
+
 ---
 
 ## Roadmap

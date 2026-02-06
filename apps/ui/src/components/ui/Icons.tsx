@@ -84,6 +84,44 @@ export function IconExternal({ className, size, ...props }: IconProps) {
   );
 }
 
+export function IconInfo({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <circle cx="10" cy="10" r="7" />
+      <path d="M10 9v5" />
+      <circle cx="10" cy="6.5" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconPlan({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <circle cx="10" cy="10" r="7" />
+      <path d="M10 10l3-3" />
+      <circle cx="10" cy="10" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconExecute({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <path d="M7 5l7 5-7 5z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+export function IconReport({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <rect x="5" y="3" width="10" height="14" rx="2" />
+      <path d="M8 8h4" />
+      <path d="M8 11h4" />
+    </svg>
+  );
+}
+
 export function IconSpark({ className, size, ...props }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
