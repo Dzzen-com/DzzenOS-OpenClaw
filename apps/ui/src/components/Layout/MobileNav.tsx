@@ -1,6 +1,6 @@
 import { StatusDot } from '../ui/StatusDot';
 
-type PageKey = 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills' | 'models';
+type PageKey = 'dashboard' | 'kanban' | 'automations' | 'docs' | 'memory' | 'agents' | 'skills' | 'models';
 
 const ITEMS: { key: PageKey; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },

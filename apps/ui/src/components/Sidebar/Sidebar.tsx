@@ -7,6 +7,7 @@ import {
   IconKanban,
   IconLayout,
   IconModel,
+  IconReport,
   IconSpark,
   IconSettings,
   IconWorkflow,
@@ -27,8 +28,8 @@ export function Sidebar({
   mobileOpen = false,
   onCloseMobile,
 }: {
-  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills' | 'models';
-  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'agents' | 'skills' | 'models') => void;
+  selectedPage: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'memory' | 'agents' | 'skills' | 'models';
+  onSelectPage: (p: 'dashboard' | 'kanban' | 'automations' | 'docs' | 'memory' | 'agents' | 'skills' | 'models') => void;
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
@@ -162,6 +163,16 @@ export function Sidebar({
           icon={<IconFile />}
         >
           Docs
+        </NavItem>
+        <NavItem
+          active={selectedPage === 'memory'}
+          onClick={() => {
+            onSelectPage('memory');
+            onCloseMobile?.();
+          }}
+          icon={<IconReport />}
+        >
+          Memory
         </NavItem>
         <NavLink
           href={openclawHref}
