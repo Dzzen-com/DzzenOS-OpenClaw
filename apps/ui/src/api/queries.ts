@@ -1,5 +1,6 @@
 import { apiFetch } from './client';
 import type {
+  Agent,
   AgentRun,
   AgentRunListItem,
   AgentRunStatus,
@@ -8,6 +9,8 @@ import type {
   Automation,
   Board,
   Task,
+  TaskContextItem,
+  TaskExecutionConfig,
   TaskStatus,
 } from './types';
 
@@ -38,8 +41,53 @@ export function simulateRun(taskId: string): Promise<{ runId: string }> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/simulate-run`, { method: 'POST' });
 }
 
+export function attachTaskAgent(taskId: string, agentId: string): Promise<Task> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/attach-agent`, {
+    method: 'POST',
+    body: JSON.stringify({ agentId }),
+  });
+}
+
+export function getTaskExecutionConfig(taskId: string): Promise<TaskExecutionConfig> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/execution-config`);
+}
+
+export function runTask(taskId: string, input?: { brief?: string; contextItemIds?: string[] }): Promise<{ runId: string }> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({
+      brief: input?.brief ?? null,
+      contextItemIds: input?.contextItemIds ?? null,
+    }),
+  });
+}
+
 export function listTaskRuns(taskId: string): Promise<AgentRun[]> {
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/runs`);
+}
+
+export function listTaskContextItems(taskId: string): Promise<TaskContextItem[]> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/context-items`);
+}
+
+export function createTaskContextItem(
+  taskId: string,
+  input: { title?: string; content: string; kind?: string }
+): Promise<TaskContextItem> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/context-items`, {
+    method: 'POST',
+    body: JSON.stringify({
+      title: input.title ?? null,
+      content: input.content,
+      kind: input.kind ?? 'note',
+    }),
+  });
+}
+
+export function deleteTaskContextItem(taskId: string, itemId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/context-items/${encodeURIComponent(itemId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export function listRuns(input?: { status?: AgentRunStatus; stuckMinutes?: number }): Promise<AgentRunListItem[]> {
@@ -79,6 +127,12 @@ export function requestTaskApproval(
     method: 'POST',
     body: JSON.stringify({ title: input?.title ?? null, body: input?.body ?? null, stepId: input?.stepId ?? null }),
   });
+}
+
+// --- Agents ---
+
+export function listAgents(): Promise<Agent[]> {
+  return apiFetch('/agents');
 }
 
 // --- Automations ---

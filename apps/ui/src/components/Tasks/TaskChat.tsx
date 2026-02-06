@@ -1,21 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createResponse, type ChatMessage } from '../../api/openclaw';
+import { createResponse } from '../../api/openclaw';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 
 type UiMsg = { id: string; role: 'user' | 'assistant'; content: string; ts: number };
 
-function lsKey(taskId: string) {
-  // Deterministic per task.
-  return `dzzenos.taskchat.v1.${taskId}`;
+function lsKey(taskId: string, agentOpenclawId?: string | null) {
+  // Deterministic per task+agent profile.
+  return `dzzenos.taskchat.v2.${taskId}.${agentOpenclawId ?? 'unbound'}`;
 }
 
 function nowId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: string }) {
-  const key = useMemo(() => lsKey(taskId), [taskId]);
+export function TaskChat({
+  taskId,
+  taskTitle,
+  agentOpenclawId,
+  model,
+  disabled,
+  disabledReason,
+}: {
+  taskId: string;
+  taskTitle: string;
+  agentOpenclawId?: string | null;
+  model?: string | null;
+  disabled?: boolean;
+  disabledReason?: string | null;
+}) {
+  const key = useMemo(() => lsKey(taskId, agentOpenclawId), [taskId, agentOpenclawId]);
   const [input, setInput] = useState('');
   const [msgs, setMsgs] = useState<UiMsg[]>([]);
   const [busy, setBusy] = useState(false);
@@ -49,18 +63,9 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
     bottomRef.current?.scrollIntoView({ block: 'end' });
   }, [msgs.length, busy]);
 
-  const chatMessages: ChatMessage[] = useMemo(() => {
-    const sys: ChatMessage = {
-      role: 'system',
-      content: `You are the task assistant for DzzenOS. Task: ${taskTitle} (id: ${taskId}). Be concise and practical.`,
-    };
-    const rest = msgs.map((m) => ({ role: m.role, content: m.content } as ChatMessage));
-    return [sys, ...rest];
-  }, [msgs, taskId, taskTitle]);
-
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || disabled) return;
 
     setErr(null);
     setBusy(true);
@@ -70,7 +75,12 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
     setMsgs((m) => [...m, userMsg]);
 
     try {
-      const reply = await createResponse({ sessionKey: key, text });
+      const reply = await createResponse({
+        sessionKey: key,
+        text,
+        agentId: agentOpenclawId ?? undefined,
+        model: model ?? undefined,
+      });
       const a: UiMsg = { id: nowId(), role: 'assistant', content: reply.trim(), ts: Date.now() };
       setMsgs((m) => [...m, a]);
     } catch (e: any) {
@@ -87,6 +97,9 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
     <div className="grid gap-3">
       <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
         <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Chat</div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          {taskTitle} • model: <span className="text-foreground">{model ?? 'openclaw:main'}</span>
+        </div>
         <div className="mt-2 max-h-[45vh] overflow-auto rounded-lg border border-border/70 bg-background/40 p-3">
           {msgs.length ? (
             <div className="grid gap-3">
@@ -108,6 +121,7 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
       </div>
 
       {err ? <InlineAlert>{err}</InlineAlert> : null}
+      {disabled ? <InlineAlert>{disabledReason ?? 'Attach an enabled orchestrator agent to start pre-run chat.'}</InlineAlert> : null}
 
       <div className="flex items-end gap-2">
         <textarea
@@ -115,6 +129,7 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
           onChange={(e) => setInput(e.target.value)}
           placeholder="Write a message…"
           rows={3}
+          disabled={disabled || busy}
           className="min-h-[72px] w-full resize-none rounded-md border border-input bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -123,7 +138,7 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
             }
           }}
         />
-        <Button disabled={busy || !input.trim()} onClick={send}>
+        <Button disabled={busy || !input.trim() || !!disabled} onClick={send}>
           Send
         </Button>
       </div>

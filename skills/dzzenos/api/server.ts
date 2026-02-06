@@ -10,6 +10,12 @@
  *   POST  /approvals/:id/approve   { decidedBy?, reason? }
  *   POST  /approvals/:id/reject    { decidedBy?, reason? }
  *   POST  /tasks/:id/request-approval (stub) { title?, body?, stepId? }
+ *   POST  /tasks/:id/attach-agent     { agentId }
+ *   GET   /tasks/:id/execution-config (resolved from attached agent profile)
+ *   GET   /tasks/:id/context-items
+ *   POST  /tasks/:id/context-items    { title, content, kind? }
+ *   DELETE /tasks/:id/context-items/:itemId
+ *   POST  /tasks/:id/run              (agent-first run with config snapshot)
  *   POST  /tasks                   { title, description?, boardId? }
  *   PATCH /tasks/:id               { status?, title?, description? }
  *   POST  /tasks/:id/simulate-run  (create run + steps; auto-advance)
@@ -156,6 +162,31 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function parseJsonText(raw: string | null | undefined): any {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function toJsonText(value: any): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      JSON.parse(trimmed);
+      return trimmed;
+    } catch {
+      throw new HttpError(400, 'Invalid JSON string');
+    }
+  }
+  if (typeof value === 'object') return JSON.stringify(value);
+  throw new HttpError(400, 'Expected object/array or JSON string');
+}
+
 function isRequestSecure(req: http.IncomingMessage): boolean {
   if ((req.socket as any).encrypted) return true;
   const xf = String(req.headers['x-forwarded-proto'] ?? '');
@@ -194,6 +225,51 @@ function getDefaultBoardId(db: DatabaseSync): string | null {
     db.prepare('SELECT id FROM boards ORDER BY position ASC, created_at ASC LIMIT 1').all() as any
   );
   return row?.id ?? null;
+}
+
+type AgentProfileRow = {
+  id: string;
+  display_name: string;
+  emoji: string | null;
+  openclaw_agent_id: string;
+  enabled: number;
+  role: string | null;
+  model: string | null;
+  tools_json: string | null;
+  policy_json: string | null;
+  skills_json: string | null;
+  guardrails_json: string | null;
+};
+
+function resolveExecutionConfig(agent: AgentProfileRow) {
+  return {
+    source: 'agent-profile',
+    model: agent.model ?? 'openclaw:main',
+    tools: parseJsonText(agent.tools_json),
+    policy: parseJsonText(agent.policy_json),
+    skills: parseJsonText(agent.skills_json),
+    guardrails: parseJsonText(agent.guardrails_json),
+  };
+}
+
+function agentPublicPayload(agent: AgentProfileRow) {
+  return {
+    id: agent.id,
+    display_name: agent.display_name,
+    emoji: agent.emoji,
+    openclaw_agent_id: agent.openclaw_agent_id,
+    enabled: Boolean(agent.enabled),
+    role: agent.role,
+    model: agent.model ?? null,
+    tools_json: agent.tools_json,
+    policy_json: agent.policy_json,
+    skills_json: agent.skills_json,
+    guardrails_json: agent.guardrails_json,
+    tools: parseJsonText(agent.tools_json),
+    policy: parseJsonText(agent.policy_json),
+    skills: parseJsonText(agent.skills_json),
+    guardrails: parseJsonText(agent.guardrails_json),
+  };
 }
 
 function main() {
@@ -529,6 +605,7 @@ function main() {
             r.status,
             r.started_at,
             r.finished_at,
+            r.config_snapshot_json,
             r.created_at,
             r.updated_at,
             t.title as task_title,
@@ -544,7 +621,7 @@ function main() {
         `;
 
         const isStuckMinutes = stuckMinutes != null ? stuckMinutes : 5;
-        const rows = db.prepare(sql).all(...params, isStuckMinutes) as any[];
+        const rows = db.prepare(sql).all(isStuckMinutes, ...params) as any[];
         const payload = rows.map((r) => ({ ...r, is_stuck: Boolean(r.is_stuck) }));
         return sendJson(res, 200, payload, corsHeaders);
       }
@@ -810,12 +887,28 @@ function main() {
       if (req.method === 'GET' && url.pathname === '/agents') {
         const rows = db
           .prepare(
-            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+            `SELECT
+               id,
+               display_name,
+               emoji,
+               openclaw_agent_id,
+               enabled,
+               role,
+               model,
+               tools_json,
+               policy_json,
+               skills_json,
+               guardrails_json,
+               created_at,
+               updated_at
+             FROM agents
+             ORDER BY enabled DESC, display_name ASC`
           )
-          .all() as any[];
-        const payload = rows.map((r) => ({
-          ...r,
-          enabled: Boolean(r.enabled),
+          .all() as AgentProfileRow[];
+        const payload = rows.map((r: any) => ({
+          ...agentPublicPayload(r),
+          created_at: r.created_at,
+          updated_at: r.updated_at,
         }));
         return sendJson(res, 200, payload, corsHeaders);
       }
@@ -830,7 +923,19 @@ function main() {
         try {
           db.prepare('DELETE FROM agents').run();
           const ins = db.prepare(
-            'INSERT INTO agents(id, display_name, emoji, openclaw_agent_id, enabled, role) VALUES (?, ?, ?, ?, ?, ?)'
+            `INSERT INTO agents(
+               id,
+               display_name,
+               emoji,
+               openclaw_agent_id,
+               enabled,
+               role,
+               model,
+               tools_json,
+               policy_json,
+               skills_json,
+               guardrails_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           );
 
           for (const row of body) {
@@ -839,12 +944,29 @@ function main() {
             const emoji = normalize(row?.emoji) || null;
             const openclawAgentId = normalize(row?.openclaw_agent_id ?? row?.openclawAgentId);
             const role = normalize(row?.role) || null;
+            const model = normalize(row?.model) || null;
             const enabled = row?.enabled === false ? 0 : 1;
+            const toolsJson = toJsonText(row?.tools_json ?? row?.toolsJson ?? row?.tools);
+            const policyJson = toJsonText(row?.policy_json ?? row?.policyJson ?? row?.policy);
+            const skillsJson = toJsonText(row?.skills_json ?? row?.skillsJson ?? row?.skills);
+            const guardrailsJson = toJsonText(row?.guardrails_json ?? row?.guardrailsJson ?? row?.guardrails);
 
             if (!displayName) throw new Error('agent.display_name is required');
             if (!openclawAgentId) throw new Error('agent.openclaw_agent_id is required');
 
-            ins.run(id, displayName, emoji, openclawAgentId, enabled, role);
+            ins.run(
+              id,
+              displayName,
+              emoji,
+              openclawAgentId,
+              enabled,
+              role,
+              model,
+              toolsJson,
+              policyJson,
+              skillsJson,
+              guardrailsJson
+            );
           }
 
           db.exec('COMMIT');
@@ -855,10 +977,29 @@ function main() {
 
         const rows = db
           .prepare(
-            'SELECT id, display_name, emoji, openclaw_agent_id, enabled, role, created_at, updated_at FROM agents ORDER BY enabled DESC, display_name ASC'
+            `SELECT
+               id,
+               display_name,
+               emoji,
+               openclaw_agent_id,
+               enabled,
+               role,
+               model,
+               tools_json,
+               policy_json,
+               skills_json,
+               guardrails_json,
+               created_at,
+               updated_at
+             FROM agents
+             ORDER BY enabled DESC, display_name ASC`
           )
-          .all() as any[];
-        const payload = rows.map((r) => ({ ...r, enabled: Boolean(r.enabled) }));
+          .all() as AgentProfileRow[];
+        const payload = rows.map((r: any) => ({
+          ...agentPublicPayload(r),
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+        }));
         return sendJson(res, 200, payload, corsHeaders);
       }
 
@@ -878,7 +1019,20 @@ function main() {
 
         const tasks = db
           .prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE board_id = ? ORDER BY position ASC, created_at ASC'
+            `SELECT
+               id,
+               board_id,
+               title,
+               description,
+               status,
+               position,
+               due_at,
+               agent_id,
+               created_at,
+               updated_at
+             FROM tasks
+             WHERE board_id = ?
+             ORDER BY position ASC, created_at ASC`
           )
           .all(boardId);
         return sendJson(res, 200, tasks, corsHeaders);
@@ -906,10 +1060,397 @@ function main() {
 
         const task = rowOrNull<any>(
           db.prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
+            `SELECT
+               id,
+               board_id,
+               title,
+               description,
+               status,
+               position,
+               due_at,
+               agent_id,
+               created_at,
+               updated_at
+             FROM tasks
+             WHERE id = ?`
           ).all(id) as any
         );
         return sendJson(res, 201, task, corsHeaders);
+      }
+
+      const attachAgentMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/attach-agent$/) : null;
+      if (attachAgentMatch) {
+        const taskId = decodeURIComponent(attachAgentMatch[1]);
+        const body = await readJson(req);
+        const agentId = typeof body?.agentId === 'string' ? body.agentId.trim() : '';
+        if (!agentId) return sendJson(res, 400, { error: 'agentId is required' }, corsHeaders);
+
+        const agent = rowOrNull<AgentProfileRow>(
+          db
+            .prepare(
+              `SELECT
+                 id,
+                 display_name,
+                 emoji,
+                 openclaw_agent_id,
+                 enabled,
+                 role,
+                 model,
+                 tools_json,
+                 policy_json,
+                 skills_json,
+                 guardrails_json
+               FROM agents
+               WHERE id = ?`
+            )
+            .all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!agent.enabled) return sendJson(res, 409, { error: 'Agent is disabled' }, corsHeaders);
+
+        const info = db.prepare('UPDATE tasks SET agent_id = ? WHERE id = ?').run(agentId, taskId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        const meta = rowOrNull<{ board_id: string }>(db.prepare('SELECT board_id FROM tasks WHERE id = ?').all(taskId) as any);
+        sseBroadcast({ type: 'tasks.changed', payload: { taskId, boardId: meta?.board_id ?? null } });
+
+        const task = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 id,
+                 board_id,
+                 title,
+                 description,
+                 status,
+                 position,
+                 due_at,
+                 agent_id,
+                 created_at,
+                 updated_at
+               FROM tasks
+               WHERE id = ?`
+            )
+            .all(taskId) as any
+        );
+        return sendJson(res, 200, task, corsHeaders);
+      }
+
+      const taskExecutionConfigMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/execution-config$/) : null;
+      if (taskExecutionConfigMatch) {
+        const taskId = decodeURIComponent(taskExecutionConfigMatch[1]);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 t.id as task_id,
+                 t.board_id as board_id,
+                 t.title as task_title,
+                 t.agent_id as task_agent_id,
+                 a.id as id,
+                 a.display_name as display_name,
+                 a.emoji as emoji,
+                 a.openclaw_agent_id as openclaw_agent_id,
+                 a.enabled as enabled,
+                 a.role as role,
+                 a.model as model,
+                 a.tools_json as tools_json,
+                 a.policy_json as policy_json,
+                 a.skills_json as skills_json,
+                 a.guardrails_json as guardrails_json
+               FROM tasks t
+               LEFT JOIN agents a ON a.id = t.agent_id
+               WHERE t.id = ?`
+            )
+            .all(taskId) as any
+        );
+
+        if (!row) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        if (!row.id) {
+          return sendJson(
+            res,
+            409,
+            { error: 'Task has no attached agent. Attach an orchestrator profile first.' },
+            corsHeaders
+          );
+        }
+        if (!row.enabled) {
+          return sendJson(
+            res,
+            409,
+            { error: 'Attached agent is disabled. Attach or enable another orchestrator profile.' },
+            corsHeaders
+          );
+        }
+
+        const agent = row as AgentProfileRow;
+        const resolved = resolveExecutionConfig(agent);
+        return sendJson(
+          res,
+          200,
+          {
+            task_id: row.task_id,
+            board_id: row.board_id,
+            managed_by: 'agent-profile',
+            read_only: true,
+            resolved_at: new Date().toISOString(),
+            agent: agentPublicPayload(agent),
+            resolved,
+          },
+          corsHeaders
+        );
+      }
+
+      const taskContextListMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/context-items$/) : null;
+      if (taskContextListMatch) {
+        const taskId = decodeURIComponent(taskContextListMatch[1]);
+        const exists = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM tasks WHERE id = ?').all(taskId) as any);
+        if (!exists) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        const rows = db
+          .prepare(
+            `SELECT id, task_id, kind, title, content, created_at, updated_at
+             FROM task_context_items
+             WHERE task_id = ?
+             ORDER BY created_at DESC`
+          )
+          .all(taskId);
+        return sendJson(res, 200, rows, corsHeaders);
+      }
+
+      const taskContextCreateMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/context-items$/) : null;
+      if (taskContextCreateMatch) {
+        const taskId = decodeURIComponent(taskContextCreateMatch[1]);
+        const body = await readJson(req);
+        const title = typeof body?.title === 'string' ? body.title.trim() : '';
+        const content = typeof body?.content === 'string' ? body.content.trim() : '';
+        const kind = typeof body?.kind === 'string' && body.kind.trim() ? body.kind.trim() : 'note';
+        if (!content) return sendJson(res, 400, { error: 'content is required' }, corsHeaders);
+
+        const exists = rowOrNull<{ id: string; board_id: string }>(
+          db.prepare('SELECT id, board_id FROM tasks WHERE id = ?').all(taskId) as any
+        );
+        if (!exists) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        const id = randomUUID();
+        db.prepare(
+          'INSERT INTO task_context_items(id, task_id, kind, title, content) VALUES (?, ?, ?, ?, ?)'
+        ).run(id, taskId, kind, title || null, content);
+
+        sseBroadcast({ type: 'tasks.changed', payload: { taskId, boardId: exists.board_id } });
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, task_id, kind, title, content, created_at, updated_at
+               FROM task_context_items
+               WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        return sendJson(res, 201, row, corsHeaders);
+      }
+
+      const taskContextDeleteMatch = req.method === 'DELETE'
+        ? url.pathname.match(/^\/tasks\/([^/]+)\/context-items\/([^/]+)$/)
+        : null;
+      if (taskContextDeleteMatch) {
+        const taskId = decodeURIComponent(taskContextDeleteMatch[1]);
+        const itemId = decodeURIComponent(taskContextDeleteMatch[2]);
+        const taskMeta = rowOrNull<{ board_id: string }>(
+          db.prepare('SELECT board_id FROM tasks WHERE id = ?').all(taskId) as any
+        );
+        if (!taskMeta) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+
+        const info = db.prepare('DELETE FROM task_context_items WHERE id = ? AND task_id = ?').run(itemId, taskId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Context item not found' }, corsHeaders);
+
+        sseBroadcast({ type: 'tasks.changed', payload: { taskId, boardId: taskMeta.board_id } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const taskRunMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/run$/) : null;
+      if (taskRunMatch) {
+        const taskId = decodeURIComponent(taskRunMatch[1]);
+        const body = await readJson(req);
+
+        // Agent-first guardrails: card cannot override execution config directly.
+        for (const forbidden of ['model', 'tools', 'policy', 'skills', 'guardrails', 'mode']) {
+          if (body?.[forbidden] !== undefined) {
+            return sendJson(
+              res,
+              403,
+              { error: `Execution setting "${forbidden}" is managed by the attached agent profile` },
+              corsHeaders
+            );
+          }
+        }
+
+        const task = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 t.id as task_id,
+                 t.title as task_title,
+                 t.board_id as board_id,
+                 b.workspace_id as workspace_id,
+                 t.agent_id as task_agent_id,
+                 a.id as id,
+                 a.display_name as display_name,
+                 a.emoji as emoji,
+                 a.openclaw_agent_id as openclaw_agent_id,
+                 a.enabled as enabled,
+                 a.role as role,
+                 a.model as model,
+                 a.tools_json as tools_json,
+                 a.policy_json as policy_json,
+                 a.skills_json as skills_json,
+                 a.guardrails_json as guardrails_json
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               LEFT JOIN agents a ON a.id = t.agent_id
+               WHERE t.id = ?`
+            )
+            .all(taskId) as any
+        );
+        if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        if (!task.id) {
+          return sendJson(
+            res,
+            409,
+            { error: 'Task has no attached agent. Attach an orchestrator profile before running.' },
+            corsHeaders
+          );
+        }
+        if (!task.enabled) return sendJson(res, 409, { error: 'Attached agent is disabled' }, corsHeaders);
+
+        const brief = typeof body?.brief === 'string' ? body.brief.trim() : '';
+        const contextItemIdsRaw = Array.isArray(body?.contextItemIds)
+          ? body.contextItemIds.filter((x: any) => typeof x === 'string' && x.trim()).map((x: string) => x.trim())
+          : null;
+
+        let contextItems: any[] = [];
+        if (contextItemIdsRaw && contextItemIdsRaw.length > 0) {
+          const placeholders = contextItemIdsRaw.map(() => '?').join(',');
+          contextItems = db
+            .prepare(
+              `SELECT id, task_id, kind, title, content, created_at, updated_at
+               FROM task_context_items
+               WHERE task_id = ? AND id IN (${placeholders})
+               ORDER BY created_at DESC`
+            )
+            .all(taskId, ...contextItemIdsRaw) as any[];
+          if (contextItems.length !== contextItemIdsRaw.length) {
+            return sendJson(res, 400, { error: 'Some context item ids are invalid for this task' }, corsHeaders);
+          }
+        } else {
+          contextItems = db
+            .prepare(
+              `SELECT id, task_id, kind, title, content, created_at, updated_at
+               FROM task_context_items
+               WHERE task_id = ?
+               ORDER BY created_at DESC`
+            )
+            .all(taskId) as any[];
+        }
+
+        const resolved = resolveExecutionConfig(task as AgentProfileRow);
+        const snapshot = {
+          version: 1,
+          source: 'agent-profile',
+          resolved_at: new Date().toISOString(),
+          task: {
+            id: task.task_id,
+            board_id: task.board_id,
+            title: task.task_title,
+          },
+          agent: {
+            ...agentPublicPayload(task as AgentProfileRow),
+            enabled: Boolean(task.enabled),
+          },
+          resolved,
+          brief: brief || null,
+          context_items: contextItems.map((i) => ({
+            id: i.id,
+            kind: i.kind,
+            title: i.title,
+            content: i.content,
+          })),
+        };
+
+        const runId = randomUUID();
+        const stepId = randomUUID();
+
+        db.exec('BEGIN');
+        try {
+          db.prepare(
+            `INSERT INTO agent_runs(
+               id,
+               workspace_id,
+               board_id,
+               task_id,
+               agent_name,
+               status,
+               config_snapshot_json
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            runId,
+            task.workspace_id,
+            task.board_id,
+            task.task_id,
+            task.display_name ?? 'orchestrator',
+            'running',
+            JSON.stringify(snapshot)
+          );
+
+          db.prepare(
+            'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).run(
+            stepId,
+            runId,
+            0,
+            'orchestrator.run',
+            'running',
+            JSON.stringify({
+              brief: brief || null,
+              context_item_ids: contextItems.map((i) => i.id),
+            }),
+            null
+          );
+
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        (async () => {
+          try {
+            await sleep(300);
+            db.prepare(
+              `UPDATE run_steps
+               SET status = 'succeeded',
+                   finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                   output_json = ?
+               WHERE id = ?`
+            ).run(
+              JSON.stringify({
+                summary: 'Run completed by attached orchestrator profile (stub).',
+                context_items_used: contextItems.length,
+              }),
+              stepId
+            );
+            db.prepare(
+              "UPDATE agent_runs SET status = 'succeeded', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+            ).run(runId);
+          } catch (e) {
+            console.error('[dzzenos-api] task run auto-finish failed', e);
+          }
+        })();
+
+        sseBroadcast({ type: 'runs.changed', payload: { runId, taskId } });
+        return sendJson(res, 201, { runId, run_config_snapshot: snapshot }, corsHeaders);
       }
 
       const requestApprovalMatch = req.method === 'POST'
@@ -1058,7 +1599,7 @@ function main() {
 
         const runs = db
           .prepare(
-            `SELECT id, workspace_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
+            `SELECT id, workspace_id, board_id, task_id, agent_name, status, started_at, finished_at, config_snapshot_json, created_at, updated_at,
                     CASE
                       WHEN status = 'running' AND julianday(created_at) < julianday('now') - (? / 1440.0) THEN 1
                       ELSE 0
@@ -1103,6 +1644,17 @@ function main() {
         const id = patchMatch[1];
         const body = await readJson(req);
 
+        for (const forbidden of ['model', 'tools', 'policy', 'skills', 'guardrails', 'mode']) {
+          if (body?.[forbidden] !== undefined) {
+            return sendJson(
+              res,
+              403,
+              { error: `Execution setting "${forbidden}" is managed by the attached agent profile` },
+              corsHeaders
+            );
+          }
+        }
+
         const allowedStatus = new Set(['todo', 'doing', 'done', 'blocked']);
         const updates: string[] = [];
         const params: any[] = [];
@@ -1145,7 +1697,19 @@ function main() {
 
         const task = rowOrNull<any>(
           db.prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
+            `SELECT
+               id,
+               board_id,
+               title,
+               description,
+               status,
+               position,
+               due_at,
+               agent_id,
+               created_at,
+               updated_at
+             FROM tasks
+             WHERE id = ?`
           ).all(id) as any
         );
         return sendJson(res, 200, task, corsHeaders);

@@ -1,8 +1,20 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Approval, AgentRun, Task, TaskStatus } from '../../api/types';
-import { listApprovals, listTaskRuns, patchTask, requestTaskApproval, simulateRun } from '../../api/queries';
+import {
+  attachTaskAgent,
+  createTaskContextItem,
+  deleteTaskContextItem,
+  getTaskExecutionConfig,
+  listAgents,
+  listApprovals,
+  listTaskContextItems,
+  listTaskRuns,
+  patchTask,
+  requestTaskApproval,
+  runTask,
+} from '../../api/queries';
 import { statusLabel } from './status';
 import { shortId } from './taskId';
 import { formatUpdatedAt } from './taskTime';
@@ -26,12 +38,35 @@ export function TaskDrawer({
 }) {
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('details');
+  const [attachAgentId, setAttachAgentId] = useState<string>('');
+  const [contextTitle, setContextTitle] = useState('');
+  const [contextBody, setContextBody] = useState('');
+  const [runBrief, setRunBrief] = useState('');
 
   const patchM = useMutation({
     mutationFn: async (vars: { id: string; status: TaskStatus }) => patchTask(vars.id, { status: vars.status }),
     onSuccess: async (t) => {
       await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
     },
+  });
+
+  const agentsQ = useQuery({
+    queryKey: ['agents'],
+    queryFn: () => listAgents(),
+    enabled: open,
+  });
+
+  const executionConfigQ = useQuery({
+    queryKey: ['execution-config', task?.id],
+    queryFn: () => getTaskExecutionConfig(task!.id),
+    enabled: open && !!task?.id,
+    retry: false,
+  });
+
+  const contextItemsQ = useQuery({
+    queryKey: ['context-items', task?.id],
+    queryFn: () => listTaskContextItems(task!.id),
+    enabled: open && !!task?.id,
   });
 
   const runsQ = useQuery({
@@ -57,8 +92,35 @@ export function TaskDrawer({
     return all.filter((a) => a.task_id === task.id).slice(0, 50);
   }, [approvalsQ.data, task?.id]);
 
-  const simulateM = useMutation({
-    mutationFn: async (id: string) => simulateRun(id),
+  const attachAgentM = useMutation({
+    mutationFn: async (input: { taskId: string; agentId: string }) => attachTaskAgent(input.taskId, input.agentId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks', task?.board_id] });
+      await qc.invalidateQueries({ queryKey: ['execution-config', task?.id] });
+      await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
+    },
+  });
+
+  const addContextM = useMutation({
+    mutationFn: async (input: { taskId: string; title?: string; content: string }) =>
+      createTaskContextItem(input.taskId, input),
+    onSuccess: async () => {
+      setContextTitle('');
+      setContextBody('');
+      await qc.invalidateQueries({ queryKey: ['context-items', task?.id] });
+      await qc.invalidateQueries({ queryKey: ['tasks', task?.board_id] });
+    },
+  });
+
+  const deleteContextM = useMutation({
+    mutationFn: async (input: { taskId: string; itemId: string }) => deleteTaskContextItem(input.taskId, input.itemId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['context-items', task?.id] });
+    },
+  });
+
+  const runTaskM = useMutation({
+    mutationFn: async (input: { taskId: string; brief?: string }) => runTask(input.taskId, { brief: input.brief }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
     },
@@ -71,6 +133,16 @@ export function TaskDrawer({
       await qc.invalidateQueries({ queryKey: ['approvals', 'task', task?.id] });
     },
   });
+
+  useEffect(() => {
+    if (!task) {
+      setAttachAgentId('');
+      setRunBrief('');
+      return;
+    }
+    setAttachAgentId(task.agent_id ?? '');
+    setRunBrief(task.description ?? '');
+  }, [task?.id, task?.agent_id, task?.description]);
 
   return (
     <Dialog.Root
@@ -148,7 +220,132 @@ export function TaskDrawer({
                     </p>
                   </div>
 
-                  <div className="text-xs text-muted-foreground">PATCH /tasks/:id (status)</div>
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm">
+                    <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Attached Agent</div>
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Execution settings are managed by the agent profile (agent-first, read-only in task card).
+                    </div>
+
+                    <div className="mt-3 flex items-end gap-2">
+                      <div className="min-w-0 flex-1">
+                        <label className="text-xs text-muted-foreground">Orchestrator profile</label>
+                        <select
+                          value={attachAgentId}
+                          onChange={(e) => setAttachAgentId(e.target.value)}
+                          disabled={!task || agentsQ.isLoading || attachAgentM.isPending}
+                          className="mt-1 h-9 w-full rounded-md border border-input bg-background/40 px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                        >
+                          <option value="">Select agent…</option>
+                          {(agentsQ.data ?? [])
+                            .filter((a) => a.enabled)
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.display_name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={!task || !attachAgentId || attachAgentId === task?.agent_id || attachAgentM.isPending}
+                        onClick={() => {
+                          if (!task || !attachAgentId) return;
+                          attachAgentM.mutate({ taskId: task.id, agentId: attachAgentId });
+                        }}
+                      >
+                        {attachAgentM.isPending ? 'Attaching…' : 'Attach'}
+                      </Button>
+                    </div>
+
+                    {agentsQ.isError ? <div className="mt-2"><InlineAlert>{String(agentsQ.error)}</InlineAlert></div> : null}
+                    {attachAgentM.isError ? <div className="mt-2"><InlineAlert>{String(attachAgentM.error)}</InlineAlert></div> : null}
+
+                    <div className="mt-3 rounded-lg border border-border/70 bg-background/40 p-3 text-xs text-muted-foreground">
+                      {executionConfigQ.isLoading ? (
+                        'Loading execution config…'
+                      ) : executionConfigQ.isError ? (
+                        `No execution config yet: ${String((executionConfigQ.error as any)?.message ?? executionConfigQ.error)}`
+                      ) : executionConfigQ.data ? (
+                        <div className="grid gap-1">
+                          <div>
+                            Agent: <span className="text-foreground">{executionConfigQ.data.agent.display_name}</span>
+                          </div>
+                          <div>
+                            Model: <span className="text-foreground">{executionConfigQ.data.resolved.model}</span>
+                          </div>
+                          <div>
+                            Policy: <span className="text-foreground">{executionConfigQ.data.agent.policy_json ? 'configured' : 'default'}</span>
+                          </div>
+                          <div>
+                            Tools: <span className="text-foreground">{executionConfigQ.data.agent.tools_json ? 'configured' : 'default'}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        'Attach an enabled orchestrator agent to manage execution settings.'
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border/70 bg-muted/20 p-4 text-sm">
+                    <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Context Pack</div>
+                    <div className="mt-2 grid gap-2">
+                      <input
+                        value={contextTitle}
+                        onChange={(e) => setContextTitle(e.target.value)}
+                        placeholder="Optional title"
+                        className="h-9 rounded-md border border-input bg-background/40 px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                      />
+                      <textarea
+                        value={contextBody}
+                        onChange={(e) => setContextBody(e.target.value)}
+                        placeholder="Add context notes/files summary for this task run..."
+                        rows={3}
+                        className="min-h-[84px] rounded-md border border-input bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                      />
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={!task || !contextBody.trim() || addContextM.isPending}
+                          onClick={() => {
+                            if (!task || !contextBody.trim()) return;
+                            addContextM.mutate({ taskId: task.id, title: contextTitle.trim(), content: contextBody.trim() });
+                          }}
+                        >
+                          {addContextM.isPending ? 'Adding…' : 'Add to Context Pack'}
+                        </Button>
+                      </div>
+                    </div>
+                    {addContextM.isError ? <div className="mt-2"><InlineAlert>{String(addContextM.error)}</InlineAlert></div> : null}
+                    {deleteContextM.isError ? <div className="mt-2"><InlineAlert>{String(deleteContextM.error)}</InlineAlert></div> : null}
+
+                    <div className="mt-3 grid gap-2">
+                      {(contextItemsQ.data ?? []).length === 0 ? (
+                        <div className="text-xs text-muted-foreground">No context items yet.</div>
+                      ) : (
+                        (contextItemsQ.data ?? []).map((item) => (
+                          <div
+                            key={item.id}
+                            className="rounded-lg border border-border/70 bg-background/40 px-3 py-2 text-xs text-foreground"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="truncate font-medium">{item.title || 'Context item'}</div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                disabled={deleteContextM.isPending || !task}
+                                onClick={() => task && deleteContextM.mutate({ taskId: task.id, itemId: item.id })}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                            <div className="mt-1 whitespace-pre-wrap text-muted-foreground">{item.content}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 </div>
               </TabsContent>
 
@@ -158,12 +355,16 @@ export function TaskDrawer({
                   runs={runsQ.data ?? []}
                   isLoading={runsQ.isLoading}
                   error={runsQ.isError ? runsQ.error : null}
-                  simulatePending={simulateM.isPending}
-                  onSimulate={() => {
+                  runPending={runTaskM.isPending}
+                  runDisabled={!task?.id || executionConfigQ.isError || !executionConfigQ.data}
+                  runBrief={runBrief}
+                  onRunBriefChange={setRunBrief}
+                  onRun={() => {
                     if (!task) return;
-                    simulateM.mutate(task.id);
+                    runTaskM.mutate({ taskId: task.id, brief: runBrief.trim() || undefined });
                   }}
                 />
+                {runTaskM.isError ? <div className="mt-3"><InlineAlert>{String(runTaskM.error)}</InlineAlert></div> : null}
               </TabsContent>
 
               <TabsContent value="approvals">
@@ -181,7 +382,16 @@ export function TaskDrawer({
               </TabsContent>
 
               <TabsContent value="chat">
-                {task?.id ? <TaskChat taskId={task.id} taskTitle={task.title} /> : null}
+                {task?.id ? (
+                  <TaskChat
+                    taskId={task.id}
+                    taskTitle={task.title}
+                    agentOpenclawId={executionConfigQ.data?.agent.openclaw_agent_id}
+                    model={executionConfigQ.data?.resolved.model}
+                    disabled={!executionConfigQ.data}
+                    disabledReason="Attach an enabled orchestrator agent first. Card chat is pre-run communication with that agent."
+                  />
+                ) : null}
                 {!task?.id ? <div className="text-sm text-muted-foreground">Open a task to chat.</div> : null}
               </TabsContent>
             </Tabs>
@@ -197,23 +407,39 @@ function RunsPanel({
   runs,
   isLoading,
   error,
-  simulatePending,
-  onSimulate,
+  runPending,
+  runDisabled,
+  runBrief,
+  onRunBriefChange,
+  onRun,
 }: {
   taskId: string | null;
   runs: AgentRun[];
   isLoading: boolean;
   error: unknown;
-  simulatePending: boolean;
-  onSimulate: () => void;
+  runPending: boolean;
+  runDisabled: boolean;
+  runBrief: string;
+  onRunBriefChange: (value: string) => void;
+  onRun: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border/70 bg-muted/20 p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Runs</div>
-        <Button size="sm" variant="secondary" disabled={!taskId || simulatePending} onClick={onSimulate}>
-          Simulate run (stub)
-        </Button>
+      <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Runs</div>
+      <div className="mt-3 grid gap-2 rounded-lg border border-border/70 bg-background/40 p-3">
+        <div className="text-xs text-muted-foreground">Start run (agent-first snapshot)</div>
+        <textarea
+          value={runBrief}
+          onChange={(e) => onRunBriefChange(e.target.value)}
+          placeholder="Optional run brief..."
+          rows={3}
+          className="min-h-[84px] rounded-md border border-input bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        />
+        <div className="flex justify-end">
+          <Button size="sm" variant="secondary" disabled={!taskId || runDisabled || runPending} onClick={onRun}>
+            {runPending ? 'Starting…' : 'Start Run'}
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -224,22 +450,30 @@ function RunsPanel({
         </div>
       ) : runs.length ? (
         <div className="mt-3 grid gap-2">
-          {runs.slice(0, 30).map((r) => (
-            <div
-              key={r.id}
-              className="rounded-lg border border-border/70 bg-background/40 px-3 py-2 text-sm text-foreground"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0 truncate">
-                  {r.agent_name ?? 'Agent run'} • <span className="text-muted-foreground">{r.status}</span>
+          {runs.slice(0, 30).map((r) => {
+            const snapshotModel = parseRunModel(r);
+            return (
+              <div
+                key={r.id}
+                className="rounded-lg border border-border/70 bg-background/40 px-3 py-2 text-sm text-foreground"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 truncate">
+                    {r.agent_name ?? 'Agent run'} • <span className="text-muted-foreground">{r.status}</span>
+                  </div>
+                  <div className="shrink-0 text-xs text-muted-foreground">{r.id.slice(0, 8)}</div>
                 </div>
-                <div className="shrink-0 text-xs text-muted-foreground">{r.id.slice(0, 8)}</div>
+                {snapshotModel ? (
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Model snapshot: <span className="text-foreground">{snapshotModel}</span>
+                  </div>
+                ) : null}
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {new Date(r.created_at).toLocaleString()} • {r.steps?.length ?? 0} steps
+                </div>
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {new Date(r.created_at).toLocaleString()} • {r.steps?.length ?? 0} steps
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="mt-3 text-sm text-muted-foreground">No runs for this task.</div>
@@ -300,6 +534,20 @@ function ApprovalsPanel({
       )}
     </div>
   );
+}
+
+function parseRunModel(run: AgentRun): string | null {
+  if (!run.config_snapshot_json) return null;
+  try {
+    const parsed = JSON.parse(run.config_snapshot_json);
+    const model =
+      (typeof parsed?.resolved?.model === 'string' && parsed.resolved.model) ||
+      (typeof parsed?.agent?.model === 'string' && parsed.agent.model) ||
+      null;
+    return model;
+  } catch {
+    return null;
+  }
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
