@@ -6,8 +6,10 @@ import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 import { Skeleton } from '../ui/Skeleton';
 import { PageHeader } from '../Layout/PageHeader';
+import { useTranslation } from 'react-i18next';
 
 export function MemoryPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
   const [overviewDraft, setOverviewDraft] = useState('');
@@ -61,11 +63,11 @@ export function MemoryPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <PageHeader title="Memory" subtitle="Workspace and board memory." />
+      <PageHeader title={t('Memory')} subtitle={t('Workspace and board memory.')} />
       <div className="grid w-full gap-4 lg:grid-cols-[280px,1fr]">
         <Card className="h-fit">
           <CardHeader>
-            <CardTitle>Boards</CardTitle>
+            <CardTitle>{t('Boards')}</CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
             {boardsQ.isLoading ? (
@@ -89,7 +91,7 @@ export function MemoryPage() {
                     }
                   >
                     <div className="text-foreground">{b.name}</div>
-                    <div className="text-xs text-muted-foreground">{b.description ?? 'No description'}</div>
+                    <div className="text-xs text-muted-foreground">{b.description ?? t('No description')}</div>
                   </button>
                 ))}
               </div>
@@ -100,9 +102,9 @@ export function MemoryPage() {
         <div className="grid gap-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Overview</CardTitle>
+              <CardTitle>{t('Overview')}</CardTitle>
               <Button size="sm" variant="secondary" onClick={() => saveOverviewM.mutate()} disabled={saveOverviewM.isPending}>
-                {saveOverviewM.isPending ? 'Saving…' : 'Save'}
+                {saveOverviewM.isPending ? t('Saving…') : t('Save')}
               </Button>
             </CardHeader>
             <CardContent className="pt-0">
@@ -113,7 +115,7 @@ export function MemoryPage() {
                   className="min-h-[200px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
                   value={overviewDraft}
                   onChange={(e) => setOverviewDraft(e.target.value)}
-                  placeholder="Write the project overview here…"
+                  placeholder={t('Write the project overview here…')}
                 />
               )}
             </CardContent>
@@ -121,9 +123,9 @@ export function MemoryPage() {
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>Board Doc</CardTitle>
+              <CardTitle>{t('Board Doc')}</CardTitle>
               <Button size="sm" variant="secondary" onClick={() => saveBoardM.mutate()} disabled={saveBoardM.isPending || !selectedBoardId}>
-                {saveBoardM.isPending ? 'Saving…' : 'Save'}
+                {saveBoardM.isPending ? t('Saving…') : t('Save')}
               </Button>
             </CardHeader>
             <CardContent className="pt-0">
@@ -134,7 +136,7 @@ export function MemoryPage() {
                   className="min-h-[220px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
                   value={boardDraft}
                   onChange={(e) => setBoardDraft(e.target.value)}
-                  placeholder="Board context and notes…"
+                  placeholder={t('Board context and notes…')}
                 />
               )}
             </CardContent>
@@ -142,7 +144,7 @@ export function MemoryPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Changelog</CardTitle>
+              <CardTitle>{t('Changelog')}</CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
               {changelogQ.isLoading ? (
@@ -152,7 +154,7 @@ export function MemoryPage() {
                   readOnly
                   className="min-h-[160px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-muted-foreground outline-none"
                   value={changelogQ.data?.content ?? ''}
-                  placeholder="No changelog entries yet."
+                  placeholder={t('No changelog entries yet.')}
                 />
               )}
             </CardContent>

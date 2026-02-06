@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/DropdownMenu';
 import { Button } from '../ui/Button';
+import { useTranslation } from 'react-i18next';
 
 export function Sidebar({
   selectedPage,
@@ -33,6 +34,7 @@ export function Sidebar({
   mobileOpen?: boolean;
   onCloseMobile?: () => void;
 }) {
+  const { t, i18n } = useTranslation();
   const touchStartX = useRef<number | null>(null);
   const touchStartY = useRef<number | null>(null);
   const platformSettingsUrl = (import.meta as any).env?.VITE_PLATFORM_SETTINGS_URL as string | undefined;
@@ -49,6 +51,7 @@ export function Sidebar({
       ? derivedPath
       : `/${derivedPath}`;
   const settingsHref = platformSettingsUrl && platformSettingsUrl.trim() ? platformSettingsUrl.trim() : '';
+  const lang = i18n.resolvedLanguage === 'ru' ? 'ru' : 'en';
 
   return (
     <aside
@@ -87,13 +90,13 @@ export function Sidebar({
           <div className="h-7 w-7 rounded-md bg-gradient-to-br from-sky-400 to-teal-400 opacity-90 shadow-sm" />
           <div className="leading-tight">
             <div className="text-sm font-semibold tracking-tight text-foreground font-display">DzzenOS</div>
-            <div className="text-xs text-muted-foreground">Local</div>
+            <div className="text-xs text-muted-foreground">{t('Local')}</div>
           </div>
         </div>
       </div>
 
       <nav className="min-h-0 flex-1 overflow-hidden px-2 pb-4">
-        <SectionTitle>Workspace</SectionTitle>
+        <SectionTitle>{t('Workspace')}</SectionTitle>
         <NavItem
           active={selectedPage === 'dashboard'}
           onClick={() => {
@@ -102,7 +105,7 @@ export function Sidebar({
           }}
           icon={<IconLayout />}
         >
-          Dashboard
+          {t('Dashboard')}
         </NavItem>
         <NavItem
           active={selectedPage === 'kanban'}
@@ -112,7 +115,7 @@ export function Sidebar({
           }}
           icon={<IconKanban />}
         >
-          Kanban
+          {t('Kanban')}
         </NavItem>
         <NavItem
           active={selectedPage === 'automations'}
@@ -122,7 +125,7 @@ export function Sidebar({
           }}
           icon={<IconWorkflow />}
         >
-          Automations
+          {t('Automations')}
         </NavItem>
         <NavItem
           active={selectedPage === 'agents'}
@@ -132,7 +135,7 @@ export function Sidebar({
           }}
           icon={<IconBot />}
         >
-          Agent Library
+          {t('Agent Library')}
         </NavItem>
         <NavItem
           active={selectedPage === 'models'}
@@ -142,7 +145,7 @@ export function Sidebar({
           }}
           icon={<IconModel />}
         >
-          Models
+          {t('Models')}
         </NavItem>
         <NavItem
           active={selectedPage === 'skills'}
@@ -152,7 +155,7 @@ export function Sidebar({
           }}
           icon={<IconSpark />}
         >
-          Skills
+          {t('Skills')}
         </NavItem>
         <NavItem
           active={selectedPage === 'docs'}
@@ -162,7 +165,7 @@ export function Sidebar({
           }}
           icon={<IconFile />}
         >
-          Docs
+          {t('Docs')}
         </NavItem>
         <NavItem
           active={selectedPage === 'memory'}
@@ -172,7 +175,7 @@ export function Sidebar({
           }}
           icon={<IconReport />}
         >
-          Memory
+          {t('Memory')}
         </NavItem>
         <NavLink
           href={openclawHref}
@@ -181,7 +184,7 @@ export function Sidebar({
           }}
           icon={<IconExternal />}
         >
-          OpenClaw UI
+          {t('OpenClaw UI')}
         </NavLink>
       </nav>
 
@@ -190,11 +193,11 @@ export function Sidebar({
           <DropdownMenuTrigger asChild>
             <Button variant="secondary" className="w-full justify-start">
               <IconSettings className="h-4 w-4" />
-              Settings
+              {t('Settings')}
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" sideOffset={8} className="min-w-[220px]">
-            <DropdownMenuLabel>Platform</DropdownMenuLabel>
+            <DropdownMenuLabel>{t('Platform')}</DropdownMenuLabel>
             <DropdownMenuItem
               disabled={!settingsHref}
               onSelect={(e) => {
@@ -203,7 +206,7 @@ export function Sidebar({
                 window.location.href = settingsHref;
               }}
             >
-              DzzenOS Settings
+              {t('DzzenOS Settings')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
@@ -212,7 +215,27 @@ export function Sidebar({
                 window.location.href = openclawHref;
               }}
             >
-              OpenClaw Settings
+              {t('OpenClaw Settings')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>{t('Language')}</DropdownMenuLabel>
+            <DropdownMenuItem
+              disabled={lang === 'en'}
+              onSelect={(e) => {
+                e.preventDefault();
+                void i18n.changeLanguage('en');
+              }}
+            >
+              {t('English')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={lang === 'ru'}
+              onSelect={(e) => {
+                e.preventDefault();
+                void i18n.changeLanguage('ru');
+              }}
+            >
+              {t('Russian')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenuRoot>

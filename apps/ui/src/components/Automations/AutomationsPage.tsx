@@ -12,6 +12,7 @@ import ReactFlow, {
   type Node,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { useTranslation } from 'react-i18next';
 
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
@@ -68,6 +69,7 @@ export function AutomationsPage() {
 }
 
 function AutomationsPageInner() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -107,7 +109,7 @@ function AutomationsPageInner() {
   const createM = useMutation({
     mutationFn: async () =>
       createAutomation({
-        name: name.trim() || 'Untitled automation',
+        name: name.trim() || t('Untitled automation'),
         graph: { nodes, edges },
       }),
     onSuccess: async (a) => {
@@ -119,7 +121,7 @@ function AutomationsPageInner() {
   const saveM = useMutation({
     mutationFn: async () => {
       if (!selectedId) throw new Error('No automation selected');
-      return updateAutomation(selectedId, { name: name.trim() || 'Untitled automation', graph: { nodes, edges } });
+      return updateAutomation(selectedId, { name: name.trim() || t('Untitled automation'), graph: { nodes, edges } });
     },
     onSuccess: async (a) => {
       await qc.invalidateQueries({ queryKey: ['automations'] });
@@ -134,15 +136,15 @@ function AutomationsPageInner() {
     },
   });
 
-  const dirtyHint = selectedId ? 'Changes are local until you click Save.' : 'Save as new to persist in SQLite.';
+  const dirtyHint = selectedId ? t('Changes are local until you click Save.') : t('Save as new to persist in SQLite.');
   const loadingList = listQ.isLoading && (listQ.data ?? []).length === 0;
   const loadingGraph = selectedQ.isLoading && !selectedQ.data && !!selectedId;
 
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="Automations"
-        subtitle="React Flow skeleton (save/load via /automations)."
+        title={t('Automations')}
+        subtitle={t('React Flow skeleton (save/load via /automations).')}
         actions={
           <>
             <Button
@@ -154,10 +156,10 @@ function AutomationsPageInner() {
                 setEdges(SAMPLE_EDGES);
               }}
             >
-              New
+              {t('New')}
             </Button>
             <Button onClick={async () => createM.mutateAsync()} disabled={createM.isPending}>
-              {createM.isPending ? 'Saving…' : 'Save as new'}
+              {createM.isPending ? t('Saving…') : t('Save as new')}
             </Button>
             <Button
               variant="secondary"
@@ -165,7 +167,7 @@ function AutomationsPageInner() {
               disabled={!selectedId || saveM.isPending}
               title={selectedId ? undefined : 'Select or create an automation first'}
             >
-              {saveM.isPending ? 'Saving…' : 'Save'}
+              {saveM.isPending ? t('Saving…') : t('Save')}
             </Button>
             <Button
               variant="secondary"
@@ -173,7 +175,7 @@ function AutomationsPageInner() {
               disabled={!selectedId || runM.isPending}
               title={selectedId ? undefined : 'Select or create an automation first'}
             >
-              {runM.isPending ? 'Starting…' : 'Run now'}
+              {runM.isPending ? t('Starting…') : t('Run now')}
             </Button>
           </>
         }
@@ -188,8 +190,8 @@ function AutomationsPageInner() {
       <div className="grid w-full gap-4 lg:grid-cols-[320px,1fr]">
         <div className="rounded-xl border border-border/70 bg-surface-1/70 p-4 shadow-panel backdrop-blur">
           <div className="flex items-center justify-between">
-            <div className="text-sm font-semibold">Library</div>
-            {listQ.isLoading ? <Spinner label="Loading…" /> : null}
+            <div className="text-sm font-semibold">{t('Library')}</div>
+            {listQ.isLoading ? <Spinner label={t('Loading…')} /> : null}
           </div>
 
           <div className="mt-3">
@@ -201,12 +203,12 @@ function AutomationsPageInner() {
               </div>
             ) : (
               <>
-                <label className="text-xs font-medium text-muted-foreground">Name</label>
+                <label className="text-xs font-medium text-muted-foreground">{t('Name')}</label>
                 <input
                   className="mt-1 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Untitled automation"
+                  placeholder={t('Untitled automation')}
                 />
                 <div className="mt-2 text-xs text-muted-foreground">{dirtyHint}</div>
               </>
@@ -214,7 +216,7 @@ function AutomationsPageInner() {
           </div>
 
           <div className="mt-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Saved automations</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('Saved automations')}</div>
             <div className="mt-2 flex flex-col gap-1">
               {loadingList ? (
                 <div className="grid gap-2">
@@ -223,7 +225,7 @@ function AutomationsPageInner() {
                   ))}
                 </div>
               ) : (listQ.data ?? []).length === 0 ? (
-                <div className="text-sm text-muted-foreground">No saved automations yet.</div>
+                <div className="text-sm text-muted-foreground">{t('No saved automations yet.')}</div>
               ) : (
                 (listQ.data ?? []).map((a) => (
                   <button
@@ -246,15 +248,15 @@ function AutomationsPageInner() {
           </div>
 
           <div className="mt-6">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Palette (stub)</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('Palette (stub)')}</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <PaletteItem label="Trigger" />
-              <PaletteItem label="Agent" />
-              <PaletteItem label="HTTP" />
-              <PaletteItem label="If/Else" />
+              <PaletteItem label={t('Trigger')} />
+              <PaletteItem label={t('Agent')} />
+              <PaletteItem label={t('HTTP')} />
+              <PaletteItem label={t('If/Else')} />
             </div>
             <div className="mt-2 text-xs text-muted-foreground">
-              Drag/drop wiring will come later; this is a minimal skeleton.
+              {t('Drag/drop wiring will come later; this is a minimal skeleton.')}
             </div>
           </div>
         </div>
