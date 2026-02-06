@@ -37,7 +37,8 @@ node --experimental-strip-types skills/dzzenos/api/server.ts
 Defaults:
 - **Host:** `127.0.0.1`
 - **Port:** `8787` (override via `--port` or `PORT` env)
-- **DB:** `./data/dzzenos.db` (override via `--db`)
+- **DB:** OS data directory (override via `--db`, `DZZENOS_DB_PATH`, or `DZZENOS_DATA_DIR`)
+- **Workspace files (docs/memory):** OS data directory workspace path (override via `DZZENOS_WORKSPACE_DIR`)
 
 On first run it will:
 1. Run SQLite migrations from `skills/dzzenos/db/migrations/`

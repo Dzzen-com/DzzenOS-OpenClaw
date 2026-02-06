@@ -30,6 +30,16 @@ Use the installer and answer:
 - Gateway location: `server/VPS`
 - Setup domain access: `yes`
 
+Or run non-interactively:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- \
+  --mode server \
+  --domain dzzenos.example.com \
+  --domain-email you@example.com \
+  --username admin \
+  --password 'StrongPassword!123'
+```
+
 The installer will:
 - create `/etc/dzzenos/auth.json` (hashed password + cookie secret)
 - install and start a `dzzenos-api` systemd service

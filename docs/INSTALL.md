@@ -1,71 +1,82 @@
-# Install (remote server via SSH tunnel)
+# Install (release-first)
 
-This is the simplest, most secure setup when OpenClaw runs on a remote host (droplet) but you want to use the UI on your laptop.
+Default installer behavior:
+- installs from the **latest GitHub release**
+- keeps rollback snapshots
+- publishes UI to OpenClaw Canvas
 
-## 0) Prereqs
-
-- OpenClaw Gateway running on the server (loopback bind recommended)
-- On your laptop: SSH access to the server
-
-## 1) Create SSH tunnel (laptop → server)
-
-```bash
-ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
-```
-
-Then OpenClaw Control UI is available at:
-- `http://localhost:18789/` (append `?token=...` if required)
-
-## 2) Install DzzenOS-OpenClaw (server)
-
-SSH into the server and run:
+## Quick install/update
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
 
-During install you can choose:
-- **SSH tunnel mode** (this guide)
-- **Domain mode** (Caddy + TLS + login page) — see `docs/DOMAIN-ACCESS.md`
+## Pin exact version
 
-Machine-readable output (for automation):
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --version v1.2.3
+```
+
+## Machine-readable output
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --json
 ```
 
-What it does:
-- clones/updates the repo
-- installs deps
-- builds the UI
-- publishes it to OpenClaw Canvas host
+## Rollback
 
-## 3) Open DzzenOS UI (laptop)
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --rollback
+```
 
-Open:
-- `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if required)
+## Typical remote flow (SSH tunnel)
 
-Note:
-- In **domain mode**, unauthenticated users only see the login page.
-- After login, DzzenOS opens, and the **OpenClaw UI** is accessible from the menu.
+1) On server, install/update DzzenOS:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+```
 
----
+2) On laptop, create tunnel:
+```bash
+ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
+```
 
-## Notes
+3) Open:
+- Control UI: `http://localhost:18789/` (append `?token=...` if required)
+- DzzenOS UI: `http://localhost:18789/__openclaw__/canvas/dzzenos/` (append `?token=...` if required)
 
-- This method does **not** expose public ports.
-- It does **not** require VPN/Tailscale.
-- For local-first use on a laptop, install OpenClaw + DzzenOS locally instead (future guide).
+## Useful flags
 
-### Task Chat MVP
+- `--mode auto|local|server|docker|cloudflare`
+- `--ui-profile local|domain`
+- `--domain <example.com>`
+- `--domain-email <mail>`
+- `--username <name>`
+- `--password <pass>`
+- `--no-domain`
+- `--keep-rollbacks <n>`
+- `--install-dir <path>`
+- `--yes`
 
-The Task Drawer **Chat** tab uses the OpenClaw Gateway as the backend and expects an OpenAI-compatible OpenResponses endpoint at:
+## Data safety operations
 
-- `/__openclaw__/openresponses/v1/chat/completions`
+List DB backups:
+```bash
+bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup list
+```
 
-If your gateway doesn’t expose this endpoint, the Chat tab will show an error.
+Create DB backup:
+```bash
+bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup create --name pre-change
+```
 
+Restore DB backup:
+```bash
+bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup restore --file <backup.sqlite>
+```
 
-## Agent-driven install
+## Related docs
 
-If you want to trigger installation from chat (agent runs the commands and replies with the link), see: `docs/AGENT-INSTALL.md`.
+- `docs/INSTALL-MODES.md`
+- `docs/DOMAIN-ACCESS.md`
+- `docs/AGENT-INSTALL.md`

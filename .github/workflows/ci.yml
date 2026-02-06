@@ -35,6 +35,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --if-present lint
+      - run: pnpm test:db:migrations
       - run: pnpm -r --if-present test
       - run: pnpm -r --if-present build
 

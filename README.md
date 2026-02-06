@@ -57,6 +57,13 @@ It provides:
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
 
+By default this installs/updates to the **latest GitHub release**.
+
+Pin a specific release:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --version v1.2.3
+```
+
 **2) On your laptop: create an SSH tunnel**
 ```bash
 ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
@@ -77,6 +84,18 @@ Run the same installer and choose **server/VPS** → **domain mode**.
 
 Docs: `docs/DOMAIN-ACCESS.md`
 
+### Rollback / Backups
+
+Rollback to previous app snapshot:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --rollback
+```
+
+List DB backups:
+```bash
+bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup list
+```
+
 ### Agent-driven install (chat → install → reply)
 
 See: `docs/AGENT-INSTALL.md`
@@ -91,9 +110,12 @@ See: `docs/AGENT-INSTALL.md`
 ## Docs
 
 - Install (SSH tunnel): [docs/INSTALL.md](docs/INSTALL.md)
+- Install modes (local/server/docker/cloudflare): [docs/INSTALL-MODES.md](docs/INSTALL-MODES.md)
 - Domain mode (Caddy + TLS + login + caching): [docs/DOMAIN-ACCESS.md](docs/DOMAIN-ACCESS.md)
 - Agent-driven install: [docs/AGENT-INSTALL.md](docs/AGENT-INSTALL.md)
 - Remote access notes: [docs/remote-access.md](docs/remote-access.md)
+- Database details: [docs/database.md](docs/database.md)
+- Data safety policy: [docs/DATA-POLICY.md](docs/DATA-POLICY.md)
 
 - OpenClaw Native specs (EN): [docs/openclaw-native/spec/](docs/openclaw-native/spec/)
 
