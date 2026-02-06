@@ -47,3 +47,27 @@ For each new feature, update all relevant layers in one PR:
 4. Any changed runbooks (install/ops/security), if applicable
 
 This keeps user docs and dev/agent docs consistent.
+
+## 6) UI i18n rules
+
+Use these files as the source of truth for localization:
+
+- i18n bootstrap: `apps/ui/src/i18n/index.ts`
+- translation dictionary: `apps/ui/src/i18n/resources.ts`
+- language selector UI: `apps/ui/src/components/Sidebar/Sidebar.tsx`
+- i18n init import entry: `apps/ui/src/main.tsx`
+
+When adding a language:
+
+1. Add translation object in `apps/ui/src/i18n/resources.ts`.
+2. Register it in `apps/ui/src/i18n/index.ts` (`resources` + `supportedLngs`).
+3. Add it to the selector in `apps/ui/src/components/Sidebar/Sidebar.tsx`.
+4. Verify with:
+   - `pnpm -C apps/ui lint`
+   - `pnpm -C apps/ui build`
+
+Contributor rules:
+
+- Never hardcode user-facing strings in components; use `t('...')`.
+- Reuse existing translation keys when possible.
+- Keep English fallback enabled.
