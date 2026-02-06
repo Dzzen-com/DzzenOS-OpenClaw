@@ -31,8 +31,13 @@ export function startRealtime(opts: {
       // Keep it simple for v1, but prefer targeted invalidations.
       if (msg.type === 'tasks.changed') {
         const boardId = msg.payload?.boardId as string | null | undefined;
+        const taskId = msg.payload?.taskId as string | null | undefined;
         if (boardId) opts.qc.invalidateQueries({ queryKey: ['tasks', boardId] });
         else opts.qc.invalidateQueries({ queryKey: ['tasks'] });
+        if (taskId) {
+          opts.qc.invalidateQueries({ queryKey: ['execution-config', taskId] });
+          opts.qc.invalidateQueries({ queryKey: ['context-items', taskId] });
+        }
       }
 
       if (msg.type === 'boards.changed') {
