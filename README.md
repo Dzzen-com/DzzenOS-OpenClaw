@@ -109,6 +109,28 @@ When filing bugs, include:
 - reproduction steps
 - relevant DzzenOS logs (redact secrets)
 
+## Local integration smoke test (without OpenClaw installed)
+
+Use a local mock of OpenResponses to verify DzzenOS API flows end-to-end.
+
+```bash
+pnpm install
+pnpm dzzenos:smoke:local
+```
+
+What this smoke test validates:
+- starts a mock OpenResponses server
+- starts DzzenOS API against a temporary SQLite DB
+- installs one marketplace skill and one marketplace agent
+- binds installed skill to the installed agent
+- creates a task, runs `plan`, sends chat, verifies checklist and runs history
+
+Useful flags:
+- keep temp files for debugging:
+```bash
+SMOKE_KEEP_TEMP=1 pnpm dzzenos:smoke:local
+```
+
 ## Security checks
 
 - Auth/session smoke test: `pnpm test:security`
