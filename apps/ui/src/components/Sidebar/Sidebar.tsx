@@ -1,6 +1,5 @@
 import { useRef } from 'react';
 import type { ReactNode } from 'react';
-import { StatusDot } from '../ui/StatusDot';
 import {
   IconBot,
   IconExternal,
@@ -76,7 +75,7 @@ export function Sidebar({
         touchStartY.current = null;
       }}
       className={
-        'fixed inset-y-0 left-0 z-50 w-64 shrink-0 border-r border-border/60 bg-card/90 backdrop-blur transition sm:static sm:flex sm:flex-col ' +
+        'fixed inset-y-0 left-0 z-50 flex h-dvh w-64 shrink-0 flex-col overflow-hidden border-r border-border/60 bg-card/90 backdrop-blur transition ' +
         (mobileOpen ? 'translate-x-0' : '-translate-x-full') +
         ' sm:translate-x-0'
       }
@@ -91,7 +90,7 @@ export function Sidebar({
         </div>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+      <nav className="min-h-0 flex-1 overflow-hidden px-2 pb-4">
         <SectionTitle>Workspace</SectionTitle>
         <NavItem
           active={selectedPage === 'dashboard'}
@@ -195,10 +194,6 @@ export function Sidebar({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenuRoot>
-        <div className="mt-3 text-[11px] text-muted-foreground">
-          <div>API: /boards • /tasks • /docs</div>
-          <div className="mt-1">Realtime: SSE</div>
-        </div>
       </div>
     </aside>
   );
@@ -233,7 +228,6 @@ function NavItem({
         (active ? 'bg-surface-2/80 text-foreground' : '')
       }
     >
-      <StatusDot tone={active ? 'info' : 'muted'} />
       {icon ? <span className="text-muted-foreground/90">{icon}</span> : null}
       <span className="truncate">{children}</span>
     </button>
@@ -257,7 +251,6 @@ function NavLink({
       onClick={onClick}
       className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-foreground/90 transition hover:bg-surface-2/50"
     >
-      <StatusDot tone="muted" />
       {icon ? <span className="text-muted-foreground/90">{icon}</span> : null}
       <span className="truncate">{children}</span>
     </a>
