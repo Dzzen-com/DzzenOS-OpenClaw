@@ -10,7 +10,7 @@ This repository keeps all human documentation under `Docs/`.
 
 ## Developer and AI-agent docs
 
-- Canonical engineering/agent index: `Docs/DEV-AGENTS-KNOWLEDGE.md`
+- Canonical engineering/agent index: `Docs/internal/DEV-AGENTS-KNOWLEDGE.md`
 - API server source: `skills/dzzenos/api/server.ts`
 - UI contracts: `apps/ui/src/api/queries.ts`
 - DB migrations: `skills/dzzenos/db/migrations/`

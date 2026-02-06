@@ -3,197 +3,265 @@ import { PageHeader } from '../Layout/PageHeader';
 import { Button } from '../ui/Button';
 import { cn } from '../../lib/cn';
 
+type Locale = 'en' | 'ru';
+
+type Localized<T> = {
+  en: T;
+  ru?: T;
+};
+
 type DocsCommand = {
   id: string;
-  title: string;
-  description: string;
+  title: Localized<string>;
+  description: Localized<string>;
   language: 'bash' | 'http' | 'json';
   code: string;
   assistantPrompt?: string;
 };
 
 type DocsLink = {
-  label: string;
+  label: Localized<string>;
   href: string;
-  note?: string;
+  note?: Localized<string>;
 };
 
 type DocsSection = {
   id: string;
-  group: string;
-  title: string;
-  summary: string;
-  intro: string[];
-  highlights: string[];
+  group: Localized<string>;
+  title: Localized<string>;
+  summary: Localized<string>;
+  intro: Localized<string[]>;
+  highlights: Localized<string[]>;
   commands?: DocsCommand[];
   links?: DocsLink[];
+};
+
+type UiCopy = {
+  pageSubtitle: Localized<string>;
+  platformDocs: Localized<string>;
+  platformLead: Localized<string>;
+  searchLabel: Localized<string>;
+  searchPlaceholder: Localized<string>;
+  noResults: Localized<string>;
+  selectSection: Localized<string>;
+  relatedDocs: Localized<string>;
+  copy: Localized<string>;
+  cursor: Localized<string>;
+  codex: Localized<string>;
+  claude: Localized<string>;
+  copied: Localized<string>;
+  copyFailed: Localized<string>;
+  triedOpen: Localized<string>;
+  commandTip: Localized<string>;
+  language: Localized<string>;
+  translationNote: Localized<string>;
 };
 
 type AssistantTarget = 'cursor' | 'codex' | 'claude';
 
 const AI_TARGETS: Record<AssistantTarget, { label: string; toUrl: (text: string) => string }> = {
   cursor: {
-    label: 'Open in Cursor',
+    label: 'Cursor',
     toUrl: (text) => `cursor://anysphere.cursor-deeplink/new?prompt=${encodeURIComponent(text)}`,
   },
   codex: {
-    label: 'Open in Codex',
+    label: 'Codex',
     toUrl: (text) => `codex://new?prompt=${encodeURIComponent(text)}`,
   },
   claude: {
-    label: 'Open in Claude',
+    label: 'Claude',
     toUrl: (text) => `claude://new?prompt=${encodeURIComponent(text)}`,
+  },
+};
+
+const UI_COPY: UiCopy = {
+  pageSubtitle: {
+    en: 'OpenClaw-style documentation for DzzenOS platform.',
+    ru: 'Документация платформы DzzenOS в стиле OpenClaw.',
+  },
+  platformDocs: { en: 'Documentation', ru: 'Документация' },
+  platformLead: {
+    en: 'Product docs live here. Workspace context now lives in Memory.',
+    ru: 'Здесь живет документация платформы. Рабочий контекст перенесен в Memory.',
+  },
+  searchLabel: { en: 'Search', ru: 'Поиск' },
+  searchPlaceholder: {
+    en: 'Search features, API, setup, security...',
+    ru: 'Поиск по функциям, API, настройке, безопасности...',
+  },
+  noResults: {
+    en: 'No sections found for this search query.',
+    ru: 'По вашему запросу разделы не найдены.',
+  },
+  selectSection: {
+    en: 'Select a section from the left navigation.',
+    ru: 'Выберите раздел в левой навигации.',
+  },
+  relatedDocs: { en: 'Related Docs', ru: 'Связанные документы' },
+  copy: { en: 'Copy', ru: 'Копировать' },
+  cursor: { en: 'Cursor', ru: 'Cursor' },
+  codex: { en: 'Codex', ru: 'Codex' },
+  claude: { en: 'Claude', ru: 'Claude' },
+  copied: { en: 'Copied', ru: 'Скопировано' },
+  copyFailed: { en: 'Copy failed', ru: 'Ошибка копирования' },
+  triedOpen: { en: 'Copied and tried opening in', ru: 'Скопировано и попытка открыть в' },
+  commandTip: {
+    en: 'Assistant buttons copy text first, then try a deep-link.',
+    ru: 'Кнопки ассистентов сначала копируют текст, потом открывают deep-link.',
+  },
+  language: { en: 'Language', ru: 'Язык' },
+  translationNote: {
+    en: 'English is primary. Some translated wording may lag behind new releases.',
+    ru: 'Английская версия основная. Отдельные формулировки перевода могут отставать от новых релизов.',
   },
 };
 
 const DOCS_SECTIONS: DocsSection[] = [
   {
     id: 'start-5-min',
-    group: 'Start Here',
-    title: 'Старт за 5 минут',
-    summary: 'Что это, где запускать и как быстро зайти в рабочий поток.',
-    intro: [
-      'DzzenOS работает нативно внутри OpenClaw: это не отдельный SaaS и не отдельная экосистема. Вы управляете задачами, агентами и автоматизациями в одном месте.',
-      'Если кратко: создаете board, добавляете задачу, запускаете агента, получаете результат и фиксируете контекст в Memory.',
-    ],
-    highlights: [
-      'Единый интерфейс для Founder Ops и Content.',
-      'Локальные данные: SQLite + локальные docs.',
-      'Нативная связка с OpenClaw моделями/агентами.',
-      'Docs = документация платформы, Memory = память вашего проекта.',
-    ],
+    group: { en: 'Start Here', ru: 'Начало работы' },
+    title: { en: 'Start in 5 Minutes', ru: 'Старт за 5 минут' },
+    summary: {
+      en: 'What DzzenOS is, where to run it, and how to get productive fast.',
+      ru: 'Что такое DzzenOS, где его запускать и как быстро войти в рабочий поток.',
+    },
+    intro: {
+      en: [
+        'DzzenOS runs natively with OpenClaw. It is not a separate SaaS layer. You manage tasks, agents, automations, and memory in one operating surface.',
+        'The baseline flow is simple: create a board, create a task, run an agent, review output, and store context in Memory.',
+      ],
+      ru: [
+        'DzzenOS работает нативно с OpenClaw. Это не отдельный SaaS-слой. Вы управляете задачами, агентами, автоматизациями и памятью в одном интерфейсе.',
+        'Базовый поток простой: создайте доску, добавьте задачу, запустите агента, проверьте результат и сохраните контекст в Memory.',
+      ],
+    },
+    highlights: {
+      en: [
+        'One interface for Founder Ops and Content workflows.',
+        'Local-first data model: SQLite + local docs + local API.',
+        'Native OpenClaw model and agent integration.',
+        'Docs is product documentation, Memory is workspace context.',
+      ],
+      ru: [
+        'Единый интерфейс для Founder Ops и контент-процессов.',
+        'Local-first модель данных: SQLite + локальные docs + локальный API.',
+        'Нативная интеграция с моделями и агентами OpenClaw.',
+        'Docs — документация продукта, Memory — рабочий контекст.',
+      ],
+    },
     commands: [
       {
         id: 'start-local',
-        title: 'Локальный запуск (разработка)',
-        description: 'Поднимает UI и API для работы на локальной машине.',
+        title: { en: 'Run local development stack', ru: 'Запустить локальный стек разработки' },
+        description: { en: 'Starts UI + API for local development.', ru: 'Запускает UI + API для локальной разработки.' },
         language: 'bash',
         code: `pnpm install\npnpm dev`,
       },
       {
         id: 'start-api',
-        title: 'Проверка API после запуска',
-        description: 'Быстрый smoke test до открытия UI.',
+        title: { en: 'Smoke-test API', ru: 'Сделать smoke-тест API' },
+        description: { en: 'Quick check before opening the UI.', ru: 'Быстрая проверка перед открытием UI.' },
         language: 'bash',
         code: 'curl -s http://127.0.0.1:8787/boards | jq',
       },
     ],
     links: [
       {
-        label: 'README',
+        label: { en: 'README', ru: 'README' },
         href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/README.md',
-        note: 'Базовый обзор продукта и сценариев.',
       },
       {
-        label: 'Install Guide',
+        label: { en: 'Install Guide', ru: 'Руководство по установке' },
         href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/INSTALL.md',
       },
     ],
   },
   {
-    id: 'install-access',
-    group: 'Start Here',
-    title: 'Установка и доступ',
-    summary: 'Серверный install, домен с TLS и rollback без боли.',
-    intro: [
-      'Для рабочей эксплуатации используйте release-first установку на сервер. Для удобного доступа с телефона/ноутбука включайте domain mode.',
-      'Если релиз не подошел, откат выполняется одной командой и не ломает общий процесс эксплуатации.',
-    ],
-    highlights: [
-      'Установка последнего релиза одной командой.',
-      'Можно фиксировать конкретную версию.',
-      'Domain mode: HTTPS + login + безопасный удаленный доступ.',
-      'Rollback к предыдущему snapshot.',
-    ],
-    commands: [
-      {
-        id: 'install-release',
-        title: 'Установить/обновить релиз',
-        description: 'Основная команда для сервера.',
-        language: 'bash',
-        code: 'curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash',
-      },
-      {
-        id: 'install-version-pin',
-        title: 'Поставить конкретную версию',
-        description: 'Подходит для стабильного release management.',
-        language: 'bash',
-        code: 'curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --version v1.2.3',
-      },
-      {
-        id: 'install-rollback',
-        title: 'Откатить предыдущую версию',
-        description: 'Быстрое восстановление при проблемном апдейте.',
-        language: 'bash',
-        code: 'curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --rollback',
-      },
-    ],
-    links: [
-      {
-        label: 'Install Modes',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/INSTALL-MODES.md',
-      },
-      {
-        label: 'Domain Access',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/DOMAIN-ACCESS.md',
-      },
-      {
-        label: 'Agent-driven Install',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/AGENT-INSTALL.md',
-      },
-    ],
-  },
-  {
     id: 'playbook-weekly-review',
-    group: 'Playbooks',
-    title: 'Playbook: Weekly Review за 3 шага',
-    summary: 'Быстрый ритуал для еженедельного контроля задач, рисков и планов.',
-    intro: [
-      'Шаг 1: откройте Dashboard и посмотрите failed/stuck runs и pending approvals. Это даст список срочных блокеров.',
-      'Шаг 2: по ключевым задачам запустите plan/report, доуточните через chat и зафиксируйте статус в Kanban.',
-      'Шаг 3: добавьте итог недели в Memory через board summary, чтобы следующий цикл начинался с актуального контекста.',
-    ],
-    highlights: [
-      'Время выполнения: 15-25 минут.',
-      'Фокус: риски, блокеры, решения на следующую неделю.',
-      'Итог фиксируется в board docs/changelog/memory.',
-      'Подходит для соло-фаундера и маленькой команды.',
-    ],
+    group: { en: 'Playbooks', ru: 'Плейбуки' },
+    title: { en: 'Playbook: Weekly Review in 3 Steps', ru: 'Плейбук: Weekly Review за 3 шага' },
+    summary: {
+      en: 'A short weekly ritual to track blockers, risks, and next actions.',
+      ru: 'Короткий еженедельный ритуал для контроля блокеров, рисков и следующих шагов.',
+    },
+    intro: {
+      en: [
+        'Step 1: Open Dashboard and check failed/stuck runs plus pending approvals.',
+        'Step 2: For top-priority tasks, run plan/report, refine through chat, and set final status in Kanban.',
+        'Step 3: Save weekly decisions to Memory via board summary, so next week starts with clean context.',
+      ],
+      ru: [
+        'Шаг 1: откройте Dashboard и проверьте failed/stuck runs и pending approvals.',
+        'Шаг 2: по приоритетным задачам запустите plan/report, уточните детали в чате и выставьте финальный статус в Kanban.',
+        'Шаг 3: сохраните решения недели в Memory через board summary, чтобы следующая неделя стартовала с чистым контекстом.',
+      ],
+    },
+    highlights: {
+      en: [
+        'Typical duration: 15-25 minutes.',
+        'Focus: blockers, risks, priorities, ownership.',
+        'Captures decision history in docs/changelog/memory.',
+        'Works for solo founders and small teams.',
+      ],
+      ru: [
+        'Обычно занимает 15-25 минут.',
+        'Фокус: блокеры, риски, приоритеты, ответственность.',
+        'Фиксирует историю решений в docs/changelog/memory.',
+        'Подходит для соло-фаундеров и небольших команд.',
+      ],
+    },
     commands: [
       {
         id: 'playbook-weekly-summary',
-        title: 'Записать weekly summary в Memory',
-        description: 'Закрывает weekly review и сохраняет историю решений.',
+        title: { en: 'Write weekly summary into Memory', ru: 'Сохранить weekly summary в Memory' },
+        description: { en: 'Closes the review loop with a durable record.', ru: 'Закрывает weekly review с устойчивой фиксацией результата.' },
         language: 'bash',
         code: `curl -s http://127.0.0.1:8787/docs/boards/<board-id>/summary \\
   -X POST -H 'content-type: application/json' \\
-  -d '{"title":"Weekly review","summary":"- Закрыли блокеры\\n- Определили цели на неделю\\n- Обновили приоритеты"}'`,
+  -d '{"title":"Weekly review","summary":"- Closed blockers\\n- Set next-week priorities\\n- Updated risk status"}'`,
       },
     ],
   },
   {
     id: 'playbook-content-pipeline',
-    group: 'Playbooks',
-    title: 'Playbook: Контент-пайплайн за 5 шагов',
-    summary: 'От идеи до публикации с прозрачным статусом и агентной поддержкой.',
-    intro: [
-      'Шаг 1: добавьте идею в `ideas` с кратким one-liner описанием.',
-      'Шаг 2: запустите plan, чтобы получить структуру материала и чеклист.',
-      'Шаг 3: переведите задачу в `doing`, отработайте черновик через chat/execute.',
-      'Шаг 4: отправьте в `review`, пройдите правки и финальные согласования.',
-      'Шаг 5: после публикации переведите в `done` и сохраните summary в Memory.',
-    ],
-    highlights: [
-      'Единый путь для постов, статей, лендингов и email-рассылок.',
-      'Карточка задачи хранит контекст и историю решений.',
-      'Можно масштабировать на несколько контент-треков в разных boards.',
-      'Пайплайн легко автоматизировать через Automations.',
-    ],
+    group: { en: 'Playbooks', ru: 'Плейбуки' },
+    title: { en: 'Playbook: Content Pipeline in 5 Steps', ru: 'Плейбук: Контент-пайплайн за 5 шагов' },
+    summary: { en: 'Move from idea to published asset with clear handoffs.', ru: 'Переходите от идеи к публикации с прозрачными этапами.' },
+    intro: {
+      en: [
+        'Step 1: Create idea task in `ideas` with one-line intent.',
+        'Step 2: Run `plan` to generate structure and checklist.',
+        'Step 3: Move to `doing`, draft through chat/execute.',
+        'Step 4: Move to `review`, complete edits and approvals.',
+        'Step 5: Mark `done` and save publish summary in Memory.',
+      ],
+      ru: [
+        'Шаг 1: создайте идею в `ideas` с кратким one-line intent.',
+        'Шаг 2: запустите `plan`, чтобы получить структуру и чеклист.',
+        'Шаг 3: переведите в `doing`, соберите черновик через chat/execute.',
+        'Шаг 4: переведите в `review`, завершите правки и согласования.',
+        'Шаг 5: отметьте `done` и сохраните итог публикации в Memory.',
+      ],
+    },
+    highlights: {
+      en: [
+        'Reusable flow for posts, articles, landing pages, and email.',
+        'Card keeps context and decision trace in one place.',
+        'Easy to scale across multiple boards.',
+        'Automation-friendly once process stabilizes.',
+      ],
+      ru: [
+        'Переиспользуемый поток для постов, статей, лендингов и email.',
+        'Карточка хранит контекст и след решений в одном месте.',
+        'Легко масштабируется на несколько досок.',
+        'Хорошо автоматизируется после стабилизации процесса.',
+      ],
+    },
     commands: [
       {
         id: 'playbook-content-create',
-        title: 'Создать контент-задачу',
-        description: 'Стартовая точка для нового материала.',
+        title: { en: 'Create content task', ru: 'Создать контент-задачу' },
+        description: { en: 'Start point for a new asset.', ru: 'Стартовая точка для нового материала.' },
         language: 'bash',
         code: `curl -s http://127.0.0.1:8787/tasks \\
   -H 'content-type: application/json' \\
@@ -201,8 +269,8 @@ const DOCS_SECTIONS: DocsSection[] = [
       },
       {
         id: 'playbook-content-plan',
-        title: 'Сгенерировать план контента',
-        description: 'Получить структуру и шаги выполнения.',
+        title: { en: 'Generate content plan', ru: 'Сгенерировать контент-план' },
+        description: { en: 'Creates structure and execution steps.', ru: 'Создает структуру и шаги выполнения.' },
         language: 'bash',
         code: `curl -s http://127.0.0.1:8787/tasks/<task-id>/run \\
   -X POST -H 'content-type: application/json' \\
@@ -211,61 +279,42 @@ const DOCS_SECTIONS: DocsSection[] = [
     ],
   },
   {
-    id: 'daily-flow',
-    group: 'Product',
-    title: 'Ежедневный цикл работы',
-    summary: 'Простой operational-поток: идея -> задача -> запуск -> проверка -> done.',
-    intro: [
-      'Открывайте Kanban как главный рабочий экран. Добавляйте задачи в Ideas, переводите в To do и запускайте работу в Doing/Review.',
-      'Dashboard показывает, где нужна реакция: зависшие ранны, ошибки, pending approvals. Это позволяет держать темп без ручного мониторинга.',
-    ],
-    highlights: [
-      'Единый статусовый поток: ideas -> todo -> doing -> review -> release -> done -> archived.',
-      'Быстрый capture задач без модалок.',
-      'Multi-select и bulk-действия в канбане.',
-      'Realtime обновления статусов через SSE.',
-    ],
-    commands: [
-      {
-        id: 'daily-create-task',
-        title: 'Создать задачу через API',
-        description: 'Подходит для внешних интеграций и операторских сценариев.',
-        language: 'bash',
-        code: `curl -s http://127.0.0.1:8787/tasks \\
-  -H 'content-type: application/json' \\
-  -d '{"title":"Подготовить weekly review","boardId":"<board-id>","status":"ideas"}'`,
-      },
-      {
-        id: 'daily-move-task',
-        title: 'Перевести задачу в работу',
-        description: 'Классический шаг из backlog в execution.',
-        language: 'bash',
-        code: `curl -s http://127.0.0.1:8787/tasks/<task-id> \\
-  -X PATCH -H 'content-type: application/json' \\
-  -d '{"status":"doing"}'`,
-      },
-    ],
-  },
-  {
     id: 'task-card',
-    group: 'Product',
-    title: 'Карточка задачи: как пользоваться',
-    summary: 'Карточка = brief + чат + run history + approvals + артефакты.',
-    intro: [
-      'В DzzenOS главная единица работы - карточка задачи. Внутри нее вы держите контекст, общаетесь с агентом и видите историю выполнения.',
-      'Сессия агента изолирована по задаче: это снижает шум, улучшает повторяемость и делает итоговые отчеты понятнее.',
-    ],
-    highlights: [
-      'Modes: plan, execute, report.',
-      'Можно мягко остановить активный run.',
-      'Checklist обновляется из результата планирования.',
-      'При завершении можно писать summary в board docs/changelog/memory.',
-    ],
+    group: { en: 'Product', ru: 'Продукт' },
+    title: { en: 'Task Card Workflow', ru: 'Работа с карточкой задачи' },
+    summary: {
+      en: 'Task card is the unit of execution: brief, chat, runs, approvals, artifacts.',
+      ru: 'Карточка задачи — единица исполнения: brief, chat, runs, approvals, artifacts.',
+    },
+    intro: {
+      en: [
+        'Task-level sessions isolate context and improve repeatability.',
+        'Use `plan`, `execute`, and `report` modes depending on stage.',
+      ],
+      ru: [
+        'Сессии на уровне задачи изолируют контекст и повышают повторяемость результата.',
+        'Используйте режимы `plan`, `execute` и `report` в зависимости от этапа.',
+      ],
+    },
+    highlights: {
+      en: [
+        'Soft-stop active runs safely.',
+        'Checklist can be updated from planning output.',
+        'Run history supports transparent reviews.',
+        'Summary can be appended to board docs and memory.',
+      ],
+      ru: [
+        'Можно безопасно остановить активный run (soft-stop).',
+        'Checklist может обновляться из результата планирования.',
+        'История runs поддерживает прозрачный ревью-процесс.',
+        'Summary можно дописывать в board docs и memory.',
+      ],
+    },
     commands: [
       {
         id: 'task-plan',
-        title: 'Запустить планирование',
-        description: 'Генерирует структурированный план и чеклист.',
+        title: { en: 'Run planning mode', ru: 'Запустить режим планирования' },
+        description: { en: 'Generates structured plan and checklist.', ru: 'Генерирует структурированный план и чеклист.' },
         language: 'bash',
         code: `curl -s http://127.0.0.1:8787/tasks/<task-id>/run \\
   -X POST -H 'content-type: application/json' \\
@@ -273,130 +322,98 @@ const DOCS_SECTIONS: DocsSection[] = [
       },
       {
         id: 'task-chat',
-        title: 'Написать агенту в контексте задачи',
-        description: 'Уточняет план или просит доработать результат.',
+        title: { en: 'Chat inside task context', ru: 'Чат в контексте задачи' },
+        description: { en: 'Refine output without losing thread context.', ru: 'Уточняйте результат без потери контекста ветки.' },
         language: 'bash',
         code: `curl -s http://127.0.0.1:8787/tasks/<task-id>/chat \\
   -X POST -H 'content-type: application/json' \\
-  -d '{"text":"Уточни риски и дай план mitigation"}'`,
-      },
-      {
-        id: 'task-stop',
-        title: 'Остановить активный run',
-        description: 'Soft cancel для безопасного прерывания исполнения.',
-        language: 'bash',
-        code: 'curl -s http://127.0.0.1:8787/tasks/<task-id>/stop -X POST',
+  -d '{"text":"Refine the plan and add risk mitigation"}'`,
       },
     ],
   },
   {
     id: 'agents-skills-models',
-    group: 'Product',
-    title: 'Agents, Skills, Models без лишней сложности',
-    summary: 'Настраиваете роли агентов и capabilities, а запуск остается простым.',
-    intro: [
-      'Agent Library хранит профили агентов, их роли, теги и prompt overrides по этапам plan/execute/chat/report. Это позволяет адаптировать поведение без копипасты промптов.',
-      'Skills задают разрешения (network/filesystem/external_write/secrets), а Models связываются с OpenClaw gateway и вашими провайдерами.',
-    ],
-    highlights: [
-      'Marketplace install для агентов и skills.',
-      'Профили агентов подключаются к задачам без ручного glue-кода.',
-      'OAuth/API key поддерживаются для model providers.',
-      'OpenClaw интеграции работают нативно через backend шлюз.',
-    ],
+    group: { en: 'Product', ru: 'Продукт' },
+    title: { en: 'Agents, Skills, Models', ru: 'Агенты, навыки, модели' },
+    summary: {
+      en: 'Configure roles and capabilities without adding operational complexity.',
+      ru: 'Настраивайте роли и capability без роста операционной сложности.',
+    },
+    intro: {
+      en: [
+        'Agent profiles define behavior with role metadata and prompt overrides.',
+        'Skills manage capability boundaries, while model providers are managed through OpenClaw gateway integration.',
+      ],
+      ru: [
+        'Профили агентов задают поведение через role metadata и prompt overrides.',
+        'Skills управляют границами capability, а model providers управляются через интеграцию с OpenClaw gateway.',
+      ],
+    },
+    highlights: {
+      en: [
+        'Marketplace install for both agents and skills.',
+        'Prompt override stages: system/plan/execute/chat/report.',
+        'Capability controls: network/filesystem/external_write/secrets.',
+        'OAuth/API-key model provider support.',
+      ],
+      ru: [
+        'Marketplace-установка доступна и для агентов, и для skills.',
+        'Этапы prompt override: system/plan/execute/chat/report.',
+        'Контроль capability: network/filesystem/external_write/secrets.',
+        'Поддержка model providers через OAuth/API-key.',
+      ],
+    },
     commands: [
       {
         id: 'models-overview',
-        title: 'Проверить providers/models overview',
-        description: 'Снимок текущего состояния моделей OpenClaw.',
+        title: { en: 'Get model/provider overview', ru: 'Получить обзор моделей и провайдеров' },
+        description: { en: 'Snapshot of current OpenClaw model state.', ru: 'Снимок текущего состояния моделей OpenClaw.' },
         language: 'bash',
         code: 'curl -s http://127.0.0.1:8787/openclaw/models/overview | jq',
-      },
-      {
-        id: 'models-scan',
-        title: 'Пересканировать модели',
-        description: 'Обновляет перечень доступных моделей.',
-        language: 'bash',
-        code: `curl -s http://127.0.0.1:8787/openclaw/models/scan \\
-  -X POST -H 'content-type: application/json' \\
-  -d '{}'`,
-      },
-      {
-        id: 'skills-list',
-        title: 'Посмотреть включенные skills',
-        description: 'Удобно для аудита доступа и troubleshooting.',
-        language: 'bash',
-        code: 'curl -s http://127.0.0.1:8787/skills | jq',
-      },
-    ],
-    links: [
-      {
-        label: 'OpenClaw Integrations',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/openclaw-native/OPENCLAW-INTEGRATIONS.md',
-      },
-    ],
-  },
-  {
-    id: 'memory',
-    group: 'Product',
-    title: 'Memory: память проекта',
-    summary: 'Храните рабочий контекст отдельно от продуктовой документации.',
-    intro: [
-      'Страница Memory предназначена для живого контекста: overview workspace, board notes и changelog. Это ваш операционный слой знаний.',
-      'Docs служит как справочник по платформе и best-practices. Разделение важно, чтобы не смешивать документацию продукта с текущими рабочими заметками.',
-    ],
-    highlights: [
-      'Workspace overview и board docs в одном месте.',
-      'Changelog для фиксации принятых изменений.',
-      'Поддержка summary append после завершения задач.',
-      'Логичное разделение: Memory для работы, Docs для обучения.',
-    ],
-    commands: [
-      {
-        id: 'memory-summary-append',
-        title: 'Добавить итог в board memory',
-        description: 'Полезно после weekly review или релиза.',
-        language: 'bash',
-        code: `curl -s http://127.0.0.1:8787/docs/boards/<board-id>/summary \\
-  -X POST -H 'content-type: application/json' \\
-  -d '{"title":"Weekly review","summary":"- Закрыли критические блокеры\\n- Обновили план спринта"}'`,
       },
     ],
   },
   {
     id: 'automations',
-    group: 'Operations',
-    title: 'Automations и realtime события',
-    summary: 'Автоматизируйте повторяющиеся задачи и отслеживайте изменения в реальном времени.',
-    intro: [
-      'Автоматизации нужны для рутины: регулярные отчеты, синхронизации, проверки статусов. Они запускаются вручную и по расписанию.',
-      'Endpoint `/events` позволяет слушать изменения runs/tasks/checklist и строить реактивные интеграции.',
-    ],
-    highlights: [
-      'CRUD для `/automations`.',
-      'Manual run для проверки сценария.',
-      'SSE-поток для live состояния системы.',
-      'Полезно для ботов и внешних контроллеров.',
-    ],
+    group: { en: 'Operations', ru: 'Операции' },
+    title: { en: 'Automations & Realtime Events', ru: 'Автоматизации и события в реальном времени' },
+    summary: { en: 'Automate recurring work and subscribe to state updates.', ru: 'Автоматизируйте повторяющиеся задачи и подписывайтесь на обновления состояния.' },
+    intro: {
+      en: [
+        'Use automations for recurring jobs, reports, and sync tasks.',
+        'Use `/events` stream to observe runs/tasks/checklist updates in real time.',
+      ],
+      ru: [
+        'Используйте автоматизации для регулярных задач, отчетов и синхронизаций.',
+        'Используйте поток `/events`, чтобы отслеживать обновления runs/tasks/checklist в реальном времени.',
+      ],
+    },
+    highlights: {
+      en: [
+        'CRUD for `/automations`.',
+        'Manual run endpoint for rapid verification.',
+        'SSE stream for event-driven integrations.',
+        'Useful for bots and operational control loops.',
+      ],
+      ru: [
+        'CRUD для `/automations`.',
+        'Manual run endpoint для быстрой проверки.',
+        'SSE-поток для event-driven интеграций.',
+        'Полезно для ботов и операционных control-loop сценариев.',
+      ],
+    },
     commands: [
       {
-        id: 'automation-list',
-        title: 'Получить список automation',
-        description: 'Проверить конфигурацию перед запуском.',
-        language: 'bash',
-        code: 'curl -s http://127.0.0.1:8787/automations | jq',
-      },
-      {
         id: 'automation-run',
-        title: 'Запустить automation вручную',
-        description: 'Ускоренная проверка результата без ожидания расписания.',
+        title: { en: 'Run automation manually', ru: 'Запустить automation вручную' },
+        description: { en: 'Validate behavior without waiting for schedule.', ru: 'Проверьте поведение без ожидания расписания.' },
         language: 'bash',
         code: 'curl -s http://127.0.0.1:8787/automations/<automation-id>/run -X POST',
       },
       {
         id: 'events-watch',
-        title: 'Подписка на realtime поток',
-        description: 'Непрерывный просмотр событий системы.',
+        title: { en: 'Watch realtime event stream', ru: 'Смотреть realtime-поток событий' },
+        description: { en: 'Live system event feed.', ru: 'Живой поток системных событий.' },
         language: 'bash',
         code: 'curl -N http://127.0.0.1:8787/events',
       },
@@ -404,84 +421,101 @@ const DOCS_SECTIONS: DocsSection[] = [
   },
   {
     id: 'security-data',
-    group: 'Operations',
-    title: 'Данные и безопасность',
-    summary: 'Как хранить данные безопасно и восстанавливаться без потерь.',
-    intro: [
-      'Система использует SQLite с миграциями. Для апдейтов и изменений схемы зафиксированы правила безопасного copy-and-verify подхода.',
-      'Перед значимыми изменениями делайте backup. Это основа надежной local-first эксплуатации в production.',
-    ],
-    highlights: [
-      'Документированная политика Data Safety.',
-      'Backup/restore и release rollback процедуры.',
-      'Auth/session guardrails и origin checks в API.',
-      'Security tests вынесены в отдельный пакет.',
-    ],
+    group: { en: 'Operations', ru: 'Операции' },
+    title: { en: 'Data Safety & Security', ru: 'Безопасность данных и защита' },
+    summary: { en: 'Keep migrations safe and operations recoverable.', ru: 'Держите миграции безопасными и операции восстановимыми.' },
+    intro: {
+      en: [
+        'The stack uses SQLite with migration discipline and backup routines.',
+        'Use copy-and-verify style operations before destructive changes.',
+      ],
+      ru: [
+        'Стек использует SQLite с дисциплиной миграций и процедурами резервного копирования.',
+        'Перед разрушительными изменениями используйте подход copy-and-verify.',
+      ],
+    },
+    highlights: {
+      en: [
+        'Documented backup and restore flow.',
+        'Release rollback support.',
+        'Auth/session guardrails and origin checks in API.',
+        'Dedicated security smoke tests.',
+      ],
+      ru: [
+        'Документированный flow резервного копирования и восстановления.',
+        'Поддержка rollback релизов.',
+        'Guardrails auth/session и origin-checks в API.',
+        'Отдельные security smoke tests.',
+      ],
+    },
     commands: [
       {
         id: 'backup-list',
-        title: 'Проверить список backup',
-        description: 'Убедиться, что есть свежие точки восстановления.',
+        title: { en: 'List backup snapshots', ru: 'Список backup-снимков' },
+        description: { en: 'Verify recovery points are available.', ru: 'Проверить, что точки восстановления доступны.' },
         language: 'bash',
         code: 'bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup list',
       },
       {
         id: 'security-tests',
-        title: 'Запустить security smoke tests',
-        description: 'Проверка ключевых auth/session сценариев.',
+        title: { en: 'Run security smoke tests', ru: 'Запустить security smoke tests' },
+        description: { en: 'Checks core auth/session scenarios.', ru: 'Проверяет ключевые сценарии auth/session.' },
         language: 'bash',
         code: 'pnpm test:security',
       },
     ],
     links: [
       {
-        label: 'Data Policy',
+        label: { en: 'Data Policy', ru: 'Политика данных' },
         href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/DATA-POLICY.md',
       },
       {
-        label: 'Database docs',
+        label: { en: 'Database Docs', ru: 'Документация по базе данных' },
         href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/database.md',
-      },
-      {
-        label: 'Release Operations',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/RELEASE-OPERATIONS.md',
       },
     ],
   },
   {
     id: 'api-reference',
-    group: 'Operations',
-    title: 'API для интеграций',
-    summary: 'Минимальный набор endpoint для ботов, скриптов и внешних панелей.',
-    intro: [
-      'Если нужно интегрировать DzzenOS с внешними инструментами, начинайте с boards/tasks/runs и docs endpoints. Этого хватает для большинства автоматизированных сценариев.',
-      'Для расширенных кейсов доступны approvals, agents/skills, automations и модельные endpoint OpenClaw.',
-    ],
-    highlights: [
-      'Task session API (`/tasks/:id/session`).',
-      'Checklist и chat API для card-level операций.',
-      'Approvals API для управляемых действий.',
-      'OpenClaw model management endpoint.',
-    ],
+    group: { en: 'Reference', ru: 'Справочник' },
+    title: { en: 'API Reference (Practical)', ru: 'API-справочник (практический)' },
+    summary: { en: 'Minimal endpoint set for bots, scripts, and external controllers.', ru: 'Минимальный набор endpoint для ботов, скриптов и внешних контроллеров.' },
+    intro: {
+      en: [
+        'Start with boards/tasks/runs/docs endpoints for most integrations.',
+        'Add approvals, automations, and model endpoints when workflows mature.',
+      ],
+      ru: [
+        'Для большинства интеграций начинайте с endpoint групп boards/tasks/runs/docs.',
+        'Добавляйте approvals, automations и model endpoint по мере зрелости процессов.',
+      ],
+    },
+    highlights: {
+      en: [
+        'Task session API for isolated execution context.',
+        'Checklist/chat API for card-level workflows.',
+        'Approval endpoints for controlled actions.',
+        'Model/provider endpoints for gateway integration.',
+      ],
+      ru: [
+        'Task session API для изолированного контекста выполнения.',
+        'Checklist/chat API для процессов уровня карточки.',
+        'Approval endpoint для управляемых действий.',
+        'Model/provider endpoint для gateway-интеграции.',
+      ],
+    },
     commands: [
       {
-        id: 'api-task-runs',
-        title: 'История запусков задачи',
-        description: 'Дает runs и шаги для отчетов/дашбордов.',
-        language: 'bash',
-        code: 'curl -s http://127.0.0.1:8787/tasks/<task-id>/runs | jq',
-      },
-      {
         id: 'api-approvals',
-        title: 'Список pending approvals',
-        description: 'Точка для оповещений и triage процессов.',
+        title: { en: 'List pending approvals', ru: 'Список pending approvals' },
+        description: { en: 'Useful for alerts and human-in-the-loop triage.', ru: 'Полезно для алертов и human-in-the-loop триажа.' },
         language: 'bash',
         code: 'curl -s http://127.0.0.1:8787/approvals?status=pending | jq',
       },
       {
         id: 'api-approve',
-        title: 'Подтвердить approval',
-        description: 'Пример явного решения по запросу агента.',
+        title: { en: 'Approve request', ru: 'Подтвердить запрос' },
+        description: { en: 'Example of explicit decision action.', ru: 'Пример явного действия подтверждения.' },
         language: 'bash',
         code: `curl -s http://127.0.0.1:8787/approvals/<approval-id>/approve \\
   -X POST -H 'content-type: application/json' \\
@@ -490,52 +524,21 @@ const DOCS_SECTIONS: DocsSection[] = [
     ],
     links: [
       {
-        label: 'API server source',
+        label: { en: 'API Server Source', ru: 'Исходник API-сервера' },
         href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/skills/dzzenos/api/server.ts',
       },
       {
-        label: 'UI query contracts',
+        label: { en: 'UI Query Contracts', ru: 'Контракты UI-запросов' },
         href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/apps/ui/src/api/queries.ts',
       },
     ],
   },
-  {
-    id: 'docs-workflow',
-    group: 'Contributing',
-    title: 'Как обновлять эту документацию',
-    summary: 'Правило: новая функция = обновление UI текста + Docs + примера использования.',
-    intro: [
-      'После каждой новой функции обновляйте эту страницу так, чтобы пользователь сразу понял: что это, зачем нужно, и как включить.',
-      'Не ограничивайтесь описанием endpoint. Добавляйте практический сценарий и минимальный рабочий пример команды.',
-    ],
-    highlights: [
-      'Пишите простым языком, без внутреннего жаргона.',
-      'Если меняется user flow, обновляйте разделы Start Here и Daily Flow.',
-      'Если меняется API поведение, синхронизируйте примеры команд.',
-      'Держите Docs и Memory раздельно по назначению.',
-    ],
-    commands: [
-      {
-        id: 'docs-update-prompt',
-        title: 'Шаблон запроса на обновление docs',
-        description: 'Можно отправлять в Codex/Cursor/Claude.',
-        language: 'bash',
-        code: `Обнови документацию под новую функцию:\n1) Обнови /apps/ui/src/components/Docs/DocsPage.tsx\n2) Сверь контракты в /apps/ui/src/api/queries.ts и /skills/dzzenos/api/server.ts\n3) Обнови соответствующий файл в /Docs\n4) Перепроверь пользовательский текст: что делает функция, как включить, как проверить\n5) Запусти pnpm -C apps/ui lint && pnpm -C apps/ui build`,
-        assistantPrompt: `Обнови документацию под новую функцию:\n1) Обнови /apps/ui/src/components/Docs/DocsPage.tsx\n2) Сверь контракты в /apps/ui/src/api/queries.ts и /skills/dzzenos/api/server.ts\n3) Обнови соответствующий файл в /Docs\n4) Перепроверь пользовательский текст: что делает функция, как включить, как проверить\n5) Запусти pnpm -C apps/ui lint && pnpm -C apps/ui build`,
-      },
-    ],
-    links: [
-      {
-        label: 'Docs Index',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/Docs/README.md',
-      },
-      {
-        label: 'Contributing',
-        href: 'https://github.com/Dzzen-com/DzzenOS-OpenClaw/blob/main/CONTRIBUTING.md',
-      },
-    ],
-  },
 ];
+
+function l<T>(value: Localized<T>, locale: Locale): T {
+  if (locale === 'ru' && value.ru != null) return value.ru;
+  return value.en;
+}
 
 async function copyText(value: string): Promise<boolean> {
   try {
@@ -555,20 +558,21 @@ async function copyText(value: string): Promise<boolean> {
   }
 }
 
-function sectionSearchText(section: DocsSection): string {
+function sectionSearchText(section: DocsSection, locale: Locale): string {
   return [
-    section.group,
-    section.title,
-    section.summary,
-    ...section.intro,
-    ...section.highlights,
-    ...(section.commands?.map((c) => `${c.title} ${c.description} ${c.code}`) ?? []),
+    l(section.group, locale),
+    l(section.title, locale),
+    l(section.summary, locale),
+    ...l(section.intro, locale),
+    ...l(section.highlights, locale),
+    ...(section.commands?.map((c) => `${l(c.title, locale)} ${l(c.description, locale)} ${c.code}`) ?? []),
   ]
     .join(' ')
     .toLowerCase();
 }
 
 export function DocsPage() {
+  const [locale, setLocale] = useState<Locale>('en');
   const [query, setQuery] = useState('');
   const [activeSectionId, setActiveSectionId] = useState(DOCS_SECTIONS[0]?.id ?? '');
   const [feedbackByBlock, setFeedbackByBlock] = useState<Record<string, string>>({});
@@ -576,8 +580,8 @@ export function DocsPage() {
   const filteredSections = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return DOCS_SECTIONS;
-    return DOCS_SECTIONS.filter((section) => sectionSearchText(section).includes(q));
-  }, [query]);
+    return DOCS_SECTIONS.filter((section) => sectionSearchText(section, locale).includes(q));
+  }, [query, locale]);
 
   useEffect(() => {
     if (filteredSections.length === 0) return;
@@ -594,12 +598,13 @@ export function DocsPage() {
   const groupedSections = useMemo(() => {
     const groups = new Map<string, DocsSection[]>();
     for (const section of filteredSections) {
-      const list = groups.get(section.group) ?? [];
+      const groupName = l(section.group, locale);
+      const list = groups.get(groupName) ?? [];
       list.push(section);
-      groups.set(section.group, list);
+      groups.set(groupName, list);
     }
     return Array.from(groups.entries());
-  }, [filteredSections]);
+  }, [filteredSections, locale]);
 
   const setFeedback = (id: string, value: string) => {
     setFeedbackByBlock((prev) => ({ ...prev, [id]: value }));
@@ -615,7 +620,7 @@ export function DocsPage() {
 
   const onCopyBlock = async (command: DocsCommand) => {
     const ok = await copyText(command.code);
-    setFeedback(command.id, ok ? 'Copied' : 'Copy failed');
+    setFeedback(command.id, ok ? l(UI_COPY.copied, locale) : l(UI_COPY.copyFailed, locale));
   };
 
   const onOpenInAssistant = async (command: DocsCommand, target: AssistantTarget) => {
@@ -624,171 +629,170 @@ export function DocsPage() {
 
     const deepLink = AI_TARGETS[target].toUrl(payload);
     window.open(deepLink, '_blank', 'noopener,noreferrer');
-    setFeedback(command.id, `Copied + tried ${AI_TARGETS[target].label}`);
+    setFeedback(command.id, `${l(UI_COPY.triedOpen, locale)} ${AI_TARGETS[target].label}`);
   };
 
   return (
-    <div className="flex w-full flex-col gap-4">
-      <PageHeader title="Docs" subtitle="GitBook-style docs for DzzenOS platform (native inside OpenClaw)." />
+    <div className="flex w-full flex-col gap-5 text-slate-100">
+      <PageHeader
+        title="Docs"
+        subtitle={l(UI_COPY.pageSubtitle, locale)}
+        actions={
+          <div className="flex items-center gap-2 rounded-md bg-slate-900/65 px-2 py-1">
+            <span className="text-xs text-slate-400">{l(UI_COPY.language, locale)}</span>
+            <button
+              type="button"
+              onClick={() => setLocale('en')}
+              className={cn(
+                'rounded px-2 py-1 text-xs transition',
+                locale === 'en' ? 'bg-sky-500/20 text-sky-300' : 'text-slate-400 hover:text-slate-100',
+              )}
+            >
+              EN
+            </button>
+            <button
+              type="button"
+              onClick={() => setLocale('ru')}
+              className={cn(
+                'rounded px-2 py-1 text-xs transition',
+                locale === 'ru' ? 'bg-sky-500/20 text-sky-300' : 'text-slate-400 hover:text-slate-100',
+              )}
+            >
+              RU
+            </button>
+          </div>
+        }
+      />
 
-      <div className="rounded-2xl border border-border/70 bg-gradient-to-br from-surface-2/70 via-surface-1/80 to-surface-1/60 p-4 shadow-panel backdrop-blur">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-foreground">Platform Docs</div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Архитектура, возможности, API, install и ops-практики. Редактор контекста проекта теперь вынесен на страницу <span className="text-foreground">Memory</span>.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <BadgePill label={`${DOCS_SECTIONS.length} sections`} />
-            <BadgePill label="Local-first" />
-            <BadgePill label="OpenClaw-native" />
-          </div>
-        </div>
+      <div className="border-b border-slate-800/80 pb-3">
+        <p className="text-sm text-slate-300">{l(UI_COPY.platformLead, locale)}</p>
+        {locale === 'ru' ? <p className="mt-1 text-xs text-slate-400">{l(UI_COPY.translationNote, locale)}</p> : null}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[280px,minmax(0,1fr)]">
+      <div className="grid gap-8 lg:grid-cols-[240px,minmax(0,1fr)]">
         <aside className="lg:sticky lg:top-6 lg:h-[calc(100dvh-4rem)] lg:overflow-auto">
-          <div className="rounded-2xl border border-border/70 bg-surface-1/75 p-3 shadow-panel backdrop-blur">
-            <label className="mb-2 block text-xs uppercase tracking-wide text-muted-foreground">Search docs</label>
+          <div className="mb-3">
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-500">{l(UI_COPY.searchLabel, locale)}</label>
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="API, install, security, memory..."
-              className="h-9 w-full rounded-md border border-input/70 bg-background/35 px-3 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              placeholder={l(UI_COPY.searchPlaceholder, locale)}
+              className="h-9 w-full rounded-md border border-slate-800 bg-slate-950/60 px-3 text-sm text-slate-200 outline-none focus-visible:border-sky-500/50"
             />
-
-            <div className="mt-3 grid gap-3">
-              {groupedSections.map(([group, sections]) => (
-                <div key={group}>
-                  <div className="mb-1 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{group}</div>
-                  <div className="flex flex-col gap-1">
-                    {sections.map((section) => {
-                      const active = section.id === activeSection?.id;
-                      return (
-                        <button
-                          key={section.id}
-                          type="button"
-                          onClick={() => setActiveSectionId(section.id)}
-                          className={cn(
-                            'rounded-lg border px-3 py-2 text-left transition',
-                            active
-                              ? 'border-primary/45 bg-primary/10 text-foreground'
-                              : 'border-border/50 bg-surface-2/35 text-muted-foreground hover:border-border hover:bg-surface-2/60 hover:text-foreground',
-                          )}
-                        >
-                          <div className="text-xs font-medium">{section.title}</div>
-                          <div className="mt-1 line-clamp-2 text-[11px] opacity-80">{section.summary}</div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-
-              {filteredSections.length === 0 ? (
-                <div className="rounded-lg border border-border/70 bg-surface-2/30 p-3 text-xs text-muted-foreground">
-                  Ничего не найдено по текущему запросу.
-                </div>
-              ) : null}
-            </div>
           </div>
+
+          <nav className="space-y-4">
+            {groupedSections.map(([group, sections]) => (
+              <div key={group}>
+                <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">{group}</div>
+                <div className="space-y-1">
+                  {sections.map((section) => {
+                    const active = section.id === activeSection?.id;
+                    return (
+                      <button
+                        key={section.id}
+                        type="button"
+                        onClick={() => setActiveSectionId(section.id)}
+                        className={cn(
+                          'w-full border-l-2 px-3 py-1.5 text-left text-sm transition',
+                          active
+                            ? 'border-sky-400 text-slate-100'
+                            : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200',
+                        )}
+                      >
+                        {l(section.title, locale)}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+            {filteredSections.length === 0 ? <div className="text-xs text-slate-500">{l(UI_COPY.noResults, locale)}</div> : null}
+          </nav>
         </aside>
 
-        <section className="min-w-0 rounded-2xl border border-border/70 bg-surface-1/75 shadow-panel backdrop-blur">
+        <section className="min-w-0">
           {!activeSection ? (
-            <div className="p-6 text-sm text-muted-foreground">Выберите раздел в навигации слева.</div>
+            <div className="text-sm text-slate-400">{l(UI_COPY.selectSection, locale)}</div>
           ) : (
-            <div className="p-5 sm:p-6">
-              <div className="mb-5 border-b border-border/70 pb-4">
-                <div className="text-xs uppercase tracking-wider text-muted-foreground">{activeSection.group}</div>
-                <h2 className="mt-1 text-2xl font-semibold tracking-tight text-foreground font-display">{activeSection.title}</h2>
-                <p className="mt-2 text-sm text-muted-foreground">{activeSection.summary}</p>
-              </div>
+            <article>
+              <header className="border-b border-slate-800/80 pb-4">
+                <div className="text-xs uppercase tracking-wider text-slate-500">{l(activeSection.group, locale)}</div>
+                <h2 className="mt-1 text-3xl font-semibold tracking-tight text-slate-50 font-display">{l(activeSection.title, locale)}</h2>
+                <p className="mt-2 text-sm text-slate-300">{l(activeSection.summary, locale)}</p>
+              </header>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                {activeSection.highlights.map((highlight, idx) => (
-                  <div key={`${activeSection.id}-hl-${idx}`} className="rounded-lg border border-border/70 bg-surface-2/35 p-3">
-                    <div className="text-xs text-foreground">{highlight}</div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-5 grid gap-3">
-                {activeSection.intro.map((paragraph, idx) => (
-                  <p key={`${activeSection.id}-intro-${idx}`} className="text-sm leading-relaxed text-foreground/95">
+              <div className="mt-5 space-y-3">
+                {l(activeSection.intro, locale).map((paragraph, idx) => (
+                  <p key={`${activeSection.id}-intro-${idx}`} className="text-sm leading-relaxed text-slate-200">
                     {paragraph}
                   </p>
                 ))}
               </div>
 
+              <ul className="mt-5 space-y-2">
+                {l(activeSection.highlights, locale).map((highlight, idx) => (
+                  <li key={`${activeSection.id}-hl-${idx}`} className="flex items-start gap-2 text-sm text-slate-300">
+                    <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-sky-400" />
+                    <span>{highlight}</span>
+                  </li>
+                ))}
+              </ul>
+
               {activeSection.commands?.length ? (
-                <div className="mt-6 grid gap-4">
+                <div className="mt-8 space-y-6">
                   {activeSection.commands.map((command) => (
-                    <article key={command.id} className="overflow-hidden rounded-xl border border-border/70 bg-background/35">
-                      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
+                    <section key={command.id} className="border-t border-slate-800/80 pt-4">
+                      <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <h3 className="text-sm font-semibold text-foreground">{command.title}</h3>
-                          <p className="mt-1 text-xs text-muted-foreground">{command.description}</p>
+                          <h3 className="text-base font-medium text-slate-100">{l(command.title, locale)}</h3>
+                          <p className="mt-1 text-sm text-slate-400">{l(command.description, locale)}</p>
                         </div>
                         <div className="flex flex-wrap gap-1">
                           <Button size="sm" variant="secondary" onClick={() => onCopyBlock(command)}>
-                            Copy
+                            {l(UI_COPY.copy, locale)}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => onOpenInAssistant(command, 'cursor')}>
-                            Cursor
+                            {l(UI_COPY.cursor, locale)}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => onOpenInAssistant(command, 'codex')}>
-                            Codex
+                            {l(UI_COPY.codex, locale)}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => onOpenInAssistant(command, 'claude')}>
-                            Claude
+                            {l(UI_COPY.claude, locale)}
                           </Button>
                         </div>
                       </div>
-
-                      <div className="border-b border-border/70 px-4 py-2 text-[11px] uppercase tracking-wider text-muted-foreground">
-                        {command.language}
-                      </div>
-                      <pre className="m-0 overflow-x-auto px-4 py-4 text-xs leading-relaxed text-foreground">
+                      <pre className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950/70 p-3 text-xs leading-relaxed text-slate-100">
                         <code>{command.code}</code>
                       </pre>
-
-                      <div className="px-4 py-2 text-[11px] text-muted-foreground">
-                        {feedbackByBlock[command.id] ?? 'Tip: кнопки AI сначала копируют текст, затем пробуют открыть deep-link.'}
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        {feedbackByBlock[command.id] ?? l(UI_COPY.commandTip, locale)}
                       </div>
-                    </article>
+                    </section>
                   ))}
                 </div>
               ) : null}
 
               {activeSection.links?.length ? (
-                <div className="mt-6 rounded-xl border border-border/70 bg-surface-2/25 p-4">
-                  <div className="text-sm font-semibold text-foreground">Related docs</div>
-                  <div className="mt-3 grid gap-2">
+                <div className="mt-8 border-t border-slate-800/80 pt-4">
+                  <h3 className="text-sm font-medium text-slate-100">{l(UI_COPY.relatedDocs, locale)}</h3>
+                  <ul className="mt-2 space-y-2">
                     {activeSection.links.map((link) => (
-                      <a
-                        key={link.href}
-                        href={link.href}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded-md border border-border/60 bg-surface-1/50 px-3 py-2 text-sm text-primary transition hover:border-primary/40 hover:bg-surface-1"
-                      >
-                        <span className="font-medium">{link.label}</span>
-                        {link.note ? <span className="ml-2 text-xs text-muted-foreground">{link.note}</span> : null}
-                      </a>
+                      <li key={link.href}>
+                        <a href={link.href} target="_blank" rel="noreferrer" className="text-sm text-sky-300 hover:text-sky-200">
+                          {l(link.label, locale)}
+                        </a>
+                        {link.note ? <span className="ml-2 text-xs text-slate-500">{l(link.note, locale)}</span> : null}
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 </div>
               ) : null}
-            </div>
+            </article>
           )}
         </section>
       </div>
     </div>
   );
-}
-
-function BadgePill({ label }: { label: string }) {
-  return <span className="rounded-full border border-border/70 bg-surface-2/40 px-2.5 py-1 text-[11px]">{label}</span>;
 }
