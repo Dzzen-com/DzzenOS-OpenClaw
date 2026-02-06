@@ -8,6 +8,13 @@ This repository keeps all human documentation under `Docs/`.
 - Specs index: `Docs/openclaw-native/spec/INDEX.md`
 - Main product specs: `Docs/openclaw-native/spec/`
 
+## Developer and AI-agent docs
+
+- Canonical engineering/agent index: `Docs/internal/DEV-AGENTS-KNOWLEDGE.md`
+- API server source: `skills/dzzenos/api/server.ts`
+- UI contracts: `apps/ui/src/api/queries.ts`
+- DB migrations: `skills/dzzenos/db/migrations/`
+
 ## Operations and install
 
 - Install (release-first): `Docs/INSTALL.md`
