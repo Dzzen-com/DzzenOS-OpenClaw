@@ -57,6 +57,13 @@ It provides:
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
 
+By default this installs/updates to the **latest GitHub release**.
+
+Pin a specific release:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --version v1.2.3
+```
+
 **2) On your laptop: create an SSH tunnel**
 ```bash
 ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
@@ -75,29 +82,46 @@ This gives you access from anywhere (phone/laptop) at:
 
 Run the same installer and choose **server/VPS** → **domain mode**.
 
-Docs: `docs/DOMAIN-ACCESS.md`
+Docs: `Docs/DOMAIN-ACCESS.md`
+
+### Rollback / Backups
+
+Rollback to previous app snapshot:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --rollback
+```
+
+List DB backups:
+```bash
+bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup list
+```
 
 ### Agent-driven install (chat → install → reply)
 
-See: `docs/AGENT-INSTALL.md`
+See: `Docs/AGENT-INSTALL.md`
 
 ### More details
 
-- `docs/INSTALL.md`
-- `docs/remote-access.md`
+- `Docs/INSTALL.md`
+- `Docs/remote-access.md`
 
 ---
 
 ## Docs
 
-- Install (SSH tunnel): [docs/INSTALL.md](docs/INSTALL.md)
-- Domain mode (Caddy + TLS + login + caching): [docs/DOMAIN-ACCESS.md](docs/DOMAIN-ACCESS.md)
-- Agent-driven install: [docs/AGENT-INSTALL.md](docs/AGENT-INSTALL.md)
-- Remote access notes: [docs/remote-access.md](docs/remote-access.md)
+- Docs index (for docs platform): [Docs/README.md](Docs/README.md)
+- Install (SSH tunnel): [Docs/INSTALL.md](Docs/INSTALL.md)
+- Install modes (local/server/docker/cloudflare): [Docs/INSTALL-MODES.md](Docs/INSTALL-MODES.md)
+- Domain mode (Caddy + TLS + login + caching): [Docs/DOMAIN-ACCESS.md](Docs/DOMAIN-ACCESS.md)
+- Agent-driven install: [Docs/AGENT-INSTALL.md](Docs/AGENT-INSTALL.md)
+- Remote access notes: [Docs/remote-access.md](Docs/remote-access.md)
+- Database details: [Docs/database.md](Docs/database.md)
+- Data safety policy: [Docs/DATA-POLICY.md](Docs/DATA-POLICY.md)
+- Release/rollback operations: [Docs/RELEASE-OPERATIONS.md](Docs/RELEASE-OPERATIONS.md)
 
-- OpenClaw Native specs (EN): [docs/openclaw-native/spec/](docs/openclaw-native/spec/)
+- Product specs (OpenClaw Native): [Docs/openclaw-native/spec/](Docs/openclaw-native/spec/)
 
-Start here: [docs/openclaw-native/README.md](docs/openclaw-native/README.md)
+Start here: [Docs/openclaw-native/README.md](Docs/openclaw-native/README.md)
 
 ## Logging / debugging
 
@@ -139,7 +163,7 @@ SMOKE_KEEP_TEMP=1 pnpm dzzenos:smoke:local
 
 ## Roadmap
 
-See `docs/openclaw-native/spec/10-Roadmap (v1 vs later).md`.
+See `Docs/openclaw-native/spec/10-Roadmap (v1 vs later).md`.
 
 We track work in GitHub Issues + Project Board.
 
@@ -167,7 +191,7 @@ If you fork this project, you must follow the trademark policy:
 
 This project is **source-available** under the **Business Source License 1.1 (BUSL-1.1)**.
 
-- Free production use for organizations with **Annual Gross Revenue < USD 1,000,000** (see [Additional Use Grant](docs/licensing/ADDITIONAL-GRANT.md) in [LICENSE](LICENSE)).
+- Free production use for organizations with **Annual Gross Revenue < USD 1,000,000** (see [Additional Use Grant](Docs/licensing/ADDITIONAL-GRANT.md) in [LICENSE](LICENSE)).
 - For companies ≥ $1M revenue and/or prohibited use-cases (hosted/managed service, resale/rebrand), a commercial license is required.
 
-See: [LICENSE](LICENSE), [docs/licensing.md](docs/licensing.md), [docs/licensing/ADDITIONAL-GRANT.md](docs/licensing/ADDITIONAL-GRANT.md), and [TRADEMARKS.md](TRADEMARKS.md).
+See: [LICENSE](LICENSE), [Docs/licensing.md](Docs/licensing.md), [Docs/licensing/ADDITIONAL-GRANT.md](Docs/licensing/ADDITIONAL-GRANT.md), and [TRADEMARKS.md](TRADEMARKS.md).

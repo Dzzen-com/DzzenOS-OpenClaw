@@ -18,7 +18,7 @@
  *
  * Usage:
  *   node --experimental-strip-types skills/dzzenos/api/server.ts
- *   node --experimental-strip-types skills/dzzenos/api/server.ts --port 8787 --db ./data/dzzenos.db
+ *   node --experimental-strip-types skills/dzzenos/api/server.ts --port 8787 --db /absolute/path/dzzenos.db
  */
 
 import http from 'node:http';
@@ -34,6 +34,12 @@ type SseClient = {
 };
 
 import { migrate } from '../db/migrate.ts';
+import {
+  getDefaultWorkspaceDir,
+  getLegacyRepoDbPath,
+  getLegacyRepoWorkspaceDir,
+  resolveDbPath,
+} from '../db/paths.ts';
 import {
   defaultAuthFile,
   loadAuthConfig,
@@ -212,6 +218,22 @@ const REASONING_LEVELS = new Set<ReasoningLevel>(['auto', 'off', 'low', 'medium'
 
 function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function moveLegacyWorkspaceIfNeeded(workspaceDir: string, legacyWorkspaceDir: string) {
+  if (workspaceDir === legacyWorkspaceDir) return;
+  if (fs.existsSync(workspaceDir)) return;
+  if (!fs.existsSync(legacyWorkspaceDir)) return;
+
+  ensureDir(path.dirname(workspaceDir));
+  try {
+    fs.renameSync(legacyWorkspaceDir, workspaceDir);
+  } catch (err: any) {
+    if (err?.code !== 'EXDEV') throw err;
+    fs.cpSync(legacyWorkspaceDir, workspaceDir, { recursive: true });
+    fs.rmSync(legacyWorkspaceDir, { recursive: true, force: true });
+  }
+  console.log(`[dzzenos-api] moved legacy workspace dir from ${legacyWorkspaceDir} to ${workspaceDir}`);
 }
 
 function readTextFile(filePath: string): string {
@@ -612,9 +634,10 @@ function main() {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const repoRoot = path.resolve(__dirname, '../../..');
-  const workspaceDir = path.resolve(
-    process.env.DZZENOS_WORKSPACE_DIR ?? path.join(repoRoot, 'data/workspace')
-  );
+  const workspaceDir = path.resolve(process.env.DZZENOS_WORKSPACE_DIR ?? getDefaultWorkspaceDir());
+  if (!process.env.DZZENOS_WORKSPACE_DIR) {
+    moveLegacyWorkspaceIfNeeded(workspaceDir, getLegacyRepoWorkspaceDir(repoRoot));
+  }
 
   const docsDir = path.join(workspaceDir, 'docs');
   const memoryDir = path.join(workspaceDir, 'memory');
@@ -753,7 +776,8 @@ function main() {
   const migrationsDir = path.resolve(
     args.migrationsDir ?? path.join(repoRoot, 'skills/dzzenos/db/migrations')
   );
-  const dbPath = path.resolve(args.dbPath ?? path.join(repoRoot, 'data/dzzenos.db'));
+  const resolvedDb = resolveDbPath(args.dbPath);
+  const dbPath = resolvedDb.dbPath;
 
   const port = Number(args.port ?? process.env.PORT ?? 8787);
   const host = String(args.host ?? process.env.HOST ?? '127.0.0.1');
@@ -769,7 +793,11 @@ function main() {
     process.env.DZZENOS_ALLOWED_ORIGINS ?? process.env.DZZENOS_CORS_ORIGINS
   );
 
-  migrate({ dbPath, migrationsDir });
+  migrate({
+    dbPath,
+    migrationsDir,
+    legacyDbPath: resolvedDb.source === 'default' ? getLegacyRepoDbPath(repoRoot) : undefined,
+  });
 
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA foreign_keys = ON;');
@@ -3487,4 +3515,11 @@ const server = http.createServer(async (req, res) => {
   });
 }
 
-main();
+function isExecutedDirectly() {
+  if (!process.argv[1]) return false;
+  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+}
+
+if (isExecutedDirectly()) {
+  main();
+}
