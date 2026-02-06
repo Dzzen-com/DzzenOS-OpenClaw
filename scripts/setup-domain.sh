@@ -92,6 +92,8 @@ Environment=DZZENOS_AUTH_FILE=$AUTH_FILE
 Environment=DZZENOS_DATA_DIR=$DZZENOS_DATA_DIR
 Environment=AUTH_TTL_SECONDS=$AUTH_TTL_SECONDS
 Environment=AUTH_COOKIE_SAMESITE=$AUTH_COOKIE_SAMESITE
+Environment=DZZENOS_GATEWAY_URL=http://127.0.0.1:$GATEWAY_PORT
+Environment=DZZENOS_GATEWAY_TOKEN=$GATEWAY_TOKEN
 ExecStart=/usr/bin/node --experimental-strip-types $REPO_DIR/skills/dzzenos/api/server.ts --port $API_PORT --host $API_HOST
 Restart=on-failure
 RestartSec=2

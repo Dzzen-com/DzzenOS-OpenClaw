@@ -78,6 +78,10 @@ export function startRealtime(opts: {
         opts.qc.invalidateQueries({ queryKey: ['marketplace-skills'] });
       }
 
+      if (msg.type === 'models.changed') {
+        opts.qc.invalidateQueries({ queryKey: ['models-overview'] });
+      }
+
       if (msg.type === 'approvals.changed') {
         const taskId = msg.payload?.taskId as string | null | undefined;
         // Dashboard
