@@ -17,6 +17,7 @@ OpenClaw быстро растёт, потому что:
 - `01-Product (Native DzzenOS).md` — продуктовая концепция: доски, карточки, сессии агентов, доки
 - `02-Architecture (Local-first).md` — архитектура: хранилище, интерфейсы, исполнение, безопасность
 - `03-UX Spec (Boards + Cards + Docs).md` — как организовать интерфейс и основные экраны
+- `13-Engineering Guide (UI + Architecture).md` — единый инженерный гайд по UI и архитектуре
 - `04-Extensibility (Skills Marketplace).md` — расширяемость через skills и политики
 - `07-Marketplace (Curated Skills).md` — курируемый маркетплейс (Official/Verified/Community) поверх ClawHub
 - `08-Policies & Approvals (Skills + Actions).md` — политики tools/skills и approvals (workspace/board/task)

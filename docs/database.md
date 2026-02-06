@@ -32,10 +32,12 @@ Entities included:
 - `workspaces`
 - `boards`
 - `tasks`
-- `task_context_items` (task-level context pack items)
+- `task_sessions` (agent session per task)
+- `task_checklist_items`
+- `task_messages` (chat cache)
 - `agent_runs`
-  - includes `config_snapshot_json` (resolved immutable run config)
 - `run_steps`
 - `approvals` (`pending` / `approved` / `rejected`)
 - `artifacts` (metadata only)
-- `agents` (roster + profile config: model/tools/policy/skills/guardrails)
+- `agents`
+- `automations`

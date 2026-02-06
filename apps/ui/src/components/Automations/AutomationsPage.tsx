@@ -16,6 +16,8 @@ import 'reactflow/dist/style.css';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 import { Spinner } from '../ui/Spinner';
+import { Skeleton } from '../ui/Skeleton';
+import { PageHeader } from '../Layout/PageHeader';
 
 import type { Automation } from '../../api/types';
 import { createAutomation, getAutomation, listAutomations, runAutomation, updateAutomation } from '../../api/queries';
@@ -133,48 +135,49 @@ function AutomationsPageInner() {
   });
 
   const dirtyHint = selectedId ? 'Changes are local until you click Save.' : 'Save as new to persist in SQLite.';
+  const loadingList = listQ.isLoading && (listQ.data ?? []).length === 0;
+  const loadingGraph = selectedQ.isLoading && !selectedQ.data && !!selectedId;
 
   return (
     <div className="flex w-full flex-col gap-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight">Automations</h1>
-          <p className="mt-1 text-sm text-muted-foreground">React Flow skeleton (save/load via /automations).</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setSelectedId(null);
-              setName('');
-              setNodes(SAMPLE_NODES);
-              setEdges(SAMPLE_EDGES);
-            }}
-          >
-            New
-          </Button>
-          <Button onClick={async () => createM.mutateAsync()} disabled={createM.isPending}>
-            {createM.isPending ? 'Saving…' : 'Save as new'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => saveM.mutateAsync()}
-            disabled={!selectedId || saveM.isPending}
-            title={selectedId ? undefined : 'Select or create an automation first'}
-          >
-            {saveM.isPending ? 'Saving…' : 'Save'}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => runM.mutateAsync()}
-            disabled={!selectedId || runM.isPending}
-            title={selectedId ? undefined : 'Select or create an automation first'}
-          >
-            {runM.isPending ? 'Starting…' : 'Run now'}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Automations"
+        subtitle="React Flow skeleton (save/load via /automations)."
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setSelectedId(null);
+                setName('');
+                setNodes(SAMPLE_NODES);
+                setEdges(SAMPLE_EDGES);
+              }}
+            >
+              New
+            </Button>
+            <Button onClick={async () => createM.mutateAsync()} disabled={createM.isPending}>
+              {createM.isPending ? 'Saving…' : 'Save as new'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={async () => saveM.mutateAsync()}
+              disabled={!selectedId || saveM.isPending}
+              title={selectedId ? undefined : 'Select or create an automation first'}
+            >
+              {saveM.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={async () => runM.mutateAsync()}
+              disabled={!selectedId || runM.isPending}
+              title={selectedId ? undefined : 'Select or create an automation first'}
+            >
+              {runM.isPending ? 'Starting…' : 'Run now'}
+            </Button>
+          </>
+        }
+      />
 
       {(listQ.isError || selectedQ.isError || createM.isError || saveM.isError || runM.isError) && (
         <InlineAlert>
@@ -183,27 +186,43 @@ function AutomationsPageInner() {
       )}
 
       <div className="grid w-full gap-4 lg:grid-cols-[320px,1fr]">
-        <div className="rounded-xl border border-border/70 bg-card p-4 shadow-panel">
+        <div className="rounded-xl border border-border/70 bg-surface-1/70 p-4 shadow-panel backdrop-blur">
           <div className="flex items-center justify-between">
             <div className="text-sm font-semibold">Library</div>
             {listQ.isLoading ? <Spinner label="Loading…" /> : null}
           </div>
 
           <div className="mt-3">
-            <label className="text-xs font-medium text-muted-foreground">Name</label>
-            <input
-              className="mt-1 w-full rounded-md border border-border/70 bg-background px-3 py-2 text-sm"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Untitled automation"
-            />
-            <div className="mt-2 text-xs text-muted-foreground">{dirtyHint}</div>
+            {loadingList ? (
+              <div className="grid gap-2">
+                <Skeleton className="h-3 w-16" />
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-3 w-40" />
+              </div>
+            ) : (
+              <>
+                <label className="text-xs font-medium text-muted-foreground">Name</label>
+                <input
+                  className="mt-1 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Untitled automation"
+                />
+                <div className="mt-2 text-xs text-muted-foreground">{dirtyHint}</div>
+              </>
+            )}
           </div>
 
           <div className="mt-4">
             <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Saved automations</div>
             <div className="mt-2 flex flex-col gap-1">
-              {(listQ.data ?? []).length === 0 ? (
+              {loadingList ? (
+                <div className="grid gap-2">
+                  {Array.from({ length: 4 }).map((_, idx) => (
+                    <Skeleton key={idx} className="h-9 w-full" />
+                  ))}
+                </div>
+              ) : (listQ.data ?? []).length === 0 ? (
                 <div className="text-sm text-muted-foreground">No saved automations yet.</div>
               ) : (
                 (listQ.data ?? []).map((a) => (
@@ -214,8 +233,8 @@ function AutomationsPageInner() {
                     className={
                       'flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition ' +
                       (a.id === selectedId
-                        ? 'border-primary/40 bg-muted/40'
-                        : 'border-border/70 hover:bg-muted/30')
+                        ? 'border-primary/40 bg-surface-2/60'
+                        : 'border-border/70 hover:bg-surface-2/50')
                     }
                   >
                     <span className="truncate">{a.name}</span>
@@ -240,13 +259,19 @@ function AutomationsPageInner() {
           </div>
         </div>
 
-        <div className="min-h-[520px] overflow-hidden rounded-xl border border-border/70 bg-card shadow-panel">
+        <div className="min-h-[520px] overflow-hidden rounded-xl border border-border/70 bg-surface-1/70 shadow-panel backdrop-blur">
           <div className="h-[calc(100dvh-14rem)] min-h-[520px]">
-            <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} fitView>
-              <MiniMap />
-              <Controls />
-              <Background />
-            </ReactFlow>
+            {loadingGraph ? (
+              <div className="flex h-full items-center justify-center">
+                <Skeleton className="h-[320px] w-[80%]" />
+              </div>
+            ) : (
+              <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} fitView>
+                <MiniMap />
+                <Controls />
+                <Background />
+              </ReactFlow>
+            )}
           </div>
         </div>
       </div>
@@ -256,7 +281,7 @@ function AutomationsPageInner() {
 
 function PaletteItem({ label }: { label: string }) {
   return (
-    <div className="select-none rounded-md border border-border/70 bg-background px-3 py-2 text-sm text-foreground/90">
+    <div className="select-none rounded-md border border-border/70 bg-surface-2/50 px-3 py-2 text-sm text-foreground/90">
       {label}
     </div>
   );

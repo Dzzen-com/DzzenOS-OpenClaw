@@ -1,117 +1,62 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createResponse } from '../../api/openclaw';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { sendTaskChat, getTaskChat } from '../../api/queries';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
+import type { TaskMessage } from '../../api/types';
 
-type UiMsg = { id: string; role: 'user' | 'assistant'; content: string; ts: number };
-
-function lsKey(taskId: string, agentOpenclawId?: string | null) {
-  // Deterministic per task+agent profile.
-  return `dzzenos.taskchat.v2.${taskId}.${agentOpenclawId ?? 'unbound'}`;
-}
-
-function nowId() {
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-export function TaskChat({
-  taskId,
-  taskTitle,
-  agentOpenclawId,
-  model,
-  disabled,
-  disabledReason,
-}: {
-  taskId: string;
-  taskTitle: string;
-  agentOpenclawId?: string | null;
-  model?: string | null;
-  disabled?: boolean;
-  disabledReason?: string | null;
-}) {
-  const key = useMemo(() => lsKey(taskId, agentOpenclawId), [taskId, agentOpenclawId]);
+export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: string }) {
+  const qc = useQueryClient();
   const [input, setInput] = useState('');
-  const [msgs, setMsgs] = useState<UiMsg[]>([]);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      if (!raw) {
-        setMsgs([]);
-        return;
-      }
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) setMsgs(parsed.slice(-200));
-      else setMsgs([]);
-    } catch {
-      setMsgs([]);
-    }
-  }, [key]);
+  const chatQ = useQuery({
+    queryKey: ['task-chat', taskId],
+    queryFn: () => getTaskChat(taskId),
+    enabled: !!taskId,
+  });
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, JSON.stringify(msgs.slice(-200)));
-    } catch {
-      // ignore
-    }
-  }, [key, msgs]);
+  const sendM = useMutation({
+    mutationFn: async (text: string) => sendTaskChat(taskId, { text }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['task-chat', taskId] });
+    },
+    onError: (e: any) => setErr(String(e?.message ?? e)),
+  });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' });
-  }, [msgs.length, busy]);
+  }, [chatQ.data?.length, sendM.isPending]);
+
+  const messages = (chatQ.data ?? []) as TaskMessage[];
 
   async function send() {
     const text = input.trim();
-    if (!text || busy || disabled) return;
-
+    if (!text || sendM.isPending) return;
     setErr(null);
-    setBusy(true);
-
-    const userMsg: UiMsg = { id: nowId(), role: 'user', content: text, ts: Date.now() };
     setInput('');
-    setMsgs((m) => [...m, userMsg]);
-
-    try {
-      const reply = await createResponse({
-        sessionKey: key,
-        text,
-        agentId: agentOpenclawId ?? undefined,
-        model: model ?? undefined,
-      });
-      const a: UiMsg = { id: nowId(), role: 'assistant', content: reply.trim(), ts: Date.now() };
-      setMsgs((m) => [...m, a]);
-    } catch (e: any) {
-      setErr(
-        String(e?.message ?? e) ||
-          'Failed to reach OpenClaw OpenResponses endpoint. See docs: enable gateway.http.endpoints.responses.enabled and use /v1/responses.',
-      );
-    } finally {
-      setBusy(false);
-    }
+    await sendM.mutateAsync(text);
   }
 
   return (
     <div className="grid gap-3">
-      <div className="rounded-xl border border-border/70 bg-muted/20 p-3">
+      <div className="rounded-xl border border-border/70 bg-surface-2/40 p-3">
         <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Chat</div>
-        <div className="mt-1 text-xs text-muted-foreground">
-          {taskTitle} • model: <span className="text-foreground">{model ?? 'openclaw:main'}</span>
-        </div>
-        <div className="mt-2 max-h-[45vh] overflow-auto rounded-lg border border-border/70 bg-background/40 p-3">
-          {msgs.length ? (
+        <div className="mt-2 max-h-[45vh] overflow-auto rounded-lg border border-border/70 bg-surface-1/60 p-3">
+          {chatQ.isLoading ? (
+            <div className="text-sm text-muted-foreground">Loading…</div>
+          ) : messages.length ? (
             <div className="grid gap-3">
-              {msgs.map((m) => (
+              {messages.map((m) => (
                 <div key={m.id} className="grid gap-1">
                   <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    {m.role === 'user' ? 'You' : 'Assistant'}
+                    {m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Assistant' : 'System'}
                   </div>
                   <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{m.content}</div>
                 </div>
               ))}
-              {busy ? <div className="text-sm text-muted-foreground">Thinking…</div> : null}
+              {sendM.isPending ? <div className="text-sm text-muted-foreground">Thinking…</div> : null}
               <div ref={bottomRef} />
             </div>
           ) : (
@@ -121,16 +66,14 @@ export function TaskChat({
       </div>
 
       {err ? <InlineAlert>{err}</InlineAlert> : null}
-      {disabled ? <InlineAlert>{disabledReason ?? 'Attach an enabled orchestrator agent to start pre-run chat.'}</InlineAlert> : null}
 
       <div className="flex items-end gap-2">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Write a message…"
+          placeholder={`Ask the agent about "${taskTitle}"…`}
           rows={3}
-          disabled={disabled || busy}
-          className="min-h-[72px] w-full resize-none rounded-md border border-input bg-background/40 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          className="min-h-[72px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
@@ -138,7 +81,7 @@ export function TaskChat({
             }
           }}
         />
-        <Button disabled={busy || !input.trim() || !!disabled} onClick={send}>
+        <Button disabled={sendM.isPending || !input.trim()} onClick={send}>
           Send
         </Button>
       </div>

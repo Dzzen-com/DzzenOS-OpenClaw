@@ -5,7 +5,28 @@ const OPENRESPONSES_URL =
 
 function getTokenFromUrl() {
   try {
-    return new URLSearchParams(window.location.search).get('token') ?? '';
+    const url = new URL(window.location.href);
+    const existing = sessionStorage.getItem('openclaw_token') ?? '';
+    const token = url.searchParams.get('token') ?? '';
+
+    if (token) {
+      try {
+        sessionStorage.setItem('openclaw_token', token);
+      } catch {
+        // ignore (storage may be blocked)
+      }
+
+      url.searchParams.delete('token');
+      try {
+        window.history.replaceState({}, '', url.toString());
+      } catch {
+        // ignore
+      }
+
+      return token;
+    }
+
+    return existing;
   } catch {
     return '';
   }

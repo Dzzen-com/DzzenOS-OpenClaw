@@ -1,0 +1,9 @@
+# pattern,tag,weight
+# Repo-specific sensitive-path rules for the security ownership map skill.
+# Use with:
+#   python3 /Users/admin/.codex/skills/security-ownership-map/scripts/run_ownership_map.py --repo . --out ownership-map-out --sensitive-config security/ownership-map-sensitive.csv
+skills/dzzenos/api/auth.ts,auth,1.0
+skills/dzzenos/api/server.ts,auth,1.0
+scripts/init-auth.mjs,auth,0.8
+skills/dzzenos/db/migrations/0004_tasks_v2.sql,session,0.5
+skills/dzzenos/db/migrations/0005_task_sessions_reasoning_usage.sql,session,0.8

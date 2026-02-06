@@ -8,7 +8,9 @@ export type Board = {
   updated_at: string;
 };
 
-export type TaskStatus = 'todo' | 'doing' | 'done' | 'blocked';
+export type TaskStatus = 'ideas' | 'todo' | 'doing' | 'review' | 'release' | 'done' | 'archived';
+export type ChecklistState = 'todo' | 'doing' | 'done';
+export type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
 
 export type Task = {
   id: string;
@@ -21,6 +23,122 @@ export type Task = {
   agent_id: string | null;
   created_at: string;
   updated_at: string;
+  agent_id?: string | null;
+  session_status?: 'idle' | 'running' | 'failed' | null;
+  last_run_id?: string | null;
+  agent_display_name?: string | null;
+  run_status?: AgentRunStatus | null;
+  run_started_at?: string | null;
+  run_updated_at?: string | null;
+  run_finished_at?: string | null;
+  run_step_kind?: string | null;
+};
+
+export type TaskSession = {
+  task_id: string;
+  agent_id: string | null;
+  session_key: string;
+  status: 'idle' | 'running' | 'failed';
+  last_run_id: string | null;
+  reasoning_level?: ReasoningLevel | null;
+  created_at: string;
+  updated_at: string;
+  agent_display_name?: string | null;
+  agent_openclaw_id?: string | null;
+};
+
+export type TaskChecklistItem = {
+  id: string;
+  task_id: string;
+  title: string;
+  state: ChecklistState;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TaskMessage = {
+  id: string;
+  task_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  created_at: string;
+};
+
+export type DocContent = {
+  content: string;
+};
+
+export type Agent = {
+  id: string;
+  display_name: string;
+  emoji: string | null;
+  openclaw_agent_id: string;
+  enabled: boolean;
+  role: string | null;
+  description: string | null;
+  category: string;
+  tags: string[];
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  preset_key: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  assigned_task_count: number;
+  run_count_7d: number;
+  last_used_at: string | null;
+};
+
+export type PromptOverrides = Partial<Record<'system' | 'plan' | 'execute' | 'chat' | 'report', string>>;
+
+export type MarketplaceAgent = {
+  preset_key: string;
+  display_name: string;
+  emoji: string;
+  description: string;
+  category: string;
+  tags: string[];
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  requires_subscription: boolean;
+  tier: 'official' | 'verified' | 'community';
+  sort_order: number;
+  installed: boolean;
+  installed_agent_id: string | null;
+};
+
+export type SkillCapabilities = {
+  network?: boolean;
+  filesystem?: boolean;
+  external_write?: boolean;
+  secrets?: string[];
+};
+
+export type InstalledSkill = {
+  slug: string;
+  display_name: string | null;
+  description: string | null;
+  tier: 'official' | 'verified' | 'community';
+  enabled: boolean;
+  source: 'manual' | 'marketplace';
+  preset_key: string | null;
+  sort_order: number;
+  capabilities: SkillCapabilities;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketplaceSkill = {
+  preset_key: string;
+  slug: string;
+  display_name: string;
+  description: string;
+  tier: 'official' | 'verified' | 'community';
+  capabilities: SkillCapabilities;
+  requires_subscription: boolean;
+  sort_order: number;
+  installed: boolean;
 };
 
 export type RunStepStatus = 'running' | 'succeeded' | 'failed' | 'skipped' | 'cancelled';
@@ -53,6 +171,9 @@ export type AgentRun = {
   config_snapshot_json: string | null;
   created_at: string;
   updated_at: string;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
   is_stuck: boolean;
   steps: RunStep[];
 };

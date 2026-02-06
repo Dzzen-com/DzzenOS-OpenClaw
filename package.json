@@ -1,6 +1,7 @@
 {
   "name": "dzzenos-openclaw",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@9.15.0",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -8,8 +9,11 @@
     "dev:api": "pnpm dzzenos:api",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
+    "test:security": "pnpm -C packages/security-tests test",
     "dzzenos:migrate": "node --experimental-strip-types skills/dzzenos/db/migrate.ts",
     "dzzenos:api": "node --experimental-strip-types skills/dzzenos/api/server.ts",
+    "dzzenos:openresponses:mock": "node scripts/mock-openresponses.mjs",
+    "dzzenos:smoke:local": "node scripts/smoke-local-openclaw.mjs",
     "dzzenos:ui:build": "corepack pnpm -C apps/ui build",
     "dzzenos:canvas:publish": "node scripts/publish-canvas.mjs"
   },

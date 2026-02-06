@@ -153,3 +153,67 @@ Squad запускается одной командой:
 2) Agent Squad Node для automations
 3) UI выбора pack на board и task
 4) Preset policy: публикации только через approvals
+
+---
+
+## 9) v1 (сейчас): Agents page как встроенный marketplace
+
+До полноценного “Agent Packs Marketplace” мы делаем **простую встроенную витрину** прямо на странице Agents:
+
+### 9.1 Термины (важно)
+- В UI DzzenOS сейчас “Agent” = **agent profile** (профиль/шаблон), который позже используется как “основа” для запуска **сессии OpenClaw** на задаче.
+- `openclaw_agent_id` в этом профиле — это ссылка на базового OpenClaw агента (по умолчанию `main`).
+
+### 9.2 Паттерн Installed / Available
+- **Installed** — записи в SQLite таблице `agents` (их можно редактировать, дублировать, удалять/disable).
+- **Available** — каталог пресетов в коде (обновляется при релизах), показывается даже если DB пустая.
+- Действие **Install** создаёт запись в `agents` из пресета.
+- Pro/Subscription элементы — **видимы**, но `Install` недоступен (пока нет подписок).
+
+### 9.3 Принцип “не ломаем OpenClaw”
+Мы не меняем OpenClaw execution model.
+DzzenOS лишь хранит **overlays** (skills/prompts/metadata) для будущего применения при запуске сессий:
+- `skills_json` — список skill ids (ожидаемые/целевые skills)
+- `prompt_overrides_json` — надстройки по режимам (`system/plan/execute/chat/report`)
+
+### 9.4 Почему fresh DB = 0 installed
+Новые пользователи должны видеть “Available” и осознанно нажимать Install.
+Это также позволяет релизам добавлять новые пресеты без конфликтов.
+
+### 9.5 UI/UX (как в Codex, но проще)
+Страница Agents построена по паттерну “Installed / Available” и оптимизирована под быстрые действия:
+
+- **Header**: поиск + фильтр категории + `New agent`
+  - Search is **keyboard-first**:
+    - `/` фокусит search (если фокус не в поле ввода)
+    - `Esc` очищает search, затем сбрасывает category filter
+  - Поиск **multi-term** (токены): все слова должны находиться в данных агента.
+  - `Clear` появляется только если активны фильтры.
+- **Installed**: то, что реально установлено в SQLite (`agents`)
+  - Карточки показывают: `OpenClaw agent id`, `Skills: N`, `Prompts: N`, usage (tasks / runs 7d / last used)
+  - Disabled агенты сгруппированы отдельно (скрыто по умолчанию)
+  - Настройки через правый drawer: `Overview / Prompts / Skills / Usage`
+- **Available presets**: витрина пресетов из кода (обновляется при релизах)
+  - `Install` создаёт запись в `agents` (после этого можно редактировать)
+  - Pro/Subscription элементы **видимы**, но `Install` недоступен (пока нет подписок)
+
+### 9.6 Контракты данных (кратко)
+- Preset catalog API: `GET /marketplace/agents`
+- Install API: `POST /marketplace/agents/:preset_key/install`
+- Installed agents API:
+  - `GET /agents` (включая computed usage)
+  - `POST /agents`, `PATCH /agents/:id`
+  - `POST /agents/:id/reset` (только для preset)
+  - `POST /agents/:id/duplicate` (сохраняет тот же `openclaw_agent_id`)
+  - `DELETE /agents/:id` (только custom; presets нельзя удалить)
+
+Важно: `openclaw_agent_id` **не уникален** — несколько DzzenOS profiles могут ссылаться на один OpenClaw agent (например `main`).
+
+### 9.7 Skills page + связь с Agent profiles (v1)
+В v1 мы делаем отдельную страницу **Skills** по тому же паттерну (Installed / Available).
+
+- `Agent.skills_json` хранит **список slug** установленных skills (как overlay).
+- В `AgentDrawer` skills выбираются **из Installed skills** (picker), чтобы не вводить slug руками.
+- Если skill удалён (uninstall), он не удаляется автоматически из `Agent.skills_json` — UI показывает такой skill как **Missing** (данные не ломаем).
+
+Future: в Agent Packs / Squads будет логично задавать skills **по ролям** (sub-agents) и/или отдельный allowlist на orchestration graph.

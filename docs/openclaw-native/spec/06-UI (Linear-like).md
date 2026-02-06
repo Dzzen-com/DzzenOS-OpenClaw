@@ -20,12 +20,22 @@
 
 ## 2) Основные экраны
 - Workspace switcher
+- Kanban landing: grid всех досок + создание новой
 - Board (kanban + list view)
 - Task drawer (brief + chat + runs/artifacts)
 - Docs (workspace/board)
 - Automations builder (graph editor)
 - Agent library (profiles/packs)
 - Settings (policy/skills)
+
+Глобальный слой:
+- Левое меню (sidebar‑first) как основной навигатор
+- Без глобального top bar / footer (контекст задаётся локальными header‑блоками страниц)
+- Мобильный гибрид: нижняя панель + выезжающий sidebar
+- Единая типографика и цветовые токены на всех экранах
+- Login page в том же стиле, что и Kanban (темный градиент, карточка входа)
+- **Settings dropdown** внизу сайдбара (DzzenOS Settings / OpenClaw Settings)
+- **PageHeader** для контекстных заголовков и действий на страницах
 
 ---
 
@@ -34,6 +44,15 @@
 - Quick add task
 - Status pill
 - Domain/priority chips
+- Agent status strip (running/idle + stage + mini bar)
+- Reasoning selector (auto/off/low/medium/high)
+- Stop run control (soft cancel)
+- Minimal activity ticker (latest steps)
+- Token usage hint (in/out or total)
+- Stage badge in status strip (glowing dot)
+- Agent heartbeat on card while running
+- Stage icons in activity ticker
+- Agent selector in task drawer with CTA to Agents page if none enabled
 - Activity / run timeline
 - Artifact preview (markdown/diff)
 - Approval banner (approve/reject)

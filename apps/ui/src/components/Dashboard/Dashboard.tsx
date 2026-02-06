@@ -1,12 +1,16 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { approveApproval, listApprovals, listRuns, rejectApproval } from '../../api/queries';
-import type { AgentRunListItem, Approval } from '../../api/types';
+import { approveApproval, listApprovals, listBoards, listRuns, listTasks, rejectApproval } from '../../api/queries';
+import type { AgentRunListItem, Approval, Task, TaskStatus } from '../../api/types';
+import { statusLabel } from '../Tasks/status';
 
 import { InlineAlert } from '../ui/InlineAlert';
 import { Spinner } from '../ui/Spinner';
 import { Button } from '../ui/Button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/Card';
+import { Skeleton } from '../ui/Skeleton';
+import { PageHeader } from '../Layout/PageHeader';
 
 function withinLastHours(iso: string, hours: number) {
   const t = Date.parse(iso);
@@ -19,6 +23,15 @@ export function Dashboard({
 }: {
   onSelectTask: (input: { boardId: string; taskId: string }) => void;
 }) {
+  const [boardId, setBoardId] = useState<string | null>(null);
+
+  const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
+  useEffect(() => {
+    if (boardId) return;
+    const first = boardsQ.data?.[0];
+    if (first) setBoardId(first.id);
+  }, [boardId, boardsQ.data]);
+
   const stuckQ = useQuery({
     queryKey: ['runs', 'stuck'],
     queryFn: () => listRuns({ status: 'running', stuckMinutes: 10 }),
@@ -32,6 +45,15 @@ export function Dashboard({
   const approvalsQ = useQuery({
     queryKey: ['approvals', 'pending'],
     queryFn: () => listApprovals({ status: 'pending' }),
+  });
+
+  const boardTasksQ = useQuery({
+    queryKey: ['tasks', boardId, 'dashboard'],
+    queryFn: () => {
+      if (!boardId) return Promise.resolve([] as Task[]);
+      return listTasks(boardId);
+    },
+    enabled: !!boardId,
   });
 
   const qc = useQueryClient();
@@ -55,11 +77,95 @@ export function Dashboard({
     return all.filter((r) => withinLastHours(r.created_at, 24));
   }, [failedQ.data]);
 
+  const boardTasks = boardTasksQ.data ?? [];
+  const statusOrder: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
+  const statusCounts = useMemo(() => {
+    const out: Record<TaskStatus, number> = {
+      ideas: 0,
+      todo: 0,
+      doing: 0,
+      review: 0,
+      release: 0,
+      done: 0,
+      archived: 0,
+    };
+    for (const t of boardTasks) out[t.status] = (out[t.status] ?? 0) + 1;
+    return out;
+  }, [boardTasks]);
+
+  const recentTasks = useMemo(() => {
+    return [...boardTasks]
+      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+      .slice(0, 6);
+  }, [boardTasks]);
+
   return (
     <div className="mx-auto w-full max-w-6xl">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Stuck runs, recent failures, and pending approvals.</p>
+      <PageHeader
+        title="Dashboard"
+        subtitle="Stuck runs, recent failures, and pending approvals."
+        actions={
+          <div className="min-w-[220px]">
+            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Board</label>
+            <select
+              className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
+              value={boardId ?? ''}
+              onChange={(e) => setBoardId(e.target.value)}
+              disabled={!boardsQ.data?.length}
+            >
+              {(boardsQ.data ?? []).length === 0 ? (
+                <option value="">No boards</option>
+              ) : (
+                (boardsQ.data ?? []).map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))
+              )}
+            </select>
+            {boardsQ.isError ? (
+              <div className="mt-2 text-xs text-danger">Failed to load boards.</div>
+            ) : null}
+          </div>
+        }
+      />
+
+      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Panel title="Board status" subtitle={boardId ? 'Counts by status' : 'Select a board'}>
+          {boardTasksQ.isLoading ? (
+            <div className="p-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {Array.from({ length: 8 }).map((_, idx) => (
+                  <Skeleton key={idx} className="h-14 w-full" />
+                ))}
+              </div>
+            </div>
+          ) : boardTasksQ.isError ? (
+            <div className="p-3">
+              <InlineAlert>{String(boardTasksQ.error)}</InlineAlert>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4">
+              {statusOrder.map((s) => (
+                <StatPill key={s} label={statusLabel(s)} value={statusCounts[s]} />
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Recent tasks" subtitle={boardId ? 'Latest updates' : 'Select a board'}>
+          {boardTasksQ.isLoading ? (
+            <div className="p-3">
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 4 }).map((_, idx) => (
+                  <Skeleton key={idx} className="h-12 w-full" />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <TaskList tasks={recentTasks} onClick={(t) => onSelectTask({ boardId: t.board_id, taskId: t.id })} />
+          )}
+        </Panel>
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -108,13 +214,13 @@ export function Dashboard({
 
 function Panel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-border/70 bg-card shadow-panel">
-      <div className="border-b border-border/70 px-4 py-3">
-        <div className="text-sm font-medium text-foreground">{title}</div>
-        <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>
-      </div>
-      <div className="p-2">{children}</div>
-    </section>
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription className="mt-1">{subtitle}</CardDescription>
+      </CardHeader>
+      <CardContent className="p-2">{children}</CardContent>
+    </Card>
   );
 }
 
@@ -135,13 +241,38 @@ function RowButton({
       disabled={disabled}
       onClick={onClick}
       className={
-        'w-full rounded-lg border border-border/70 px-3 py-2 text-left transition ' +
-        (disabled ? 'opacity-50' : 'hover:bg-muted/30')
+        'w-full rounded-lg border border-border/70 bg-surface-2/40 px-3 py-2 text-left transition ' +
+        (disabled ? 'opacity-50' : 'hover:bg-surface-2/70')
       }
     >
       <div className="truncate text-sm text-foreground">{title}</div>
       <div className="mt-0.5 truncate text-xs text-muted-foreground">{subtitle}</div>
     </button>
+  );
+}
+
+function StatPill({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-surface-2/40 px-3 py-2">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-base font-semibold text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function TaskList({ tasks, onClick }: { tasks: Task[]; onClick: (t: Task) => void }) {
+  if (!tasks.length) return <div className="p-3 text-sm text-muted-foreground">No recent tasks.</div>;
+  return (
+    <div className="flex flex-col gap-2 p-2">
+      {tasks.map((t) => (
+        <RowButton
+          key={t.id}
+          title={t.title}
+          subtitle={`${statusLabel(t.status)} • ${new Date(t.updated_at).toLocaleString()}`}
+          onClick={() => onClick(t)}
+        />
+      ))}
+    </div>
   );
 }
 

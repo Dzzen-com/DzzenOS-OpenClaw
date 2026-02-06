@@ -43,7 +43,7 @@ export function TabsList({ className, ...props }: React.HTMLAttributes<HTMLDivEl
   return (
     <div
       className={cn(
-        'inline-flex h-9 items-center rounded-md border border-border/70 bg-muted/30 p-1',
+        'inline-flex h-9 items-center rounded-md border border-border/60 bg-surface-2/60 p-1 shadow-sm',
         className,
       )}
       {...props}
@@ -69,7 +69,9 @@ export function TabsTrigger({
       className={cn(
         'inline-flex h-7 items-center justify-center rounded px-2.5 text-xs font-medium transition',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
-        active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+        active
+          ? 'bg-surface-1 text-foreground shadow-sm'
+          : 'text-muted-foreground hover:bg-surface-2/70 hover:text-foreground',
         className,
       )}
       {...props}
