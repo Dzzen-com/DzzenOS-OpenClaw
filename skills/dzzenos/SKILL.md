@@ -18,7 +18,7 @@ This skill will provide:
 - **Automations** (n8n-like) using OpenClaw cron + webhooks
 - **Curated Marketplace** (skills + agent packs)
 
-> Status: scaffold (WIP). See repo `/docs/openclaw-native/`.
+> Status: scaffold (WIP). See repo `/Docs/openclaw-native/`.
 
 ## Local HTTP API (SQLite)
 

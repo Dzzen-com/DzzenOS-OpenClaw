@@ -39,4 +39,4 @@ Do NOT print secrets unless already present in URL.
 
 - Installer is release-first (latest GitHub release by default).
 - Domain setup is available in `server` mode.
-- For manual domain setup details see `docs/DOMAIN-ACCESS.md`.
+- For manual domain setup details see `Docs/DOMAIN-ACCESS.md`.

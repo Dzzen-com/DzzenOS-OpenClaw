@@ -21,7 +21,7 @@ jobs:
               - 'skills/dzzenos/db/migrations/**'
               - 'scripts/init-auth.mjs'
               - 'packages/security-tests/**'
-              - 'docs/auth-session-guardrails.md'
+              - 'Docs/auth-session-guardrails.md'
 
   build:
     runs-on: ubuntu-latest

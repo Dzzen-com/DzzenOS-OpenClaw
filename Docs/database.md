@@ -2,7 +2,10 @@
 
 DzzenOS is **local-first**. The MVP stores its core entities in a single **SQLite** file.
 
-See also: `docs/DATA-POLICY.md`.
+By default, this DB is **not** stored inside OpenClaw runtime/state folders.
+It is stored in DzzenOS app data folders (see paths below).
+
+See also: `Docs/DATA-POLICY.md`.
 
 ## Default DB location
 
