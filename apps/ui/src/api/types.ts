@@ -123,6 +123,54 @@ export type SkillCapabilities = {
   secrets?: string[];
 };
 
+export type OpenClawProvider = {
+  id: string;
+  kind: string;
+  enabled: boolean;
+  auth_mode: 'api_key' | 'oauth' | 'none';
+  auth_state: 'connected' | 'pending' | 'error' | 'not_configured';
+  last_error: string | null;
+};
+
+export type OpenClawModel = {
+  id: string;
+  provider_id: string;
+  display_name: string;
+  availability: 'ready' | 'degraded' | 'unavailable' | 'unknown';
+};
+
+export type ModelsOverview = {
+  providers: OpenClawProvider[];
+  models: OpenClawModel[];
+  updated_at: string;
+};
+
+export type OpenClawProviderInput = {
+  id: string;
+  kind: string;
+  enabled?: boolean;
+  auth_mode?: 'api_key' | 'oauth' | 'none';
+  api_base_url?: string;
+  api_key?: string;
+  oauth?: Record<string, unknown>;
+  options?: Record<string, unknown>;
+};
+
+export type OpenClawOAuthStartResult = {
+  provider_id: string;
+  attempt_id: string | null;
+  auth_url: string | null;
+  status: string | null;
+  expires_at: string | null;
+};
+
+export type OpenClawOAuthStatusResult = {
+  provider_id: string;
+  attempt_id: string | null;
+  status: 'connected' | 'pending' | 'error' | 'timeout' | 'not_configured';
+  message: string | null;
+};
+
 export type InstalledSkill = {
   slug: string;
   display_name: string | null;

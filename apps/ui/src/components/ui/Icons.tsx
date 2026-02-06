@@ -137,3 +137,13 @@ export function IconSpark({ className, size, ...props }: IconProps) {
     </svg>
   );
 }
+
+export function IconModel({ className, size, ...props }: IconProps) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className={iconClassName(className)} width={size} height={size} {...props}>
+      <ellipse cx="10" cy="5" rx="5.5" ry="2.5" />
+      <path d="M4.5 5v5c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5V5" />
+      <path d="M4.5 10v5c0 1.4 2.5 2.5 5.5 2.5s5.5-1.1 5.5-2.5v-5" />
+    </svg>
+  );
+}
