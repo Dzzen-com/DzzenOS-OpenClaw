@@ -45,6 +45,8 @@ type UiCopy = {
   noResults: Localized<string>;
   selectSection: Localized<string>;
   relatedDocs: Localized<string>;
+  copyPage: Localized<string>;
+  copyCode: Localized<string>;
   copy: Localized<string>;
   cursor: Localized<string>;
   codex: Localized<string>;
@@ -55,6 +57,7 @@ type UiCopy = {
   commandTip: Localized<string>;
   language: Localized<string>;
   translationNote: Localized<string>;
+  pageActionHint: Localized<string>;
 };
 
 type AssistantTarget = 'cursor' | 'codex' | 'claude';
@@ -98,6 +101,8 @@ const UI_COPY: UiCopy = {
     ru: 'Выберите раздел в левой навигации.',
   },
   relatedDocs: { en: 'Related Docs', ru: 'Связанные документы' },
+  copyPage: { en: 'Copy Page', ru: 'Копировать страницу' },
+  copyCode: { en: 'Copy code', ru: 'Копировать код' },
   copy: { en: 'Copy', ru: 'Копировать' },
   cursor: { en: 'Cursor', ru: 'Cursor' },
   codex: { en: 'Codex', ru: 'Codex' },
@@ -113,6 +118,10 @@ const UI_COPY: UiCopy = {
   translationNote: {
     en: 'English is primary. Some translated wording may lag behind new releases.',
     ru: 'Английская версия основная. Отдельные формулировки перевода могут отставать от новых релизов.',
+  },
+  pageActionHint: {
+    en: 'Page actions apply to the current document section.',
+    ru: 'Действия страницы применяются к текущему разделу документа.',
   },
 };
 
@@ -571,6 +580,51 @@ function sectionSearchText(section: DocsSection, locale: Locale): string {
     .toLowerCase();
 }
 
+function sectionMarkdown(section: DocsSection, locale: Locale): string {
+  const lines: string[] = [];
+  lines.push(`# ${l(section.title, locale)}`);
+  lines.push('');
+  lines.push(l(section.summary, locale));
+  lines.push('');
+  for (const p of l(section.intro, locale)) {
+    lines.push(p);
+    lines.push('');
+  }
+  lines.push('## Highlights');
+  lines.push('');
+  for (const item of l(section.highlights, locale)) {
+    lines.push(`- ${item}`);
+  }
+  lines.push('');
+
+  if (section.commands?.length) {
+    lines.push('## Commands');
+    lines.push('');
+    for (const command of section.commands) {
+      lines.push(`### ${l(command.title, locale)}`);
+      lines.push('');
+      lines.push(l(command.description, locale));
+      lines.push('');
+      lines.push(`\`\`\`${command.language}`);
+      lines.push(command.code);
+      lines.push('```');
+      lines.push('');
+    }
+  }
+
+  if (section.links?.length) {
+    lines.push('## Related Docs');
+    lines.push('');
+    for (const link of section.links) {
+      const note = link.note ? ` — ${l(link.note, locale)}` : '';
+      lines.push(`- ${l(link.label, locale)}: ${link.href}${note}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n').trim();
+}
+
 export function DocsPage() {
   const [locale, setLocale] = useState<Locale>('en');
   const [query, setQuery] = useState('');
@@ -606,7 +660,9 @@ export function DocsPage() {
     return Array.from(groups.entries());
   }, [filteredSections, locale]);
 
-  const setFeedback = (id: string, value: string) => {
+  const [pageFeedback, setPageFeedback] = useState('');
+
+  const setCodeFeedback = (id: string, value: string) => {
     setFeedbackByBlock((prev) => ({ ...prev, [id]: value }));
     window.setTimeout(() => {
       setFeedbackByBlock((prev) => {
@@ -615,21 +671,33 @@ export function DocsPage() {
         delete next[id];
         return next;
       });
-    }, 2200);
+    }, 1800);
   };
 
-  const onCopyBlock = async (command: DocsCommand) => {
+  const setPageActionFeedback = (value: string) => {
+    setPageFeedback(value);
+    window.setTimeout(() => setPageFeedback(''), 1800);
+  };
+
+  const onCopyCode = async (command: DocsCommand) => {
     const ok = await copyText(command.code);
-    setFeedback(command.id, ok ? l(UI_COPY.copied, locale) : l(UI_COPY.copyFailed, locale));
+    setCodeFeedback(command.id, ok ? l(UI_COPY.copied, locale) : l(UI_COPY.copyFailed, locale));
   };
 
-  const onOpenInAssistant = async (command: DocsCommand, target: AssistantTarget) => {
-    const payload = command.assistantPrompt?.trim() ? command.assistantPrompt.trim() : command.code;
-    await copyText(payload);
+  const onCopyPage = async () => {
+    if (!activeSection) return;
+    const payload = sectionMarkdown(activeSection, locale);
+    const ok = await copyText(payload);
+    setPageActionFeedback(ok ? l(UI_COPY.copied, locale) : l(UI_COPY.copyFailed, locale));
+  };
 
+  const onOpenPageInAssistant = async (target: AssistantTarget) => {
+    if (!activeSection) return;
+    const payload = sectionMarkdown(activeSection, locale);
+    await copyText(payload);
     const deepLink = AI_TARGETS[target].toUrl(payload);
     window.open(deepLink, '_blank', 'noopener,noreferrer');
-    setFeedback(command.id, `${l(UI_COPY.triedOpen, locale)} ${AI_TARGETS[target].label}`);
+    setPageActionFeedback(`${l(UI_COPY.triedOpen, locale)} ${AI_TARGETS[target].label}`);
   };
 
   return (
@@ -718,8 +786,25 @@ export function DocsPage() {
             <article>
               <header className="border-b border-slate-800/80 pb-4">
                 <div className="text-xs uppercase tracking-wider text-slate-500">{l(activeSection.group, locale)}</div>
-                <h2 className="mt-1 text-3xl font-semibold tracking-tight text-slate-50 font-display">{l(activeSection.title, locale)}</h2>
+                <div className="mt-1 flex flex-wrap items-start justify-between gap-3">
+                  <h2 className="text-3xl font-semibold tracking-tight text-slate-50 font-display">{l(activeSection.title, locale)}</h2>
+                  <div className="flex flex-wrap gap-1">
+                    <Button size="sm" variant="secondary" onClick={onCopyPage}>
+                      {l(UI_COPY.copyPage, locale)}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => onOpenPageInAssistant('cursor')}>
+                      {l(UI_COPY.cursor, locale)}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => onOpenPageInAssistant('codex')}>
+                      {l(UI_COPY.codex, locale)}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => onOpenPageInAssistant('claude')}>
+                      {l(UI_COPY.claude, locale)}
+                    </Button>
+                  </div>
+                </div>
                 <p className="mt-2 text-sm text-slate-300">{l(activeSection.summary, locale)}</p>
+                <p className="mt-1 text-[11px] text-slate-500">{pageFeedback || l(UI_COPY.pageActionHint, locale)}</p>
               </header>
 
               <div className="mt-5 space-y-3">
@@ -748,26 +833,24 @@ export function DocsPage() {
                           <h3 className="text-base font-medium text-slate-100">{l(command.title, locale)}</h3>
                           <p className="mt-1 text-sm text-slate-400">{l(command.description, locale)}</p>
                         </div>
-                        <div className="flex flex-wrap gap-1">
-                          <Button size="sm" variant="secondary" onClick={() => onCopyBlock(command)}>
-                            {l(UI_COPY.copy, locale)}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => onOpenInAssistant(command, 'cursor')}>
-                            {l(UI_COPY.cursor, locale)}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => onOpenInAssistant(command, 'codex')}>
-                            {l(UI_COPY.codex, locale)}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => onOpenInAssistant(command, 'claude')}>
-                            {l(UI_COPY.claude, locale)}
-                          </Button>
-                        </div>
+                        <button
+                          type="button"
+                          title={l(UI_COPY.copyCode, locale)}
+                          aria-label={l(UI_COPY.copyCode, locale)}
+                          onClick={() => onCopyCode(command)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+                        >
+                          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" className="h-3.5 w-3.5">
+                            <rect x="7" y="7" width="9" height="9" rx="1.5" />
+                            <path d="M4.5 12.5h-1A1.5 1.5 0 0 1 2 11V3.5A1.5 1.5 0 0 1 3.5 2h7.5A1.5 1.5 0 0 1 12.5 3.5v1" />
+                          </svg>
+                        </button>
                       </div>
                       <pre className="overflow-x-auto rounded-md border border-slate-800 bg-slate-950/70 p-3 text-xs leading-relaxed text-slate-100">
                         <code>{command.code}</code>
                       </pre>
                       <div className="mt-1 text-[11px] text-slate-500">
-                        {feedbackByBlock[command.id] ?? l(UI_COPY.commandTip, locale)}
+                        {feedbackByBlock[command.id] ?? l(UI_COPY.copyCode, locale)}
                       </div>
                     </section>
                   ))}
