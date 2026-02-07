@@ -169,13 +169,13 @@ const DOCS_SECTIONS: DocsSection[] = [
     },
     intro: {
       en: [
-        'Sidebar is the main navigation: Dashboard, Kanban, Automations, Agent Library, Models, Skills, Docs, and Memory. Mobile uses a compact bottom navigation plus sidebar drawer.',
-        'Use Dashboard for operational triage, Kanban for active work execution, and Memory for contextual knowledge. Keep Docs as the canonical product manual.',
+        'Sidebar is the main navigation: Dashboard, Agents, Workspace (Projects tree), Docs, and Settings. Mobile uses compact bottom navigation.',
+        'Project memory is isolated inside each project branch in the Workspace tree. Keep Docs as the canonical product manual.',
         'OpenClaw UI remains available from sidebar links and settings, so you can move between DzzenOS operations and OpenClaw system management without context switching across tools.',
       ],
       ru: [
-        'Sidebar — основная навигация: Dashboard, Kanban, Automations, Agent Library, Models, Skills, Docs и Memory. На мобильных используется компактная нижняя навигация и drawer.',
-        'Используйте Dashboard для оперативного triage, Kanban для активного исполнения, а Memory для контекстных знаний. Docs оставляйте как каноничный продуктовый справочник.',
+        'Sidebar — основная навигация: Dashboard, Agents, Workspace (дерево Projects), Docs и Settings. На мобильных используется компактная нижняя навигация.',
+        'Память теперь изолирована внутри каждого проекта в ветке Workspace. Docs остаются каноничным продуктовым справочником.',
         'OpenClaw UI доступен из ссылок в sidebar и settings, поэтому можно переключаться между операциями DzzenOS и системным управлением OpenClaw без перехода между разными инструментами.',
       ],
     },
@@ -183,14 +183,14 @@ const DOCS_SECTIONS: DocsSection[] = [
       en: [
         'Desktop: full sidebar-first workflow.',
         'Mobile: optimized quick access to main sections.',
-        'Settings menu links to DzzenOS and OpenClaw settings.',
-        'Memory and Docs are separate items by design.',
+        'Workspace tree supports project expansion and active task visibility.',
+        'Settings includes access to archived projects.',
       ],
       ru: [
         'Desktop: полноценный sidebar-first рабочий процесс.',
         'Mobile: оптимизированный быстрый доступ к ключевым разделам.',
-        'Меню Settings ведет в настройки DzzenOS и OpenClaw.',
-        'Memory и Docs — отдельные пункты по дизайну.',
+        'Дерево Workspace поддерживает раскрытие проектов и просмотр активных задач.',
+        'В Settings есть доступ к архиву проектов.',
       ],
     },
   },
@@ -204,12 +204,14 @@ const DOCS_SECTIONS: DocsSection[] = [
     },
     intro: {
       en: [
-        'Dashboard is your operational control panel. Start your day here to identify what needs immediate intervention.',
+        'Dashboard is your global operational control panel. Start your day here to identify what needs immediate intervention across all active projects.',
+        'The dashboard is fixed as the future pulse page of the whole workspace (cross-project status, runs, approvals, and workload).',
         'Use board selector to switch context. You can open any task directly from recent tasks, stuck runs, failed runs, or approvals.',
         'Approvals are actionable from the dashboard itself: approve or reject directly to keep execution moving.',
       ],
       ru: [
-        'Dashboard — ваша операционная панель управления. Начинайте день здесь, чтобы сразу увидеть, где нужно вмешательство.',
+        'Dashboard — ваша глобальная операционная панель. Начинайте день здесь, чтобы сразу увидеть, где нужно вмешательство по всем активным проектам.',
+        'Dashboard зафиксирован как целевая pulse-страница workspace (кросс-проектные статусы, runs, approvals и загрузка).',
         'Через выбор доски переключайте контекст. Любую задачу можно открыть прямо из recent tasks, stuck runs, failed runs или approvals.',
         'С approvals можно работать прямо в Dashboard: подтверждать или отклонять без перехода в другие экраны.',
       ],

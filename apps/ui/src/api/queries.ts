@@ -15,15 +15,153 @@ import type {
   Approval,
   ApprovalStatus,
   Automation,
+  AgentOrchestrationPolicy,
+  Project,
+  ProjectStatus,
+  OrchestrationPreview,
+  Section,
   Board,
   DocContent,
+  MemoryDoc,
+  MemoryIndexStatus,
+  MemoryModelConfig,
+  MemoryScopes,
+  NavigationTree,
   Task,
+  TaskDetails,
   TaskChecklistItem,
   TaskMessage,
   TaskStatus,
+  SubAgentLink,
   TaskSession,
 } from './types';
 
+export function listProjects(input?: { archived?: 'active' | 'only' | 'all' }): Promise<Project[]> {
+  const qs = new URLSearchParams();
+  if (input?.archived === 'only') qs.set('archived', 'only');
+  if (input?.archived === 'all') qs.set('archived', 'all');
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/projects${suffix}`);
+}
+
+export function createProject(input: { name: string; description?: string | null }): Promise<Project> {
+  return apiFetch('/projects', {
+    method: 'POST',
+    body: JSON.stringify({ name: input.name, description: input.description ?? null }),
+  });
+}
+
+export function patchProject(
+  id: string,
+  patch: { name?: string; description?: string | null; position?: number; isArchived?: boolean }
+): Promise<Project> {
+  return apiFetch(`/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function reorderProjects(input: { orderedIds: string[] }): Promise<{ ok: boolean }> {
+  return apiFetch('/projects/reorder', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteProject(id: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/projects/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function listSections(projectId: string): Promise<Section[]> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections`);
+}
+
+export function createSection(
+  projectId: string,
+  input: {
+    name: string;
+    description?: string | null;
+    position?: number;
+    viewMode?: 'kanban' | 'threads';
+    sectionKind?: 'section' | 'inbox';
+  }
+): Promise<Section> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections`, {
+    method: 'POST',
+    body: JSON.stringify({
+      name: input.name,
+      description: input.description ?? null,
+      position: input.position ?? 0,
+      viewMode: input.viewMode ?? 'kanban',
+      sectionKind: input.sectionKind ?? 'section',
+    }),
+  });
+}
+
+export function patchSection(
+  projectId: string,
+  sectionId: string,
+  patch: {
+    name?: string;
+    description?: string | null;
+    position?: number;
+    viewMode?: 'kanban' | 'threads';
+    sectionKind?: 'section' | 'inbox';
+  }
+): Promise<Section> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections/${encodeURIComponent(sectionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteSection(projectId: string, sectionId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections/${encodeURIComponent(sectionId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function listProjectStatuses(projectId: string): Promise<ProjectStatus[]> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/statuses`);
+}
+
+export function createProjectStatus(
+  projectId: string,
+  input: { statusKey: string; label: string; position?: number }
+): Promise<ProjectStatus> {
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/statuses`, {
+    method: 'POST',
+    body: JSON.stringify({ status_key: input.statusKey, label: input.label, position: input.position ?? 0 }),
+  });
+}
+
+export function patchProjectStatus(
+  projectId: string,
+  statusId: string,
+  patch: { statusKey?: string; label?: string; position?: number }
+): Promise<ProjectStatus> {
+  const body: Record<string, unknown> = {};
+  if (patch.statusKey !== undefined) body.status_key = patch.statusKey;
+  if (patch.label !== undefined) body.label = patch.label;
+  if (patch.position !== undefined) body.position = patch.position;
+  return apiFetch(`/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+export function getProjectsTree(input?: { projectId?: string; limitPerSection?: number; includeArchived?: boolean }): Promise<NavigationTree> {
+  const qs = new URLSearchParams();
+  if (input?.projectId) qs.set('projectId', input.projectId);
+  if (input?.limitPerSection != null) qs.set('limitPerSection', String(input.limitPerSection));
+  if (input?.includeArchived) qs.set('includeArchived', '1');
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/navigation/projects-tree${suffix}`);
+}
+
+// Legacy wrappers (board -> section).
 export function listBoards(): Promise<Board[]> {
   return apiFetch('/boards');
 }
@@ -33,6 +171,9 @@ export function createBoard(input: {
   description?: string | null;
   position?: number;
   workspaceId?: string | null;
+  projectId?: string | null;
+  viewMode?: 'kanban' | 'threads';
+  sectionKind?: 'section' | 'inbox';
 }): Promise<Board> {
   return apiFetch('/boards', {
     method: 'POST',
@@ -40,14 +181,23 @@ export function createBoard(input: {
       name: input.name,
       description: input.description ?? null,
       position: input.position ?? 0,
-      workspaceId: input.workspaceId ?? null,
+      projectId: input.projectId ?? input.workspaceId ?? null,
+      workspaceId: input.projectId ?? input.workspaceId ?? null,
+      viewMode: input.viewMode,
+      sectionKind: input.sectionKind,
     }),
   });
 }
 
 export function patchBoard(
   id: string,
-  patch: { name?: string; description?: string | null; position?: number }
+  patch: {
+    name?: string;
+    description?: string | null;
+    position?: number;
+    viewMode?: 'kanban' | 'threads';
+    sectionKind?: 'section' | 'inbox';
+  }
 ): Promise<Board> {
   return apiFetch(`/boards/${encodeURIComponent(id)}`, {
     method: 'PATCH',
@@ -61,18 +211,50 @@ export function deleteBoard(id: string): Promise<{ ok: boolean }> {
   });
 }
 
-export function listTasks(boardId: string): Promise<Task[]> {
-  const qs = new URLSearchParams({ boardId });
+export function listTasks(
+  input:
+    | string
+    | {
+        projectId?: string;
+        sectionId?: string;
+        viewMode?: 'kanban' | 'threads';
+        statuses?: TaskStatus[];
+        q?: string;
+      }
+): Promise<Task[]> {
+  const qs = new URLSearchParams();
+  if (typeof input === 'string') {
+    qs.set('sectionId', input);
+  } else {
+    if (input.projectId) qs.set('projectId', input.projectId);
+    if (input.sectionId) qs.set('sectionId', input.sectionId);
+    if (input.viewMode) qs.set('viewMode', input.viewMode);
+    if (input.statuses?.length) qs.set('statuses', input.statuses.join(','));
+    if (input.q) qs.set('q', input.q);
+  }
   return apiFetch(`/tasks?${qs.toString()}`);
 }
 
-export function createTask(input: { title: string; description?: string; boardId: string; status?: TaskStatus }): Promise<Task> {
+export function getTaskDetails(taskId: string): Promise<TaskDetails> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}`);
+}
+
+export function createTask(input: {
+  title: string;
+  description?: string;
+  projectId?: string;
+  sectionId?: string;
+  boardId?: string;
+  status?: TaskStatus;
+}): Promise<Task> {
   return apiFetch('/tasks', {
     method: 'POST',
     body: JSON.stringify({
       title: input.title,
       description: input.description ?? null,
-      boardId: input.boardId,
+      projectId: input.projectId ?? null,
+      sectionId: input.sectionId ?? input.boardId ?? null,
+      boardId: input.sectionId ?? input.boardId ?? null,
       status: input.status,
     }),
   });
@@ -80,7 +262,14 @@ export function createTask(input: { title: string; description?: string; boardId
 
 export function patchTask(
   id: string,
-  patch: { status?: TaskStatus; title?: string; description?: string | null; position?: number }
+  patch: {
+    status?: TaskStatus;
+    title?: string;
+    description?: string | null;
+    position?: number;
+    sectionId?: string;
+    boardId?: string;
+  }
 ): Promise<Task> {
   return apiFetch(`/tasks/${encodeURIComponent(id)}`, {
     method: 'PATCH',
@@ -91,7 +280,11 @@ export function patchTask(
 export function reorderTasks(input: { boardId: string; orderedIds: string[] }): Promise<{ ok: boolean }> {
   return apiFetch('/tasks/reorder', {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      sectionId: input.boardId,
+      boardId: input.boardId,
+      orderedIds: input.orderedIds,
+    }),
   });
 }
 
@@ -170,17 +363,19 @@ export function sendTaskChat(
   });
 }
 
-export function listRuns(input?: { status?: AgentRunStatus; stuckMinutes?: number }): Promise<AgentRunListItem[]> {
+export function listRuns(input?: { status?: AgentRunStatus; stuckMinutes?: number; projectId?: string }): Promise<AgentRunListItem[]> {
   const qs = new URLSearchParams();
   if (input?.status) qs.set('status', input.status);
   if (input?.stuckMinutes != null) qs.set('stuckMinutes', String(input.stuckMinutes));
+  if (input?.projectId) qs.set('projectId', input.projectId);
   const suf = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/runs${suf}`);
 }
 
-export function listApprovals(input?: { status?: ApprovalStatus }): Promise<Approval[]> {
+export function listApprovals(input?: { status?: ApprovalStatus; projectId?: string }): Promise<Approval[]> {
   const qs = new URLSearchParams();
   if (input?.status) qs.set('status', input.status);
+  if (input?.projectId) qs.set('projectId', input.projectId);
   const suf = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/approvals${suf}`);
 }
@@ -287,6 +482,45 @@ export function patchAgent(
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
+}
+
+export function listSubagents(agentId: string): Promise<SubAgentLink[]> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/subagents`);
+}
+
+export function replaceSubagents(
+  agentId: string,
+  items: Array<{
+    child_agent_id: string;
+    role?: string;
+    trigger_rules_json?: Record<string, unknown>;
+    max_calls?: number;
+    order?: number;
+    sort_order?: number;
+  }>
+): Promise<{ ok: boolean; items: SubAgentLink[] }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/subagents`, {
+    method: 'PUT',
+    body: JSON.stringify(items),
+  });
+}
+
+export function patchOrchestrationPolicy(
+  agentId: string,
+  patch: {
+    mode?: 'openclaw';
+    delegation_budget_json?: Record<string, unknown>;
+    escalation_rules_json?: Record<string, unknown>;
+  }
+): Promise<AgentOrchestrationPolicy> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/orchestration`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function getOrchestrationPreview(agentId: string): Promise<OrchestrationPreview> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/orchestration/preview`);
 }
 
 export function resetAgent(id: string): Promise<Agent> {
@@ -401,6 +635,64 @@ export function getModelProviderOAuthStatus(
   return apiFetch(`/openclaw/models/providers/${encodeURIComponent(id)}/oauth/status${suffix}`);
 }
 
+// --- Memory Hub ---
+export function listMemoryScopes(): Promise<MemoryScopes> {
+  return apiFetch('/memory/scopes');
+}
+
+export function getMemoryDoc(input: {
+  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  id?: string;
+}): Promise<MemoryDoc> {
+  const qs = new URLSearchParams();
+  qs.set('scope', input.scope);
+  if (input.id) qs.set('id', input.id);
+  return apiFetch(`/memory/docs?${qs.toString()}`);
+}
+
+export function updateMemoryDoc(input: {
+  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  id?: string;
+  content: string;
+  updatedBy?: string;
+}): Promise<{ ok: boolean; doc: MemoryDoc }> {
+  return apiFetch('/memory/docs', {
+    method: 'PUT',
+    body: JSON.stringify({
+      scope: input.scope,
+      id: input.id ?? null,
+      content: input.content,
+      updatedBy: input.updatedBy ?? 'ui',
+    }),
+  });
+}
+
+export function getMemoryIndexStatus(): Promise<MemoryIndexStatus> {
+  return apiFetch('/memory/index/status');
+}
+
+export function rebuildMemoryIndex(): Promise<{
+  ok: boolean;
+  job: MemoryIndexStatus['last_job'];
+}> {
+  return apiFetch('/memory/index/rebuild', { method: 'POST', body: JSON.stringify({}) });
+}
+
+export function getMemoryModels(): Promise<MemoryModelConfig> {
+  return apiFetch('/memory/models');
+}
+
+export function updateMemoryModels(input: {
+  provider_id?: string | null;
+  model_id?: string | null;
+  embedding_model_id?: string | null;
+}): Promise<{ ok: boolean; config: MemoryModelConfig }> {
+  return apiFetch('/memory/models', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
 // --- Docs ---
 export function getOverviewDoc(): Promise<DocContent> {
   return apiFetch('/docs/overview');
@@ -413,24 +705,30 @@ export function updateOverviewDoc(content: string): Promise<{ ok: boolean }> {
   });
 }
 
-export function getBoardDoc(boardId: string): Promise<DocContent> {
-  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}`);
+export function getSectionDoc(sectionId: string): Promise<DocContent> {
+  return apiFetch(`/docs/sections/${encodeURIComponent(sectionId)}`);
 }
 
-export function updateBoardDoc(boardId: string, content: string): Promise<{ ok: boolean }> {
-  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}`, {
+export function updateSectionDoc(sectionId: string, content: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/docs/sections/${encodeURIComponent(sectionId)}`, {
     method: 'PUT',
     body: JSON.stringify({ content }),
   });
 }
 
-export function getBoardChangelog(boardId: string): Promise<DocContent> {
-  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}/changelog`);
+export function getSectionChangelog(sectionId: string): Promise<DocContent> {
+  return apiFetch(`/docs/sections/${encodeURIComponent(sectionId)}/changelog`);
 }
 
-export function appendBoardSummary(boardId: string, input: { title: string; summary: string }): Promise<{ ok: boolean }> {
-  return apiFetch(`/docs/boards/${encodeURIComponent(boardId)}/summary`, {
+export function appendSectionSummary(sectionId: string, input: { title: string; summary: string }): Promise<{ ok: boolean }> {
+  return apiFetch(`/docs/sections/${encodeURIComponent(sectionId)}/summary`, {
     method: 'POST',
     body: JSON.stringify(input),
   });
 }
+
+// Legacy aliases.
+export const getBoardDoc = getSectionDoc;
+export const updateBoardDoc = updateSectionDoc;
+export const getBoardChangelog = getSectionChangelog;
+export const appendBoardSummary = appendSectionSummary;

@@ -47,23 +47,23 @@ export function TaskDrawer({
 
   const patchM = useMutation({
     mutationFn: async (vars: { id: string; status: TaskStatus }) => patchTask(vars.id, { status: vars.status }),
-    onSuccess: async (t) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
   const updateM = useMutation({
     mutationFn: async (vars: { id: string; title?: string; description?: string | null }) =>
       patchTask(vars.id, { title: vars.title, description: vars.description }),
-    onSuccess: async (t) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
   const planM = useMutation({
     mutationFn: async (id: string) => runTask(id, { mode: 'plan' }),
     onSuccess: async () => {
-      if (task?.board_id) await qc.invalidateQueries({ queryKey: ['tasks', task.board_id] });
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
       if (task?.id) await qc.invalidateQueries({ queryKey: ['checklist', task.id] });
     },
   });
@@ -107,7 +107,7 @@ export function TaskDrawer({
     mutationFn: async (id: string) => stopTask(id),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
-      if (task?.board_id) await qc.invalidateQueries({ queryKey: ['tasks', task.board_id] });
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 

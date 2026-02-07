@@ -1,7 +1,7 @@
 import { StatusDot } from '../ui/StatusDot';
 import { useTranslation } from 'react-i18next';
 
-type PageKey = 'dashboard' | 'kanban' | 'automations' | 'docs' | 'memory' | 'agents' | 'skills' | 'models';
+type PageKey = 'dashboard' | 'agents' | 'projects' | 'docs' | 'settings';
 
 export function MobileNav({
   page,
@@ -13,11 +13,12 @@ export function MobileNav({
   const { t } = useTranslation();
   const items: { key: PageKey; label: string }[] = [
     { key: 'dashboard', label: t('Dashboard') },
-    { key: 'kanban', label: t('Kanban') },
-    { key: 'automations', label: t('Flows') },
     { key: 'agents', label: t('Agents') },
-    { key: 'models', label: t('Models') },
+    { key: 'projects', label: t('Projects') },
+    { key: 'docs', label: t('Docs') },
+    { key: 'settings', label: t('Settings') },
   ];
+
   return (
     <nav className="sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t border-border/70 bg-background/90 backdrop-blur">
       <div className="absolute inset-0 bg-gradient-to-t from-background/70 to-transparent pointer-events-none" />

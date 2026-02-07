@@ -1,12 +1,7 @@
-import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useTranslation } from 'react-i18next';
 
-import type { Board, Task, TaskStatus } from '../../api/types';
-import { createBoard, patchTask } from '../../api/queries';
-import { cn } from '../../lib/cn';
-import { formatUpdatedAt } from './taskTime';
+import type { Project, Section, SectionViewMode, Task, TaskStatus } from '../../api/types';
+import { patchTask } from '../../api/queries';
 
 import { PageHeader } from '../Layout/PageHeader';
 import { Button } from '../ui/Button';
@@ -17,16 +12,33 @@ import { EmptyState } from '../ui/EmptyState';
 import { TaskBoard } from './TaskBoard';
 import { TaskBoardSkeleton } from './TaskBoardSkeleton';
 import { NewTask } from './NewTask';
-import { statusLabel } from './status';
+import { ThreadsBoard } from './ThreadsBoard';
 
-const STATUS_OPTIONS: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
+const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
+  { value: 'ideas', label: 'Ideas' },
+  { value: 'todo', label: 'To do' },
+  { value: 'doing', label: 'In progress' },
+  { value: 'review', label: 'Review' },
+  { value: 'release', label: 'Release' },
+  { value: 'done', label: 'Done' },
+  { value: 'archived', label: 'Archived' },
+];
 
 export function KanbanPage({
-  boards,
-  boardsLoading,
-  boardsError,
-  selectedBoardId,
-  onSelectBoard,
+  projects,
+  projectsLoading,
+  projectsError,
+  sections,
+  sectionsLoading,
+  sectionsError,
+  selectedProjectId,
+  onSelectProject,
+  selectedSectionId,
+  onSelectSection,
+  viewMode,
+  onChangeViewMode,
+  onCreateProject,
+  onCreateSection,
   tasks,
   tasksLoading,
   tasksError,
@@ -41,11 +53,20 @@ export function KanbanPage({
   moveError,
   reorderError,
 }: {
-  boards: Board[];
-  boardsLoading: boolean;
-  boardsError: unknown | null;
-  selectedBoardId: string | null;
-  onSelectBoard: (id: string) => void;
+  projects: Project[];
+  projectsLoading: boolean;
+  projectsError: unknown | null;
+  sections: Section[];
+  sectionsLoading: boolean;
+  sectionsError: unknown | null;
+  selectedProjectId: string | null;
+  onSelectProject: (id: string) => void;
+  selectedSectionId: string | null;
+  onSelectSection: (id: string) => void;
+  viewMode: SectionViewMode;
+  onChangeViewMode: (mode: SectionViewMode) => void;
+  onCreateProject: (name: string) => Promise<void> | void;
+  onCreateSection: (name: string) => Promise<void> | void;
   tasks: Task[];
   tasksLoading: boolean;
   tasksError: unknown | null;
@@ -60,55 +81,23 @@ export function KanbanPage({
   moveError: unknown | null;
   reorderError: unknown | null;
 }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [quickTitle, setQuickTitle] = useState('');
+  const [projectName, setProjectName] = useState('');
+  const [sectionName, setSectionName] = useState('');
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const quickRef = useRef<HTMLInputElement | null>(null);
+  const [moveSectionId, setMoveSectionId] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
 
-  const createM = useMutation({
-    mutationFn: async () => {
-      const trimmed = name.trim();
-      if (!trimmed) throw new Error(t('Board name is required'));
-      return createBoard({ name: trimmed, description: description.trim() || null });
-    },
-    onSuccess: async (board) => {
-      await qc.invalidateQueries({ queryKey: ['boards'] });
-      onSelectBoard(board.id);
-      setCreateOpen(false);
-      setName('');
-      setDescription('');
-    },
-  });
-
-  const bulkMoveM = useMutation({
-    mutationFn: async (input: { ids: string[]; status: TaskStatus }) => {
-      await Promise.all(input.ids.map((id) => patchTask(id, { status: input.status })));
-      return { ok: true };
-    },
-    onSuccess: async () => {
-      if (selectedBoardId) {
-        await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
-      }
-    },
-  });
-
-  const sortedBoards = useMemo(() => {
-    return [...boards].sort((a, b) => {
-      if (a.position !== b.position) return a.position - b.position;
-      return Date.parse(b.updated_at) - Date.parse(a.updated_at);
-    });
-  }, [boards]);
-
-  const hasBoards = sortedBoards.length > 0;
-  const selectedBoard = sortedBoards.find((b) => b.id === selectedBoardId) ?? null;
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId]
+  );
+  const selectedSection = useMemo(
+    () => sections.find((s) => s.id === selectedSectionId) ?? null,
+    [sections, selectedSectionId]
+  );
 
   const filteredTasks = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -126,6 +115,7 @@ export function KanbanPage({
   useEffect(() => {
     if (!selectionMode) {
       setSelectedIds([]);
+      setMoveSectionId('');
     }
   }, [selectionMode]);
 
@@ -142,10 +132,6 @@ export function KanbanPage({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTyping(document.activeElement)) return;
-      if (e.key.toLowerCase() === 'n') {
-        quickRef.current?.focus();
-        e.preventDefault();
-      }
       if ((e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) || e.key === '/') {
         searchRef.current?.focus();
         e.preventDefault();
@@ -159,236 +145,188 @@ export function KanbanPage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selectionMode]);
 
-  useEffect(() => {
-    const key = `dzzenos.kanban.scroll.${selectedBoardId ?? 'none'}`;
-    const saved = sessionStorage.getItem(key);
-    if (saved) {
-      const top = Number(saved);
-      if (Number.isFinite(top)) window.scrollTo({ top, behavior: 'auto' });
-    }
-    let raf: number | null = null;
-    const onScroll = () => {
-      if (raf != null) return;
-      raf = window.requestAnimationFrame(() => {
-        sessionStorage.setItem(key, String(window.scrollY));
-        raf = null;
-      });
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (raf != null) window.cancelAnimationFrame(raf);
-    };
-  }, [selectedBoardId]);
-
-  const handleQuickAdd = async () => {
-    const trimmed = quickTitle.trim();
-    if (!trimmed) return;
-    if (!selectedBoardId) {
-      setCreateOpen(true);
-      return;
-    }
-    await onCreateTask(trimmed);
-    setQuickTitle('');
-  };
-
   const toggleSelection = (id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const toggleSelectAll = () => {
-    if (allVisibleSelected) {
-      setSelectedIds([]);
-    } else {
-      setSelectedIds(visibleIds);
-    }
+    if (allVisibleSelected) setSelectedIds([]);
+    else setSelectedIds(visibleIds);
+  };
+
+  const moveSelected = async (status: TaskStatus) => {
+    if (!selectedIds.length) return;
+    await Promise.all(selectedIds.map((id) => patchTask(id, { status })));
+    setSelectedIds([]);
+  };
+
+  const moveSelectedToSection = async () => {
+    if (!moveSectionId || selectedIds.length === 0) return;
+    await Promise.all(selectedIds.map((id) => patchTask(id, { sectionId: moveSectionId })));
+    setSelectedIds([]);
+    setMoveSectionId('');
   };
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title={t('Kanban')}
-        subtitle={t('Boards and task execution')}
+        title="Projects"
+        subtitle="Project overview → section workflow in Kanban or Threads mode"
         actions={
-          <Dialog.Root open={createOpen} onOpenChange={setCreateOpen}>
-            <Dialog.Trigger asChild>
-              <Button>Create board</Button>
-            </Dialog.Trigger>
-            <Dialog.Portal>
-              <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
-              <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[92vw] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-surface-1/90 p-5 shadow-popover backdrop-blur">
-                <Dialog.Title className="text-sm font-semibold text-foreground">{t('Create board')}</Dialog.Title>
-                <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-                  {t('Organize tasks by workflow. You can rename it later.')}
-                </Dialog.Description>
-
-                <div className="mt-4 grid gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Name')}</label>
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('Create board')} />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">{t('Description')}</label>
-                    <textarea
-                      className="min-h-[90px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder={t('Description')}
-                    />
-                  </div>
-                  {createM.isError ? <InlineAlert>{String(createM.error)}</InlineAlert> : null}
-                </div>
-
-                <div className="mt-5 flex items-center justify-end gap-2">
-                  <Button variant="ghost" onClick={() => setCreateOpen(false)}>
-                    {t('Cancel')}
-                  </Button>
-                  <Button onClick={() => createM.mutate()} disabled={createM.isPending || !name.trim()}>
-                    {createM.isPending ? t('Creating…') : t('Create board')}
-                  </Button>
-                </div>
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="flex gap-2">
+              <Input
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="New project…"
+                className="w-[180px]"
+              />
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const name = projectName.trim();
+                  if (!name) return;
+                  await onCreateProject(name);
+                  setProjectName('');
+                }}
+                disabled={!projectName.trim()}
+              >
+                Add project
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={sectionName}
+                onChange={(e) => setSectionName(e.target.value)}
+                placeholder="New section…"
+                className="w-[180px]"
+              />
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const name = sectionName.trim();
+                  if (!name) return;
+                  await onCreateSection(name);
+                  setSectionName('');
+                }}
+                disabled={!sectionName.trim() || !selectedProjectId}
+              >
+                Add section
+              </Button>
+            </div>
+          </div>
         }
       />
 
-      <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="flex-1">
-            <Input
-              ref={quickRef}
-              value={quickTitle}
-              onChange={(e) => setQuickTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleQuickAdd();
-                }
-              }}
-              placeholder={t('Capture a quick idea… (Press N)')}
-            />
-          </div>
-          <Button onClick={handleQuickAdd} disabled={!quickTitle.trim()}>
-            {t('Add idea')}
-          </Button>
-        </div>
-        <div className="mt-2 text-xs text-muted-foreground">{t('Fast capture goes to Ideas for the selected board.')}</div>
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <div>
-          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{t('Boards')}</div>
-          <div className="mt-1 text-sm text-muted-foreground">{t('Pick a board or create a new workspace for tasks.')}</div>
-        </div>
-
-        {!boardsLoading && !boardsError && !hasBoards ? (
-          <div className="rounded-2xl border border-dashed border-border/70 bg-surface-1/60 p-6 text-sm text-muted-foreground shadow-panel">
-            <div className="text-base font-semibold text-foreground">{t('Create your first board')}</div>
-            <div className="mt-2 max-w-lg text-sm text-muted-foreground">
-              {t('Boards keep tasks grouped by workflow (product, content, ops). You can edit the name and description later.')}
-            </div>
-            <div className="mt-4">
-              <Button onClick={() => setCreateOpen(true)}>{t('Create board')}</Button>
-            </div>
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {boardsLoading ? (
-              Array.from({ length: 6 }).map((_, idx) => <Skeleton key={idx} className="h-[120px] w-full" />)
-            ) : boardsError ? (
-              <div className="sm:col-span-2 lg:col-span-3">
-                <InlineAlert>{String(boardsError)}</InlineAlert>
-              </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
+          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Projects</div>
+          <div className="mt-2 grid gap-2">
+            {projectsLoading ? (
+              Array.from({ length: 4 }).map((_, idx) => <Skeleton key={idx} className="h-10 w-full" />)
+            ) : projectsError ? (
+              <InlineAlert>{String(projectsError)}</InlineAlert>
+            ) : !projects.length ? (
+              <EmptyState title="No projects" subtitle="Create your first project." />
             ) : (
-              <>
+              projects.map((p) => (
                 <button
+                  key={p.id}
                   type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className={cn(
-                    'group flex min-h-[140px] w-full flex-col justify-between rounded-xl border border-dashed border-border/70 bg-surface-1/40 p-4 text-left text-sm text-muted-foreground transition',
-                    'hover:border-primary/60 hover:bg-surface-2/50 hover:text-foreground'
-                  )}
+                  onClick={() => onSelectProject(p.id)}
+                  className={
+                    'rounded-md border px-3 py-2 text-left text-sm transition ' +
+                    (p.id === selectedProjectId
+                      ? 'border-primary/60 bg-surface-2/80'
+                      : 'border-border/70 bg-surface-1/50 hover:bg-surface-2/60')
+                  }
                 >
-                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80 group-hover:text-foreground">
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 bg-surface-2/70 text-base">
-                      +
-                    </span>
-                    {t('Create board')}
-                  </div>
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    {t('Start a new workflow for a project, team, or domain.')}
-                  </div>
-                  <div className="mt-auto text-xs text-primary/80 group-hover:text-primary">{t('Open creator')}</div>
+                  <div className="font-medium text-foreground">{p.name}</div>
+                  <div className="text-xs text-muted-foreground">{p.description || 'No description'}</div>
                 </button>
-
-                {sortedBoards.map((board) => {
-                  const active = board.id === selectedBoardId;
-                  return (
-                    <button
-                      key={board.id}
-                      type="button"
-                      onClick={() => onSelectBoard(board.id)}
-                      className={cn(
-                        'group flex w-full flex-col gap-2 rounded-xl border border-border/70 bg-surface-1/70 p-4 text-left shadow-panel transition',
-                        'hover:-translate-y-0.5 hover:bg-surface-2/70',
-                        active && 'border-primary/60 bg-surface-2/80 ring-1 ring-primary/40'
-                      )}
-                    >
-                      <div className="text-sm font-semibold tracking-tight text-foreground">{board.name}</div>
-                      <div className="max-h-10 overflow-hidden text-xs text-muted-foreground">
-                        {board.description || t('No description yet.')}
-                      </div>
-                      <div className="mt-auto text-[11px] text-muted-foreground">
-                        {t('Updated {{time}}', { time: formatUpdatedAt(board.updated_at) })}
-                      </div>
-                    </button>
-                  );
-                })}
-              </>
+              ))
             )}
           </div>
-        )}
+        </div>
+
+        <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Sections</div>
+              <div className="mt-1 text-sm text-muted-foreground">{selectedProject?.name ?? 'Select a project'}</div>
+            </div>
+            <div className="inline-flex rounded-lg border border-border/70 bg-surface-2/60 p-1">
+              <button
+                type="button"
+                className={'rounded-md px-2 py-1 text-xs ' + (viewMode === 'kanban' ? 'bg-primary/20 text-foreground' : 'text-muted-foreground')}
+                onClick={() => onChangeViewMode('kanban')}
+              >
+                Kanban
+              </button>
+              <button
+                type="button"
+                className={'rounded-md px-2 py-1 text-xs ' + (viewMode === 'threads' ? 'bg-primary/20 text-foreground' : 'text-muted-foreground')}
+                onClick={() => onChangeViewMode('threads')}
+              >
+                Threads
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2 grid gap-2">
+            {sectionsLoading ? (
+              Array.from({ length: 5 }).map((_, idx) => <Skeleton key={idx} className="h-10 w-full" />)
+            ) : sectionsError ? (
+              <InlineAlert>{String(sectionsError)}</InlineAlert>
+            ) : !sections.length ? (
+              <EmptyState title="No sections" subtitle="Add first section for this project." />
+            ) : (
+              sections.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onSelectSection(s.id)}
+                  className={
+                    'rounded-md border px-3 py-2 text-left text-sm transition ' +
+                    (s.id === selectedSectionId
+                      ? 'border-primary/60 bg-surface-2/80'
+                      : 'border-border/70 bg-surface-1/50 hover:bg-surface-2/60')
+                  }
+                >
+                  <div className="font-medium text-foreground">{s.name}</div>
+                  <div className="text-xs text-muted-foreground">{s.section_kind === 'inbox' ? 'Project Inbox' : `Default: ${s.view_mode}`}</div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{t('Selected board')}</div>
-            <h2 className="mt-1 text-base font-semibold tracking-tight">
-              {selectedBoard ? selectedBoard.name : t('No board selected')}
-            </h2>
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected section</div>
+            <h2 className="mt-1 text-base font-semibold tracking-tight">{selectedSection?.name ?? 'No section selected'}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {selectedBoard
-                ? selectedBoard.description || t('Move cards to advance the work.')
-                : t('Select a board above to view tasks.')}
+              {selectedSection ? selectedSection.description || 'Move tasks through statuses.' : 'Select a section above to view tasks.'}
             </p>
           </div>
           <div className="w-full sm:max-w-md">
-            {selectedBoardId ? (
+            {selectedSectionId ? (
               <div className="flex flex-col gap-2">
                 <NewTask onCreate={onCreateTask} />
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setSelectionMode((prev) => !prev)}
-                  >
-                    {selectionMode ? t('Done selecting') : t('Select')}
+                  <Button variant="secondary" size="sm" onClick={() => setSelectionMode((prev) => !prev)}>
+                    {selectionMode ? 'Done selecting' : 'Select'}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={toggleSelectAll}
-                    disabled={!filteredTasks.length}
-                  >
-                    {allVisibleSelected ? t('Clear selection') : t('Select all visible')}
+                  <Button variant="ghost" size="sm" onClick={toggleSelectAll} disabled={!filteredTasks.length}>
+                    {allVisibleSelected ? 'Clear selection' : 'Select all visible'}
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="rounded-md border border-border/70 bg-surface-1/50 px-3 py-2 text-xs text-muted-foreground">
-                {t('Select a board to create tasks.')}
+                Select section to create tasks.
               </div>
             )}
           </div>
@@ -401,49 +339,63 @@ export function KanbanPage({
                 ref={searchRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder={t('Search tasks… (Ctrl+K or /)')}
+                placeholder="Search tasks… (Ctrl+K or /)"
               />
             </div>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(e) => setShowArchived(e.target.checked)}
-              />
-              {t('Show archived')}
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+              Show archived
             </label>
           </div>
+
           {selectionMode ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>{t('{{count}} selected', { count: selectedIds.length })}</span>
+              <span>{selectedIds.length} selected</span>
+              <select
+                className="h-8 rounded-md border border-input/70 bg-surface-1/70 px-2 text-xs text-foreground"
+                value={moveSectionId}
+                onChange={(e) => setMoveSectionId(e.target.value)}
+              >
+                <option value="">Move to section…</option>
+                {sections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  moveSelectedToSection().catch(() => undefined);
+                }}
+                disabled={!moveSectionId || selectedIds.length === 0}
+              >
+                Move section
+              </Button>
               <select
                 className="h-8 rounded-md border border-input/70 bg-surface-1/70 px-2 text-xs text-foreground"
                 value=""
                 onChange={(e) => {
                   const next = e.target.value as TaskStatus;
                   if (!next || selectedIds.length === 0) return;
-                  bulkMoveM.mutate({ ids: selectedIds, status: next });
-                  setSelectedIds([]);
+                  moveSelected(next).catch(() => undefined);
                 }}
               >
-                <option value="">{t('Move to…')}</option>
+                <option value="">Move to…</option>
                 {STATUS_OPTIONS.map((s) => (
-                  <option key={s} value={s}>
-                    {statusLabel(s, t)}
+                  <option key={s.value} value={s.value}>
+                    {s.label}
                   </option>
                 ))}
               </select>
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => {
-                  if (!selectedIds.length) return;
-                  bulkMoveM.mutate({ ids: selectedIds, status: 'archived' });
-                  setSelectedIds([]);
-                }}
+                onClick={() => moveSelected('archived')}
                 disabled={selectedIds.length === 0}
               >
-                {t('Archive')}
+                Archive
               </Button>
             </div>
           ) : null}
@@ -452,16 +404,29 @@ export function KanbanPage({
         {createTaskError ? <InlineAlert>{String(createTaskError)}</InlineAlert> : null}
         {moveError || reorderError ? <InlineAlert>{String(moveError ?? reorderError)}</InlineAlert> : null}
 
-        {!hasBoards ? (
-          <EmptyState title={t('No boards yet')} subtitle={t('Create your first board to start.')} />
-        ) : !selectedBoardId ? (
-          <EmptyState title={t('Select a board')} subtitle={t('Select a board above to view tasks.')} />
+        {!selectedProjectId ? (
+          <EmptyState title="Select a project" subtitle="Choose a project above to continue." />
+        ) : !selectedSectionId ? (
+          <EmptyState title="Select a section" subtitle="Choose a section above to view tasks." />
         ) : tasksLoading ? (
           <TaskBoardSkeleton />
         ) : tasksError ? (
           <InlineAlert>{String(tasksError)}</InlineAlert>
         ) : filteredTasks.length === 0 ? (
-          <EmptyState title={t('No tasks yet')} subtitle={t('Create one with the input above.')} />
+          <EmptyState title="No tasks" subtitle="Create one with the input above." />
+        ) : viewMode === 'threads' ? (
+          <ThreadsBoard
+            tasks={filteredTasks}
+            selectedTaskId={selectedTaskId}
+            onSelectTask={onSelectTask}
+            onMoveTask={onMoveTask}
+            moveDisabled={moveDisabled}
+            onReorder={onReorder}
+            onQuickCreate={onQuickCreate}
+            selectionMode={selectionMode}
+            selectedIds={selectedSet}
+            onToggleSelect={toggleSelection}
+          />
         ) : (
           <TaskBoard
             tasks={filteredTasks}
