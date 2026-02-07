@@ -91,6 +91,56 @@ function parseArgs(argv: string[]): Partial<Options> {
   return out;
 }
 
+function parseBusyTimeoutMs(raw: string | undefined): number {
+  const n = Number(raw ?? '');
+  if (!Number.isFinite(n) || n < 0) return 5000;
+  return Math.floor(n);
+}
+
+function parseSynchronousMode(raw: string | undefined): 'OFF' | 'NORMAL' | 'FULL' {
+  const v = String(raw ?? '').trim().toUpperCase();
+  if (v === 'OFF' || v === 'NORMAL' || v === 'FULL') return v;
+  return 'NORMAL';
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number): number {
+  const n = Number(raw ?? '');
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.floor(n);
+}
+
+function parsePageLimit(
+  raw: string | null,
+  fallback: number,
+  max: number,
+  fieldName = 'limit'
+): number {
+  if (raw == null || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new HttpError(400, `${fieldName} must be a positive integer`);
+  }
+  return Math.min(Math.floor(n), max);
+}
+
+function parseBeforeIsoCursor(raw: string | null, fieldName: string): string | null {
+  if (raw == null) return null;
+  const v = String(raw).trim();
+  if (!v) return null;
+  const t = Date.parse(v);
+  if (!Number.isFinite(t)) {
+    throw new HttpError(400, `${fieldName} must be a valid ISO date/time`);
+  }
+  return new Date(t).toISOString();
+}
+
+type RetentionConfig = {
+  taskMessagesPerTask: number;
+  runsPerTask: number;
+  runsMaxAgeDays: number;
+  cleanupIntervalSeconds: number;
+};
+
 type AllowedOrigins = {
   origins: Set<string>;
   hosts: Set<string>;
@@ -1378,8 +1428,154 @@ function main() {
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec('PRAGMA journal_mode = WAL;');
+  db.exec(`PRAGMA busy_timeout = ${parseBusyTimeoutMs(process.env.DZZENOS_SQLITE_BUSY_TIMEOUT_MS)};`);
+  db.exec(`PRAGMA synchronous = ${parseSynchronousMode(process.env.DZZENOS_SQLITE_SYNCHRONOUS)};`);
+  db.exec('PRAGMA temp_store = MEMORY;');
 
   seedIfEmpty(db);
+
+  const retention: RetentionConfig = {
+    taskMessagesPerTask: parseNonNegativeInt(process.env.DZZENOS_RETENTION_TASK_MESSAGES_PER_TASK, 2000),
+    runsPerTask: parseNonNegativeInt(process.env.DZZENOS_RETENTION_RUNS_PER_TASK, 300),
+    runsMaxAgeDays: parseNonNegativeInt(process.env.DZZENOS_RETENTION_RUNS_MAX_AGE_DAYS, 90),
+    cleanupIntervalSeconds: parseNonNegativeInt(process.env.DZZENOS_RETENTION_CLEANUP_INTERVAL_SECONDS, 900),
+  };
+
+  function trimTaskMessagesByTask(taskId: string, keep: number): number {
+    if (keep <= 0) return 0;
+    const info = db
+      .prepare(
+        `DELETE FROM task_messages
+         WHERE id IN (
+           SELECT id
+           FROM task_messages
+           WHERE task_id = ?
+           ORDER BY created_at DESC, id DESC
+           LIMIT -1 OFFSET ?
+         )`
+      )
+      .run(taskId, keep) as any;
+    return Number(info?.changes ?? 0);
+  }
+
+  function trimTaskMessagesGlobal(keep: number): number {
+    if (keep <= 0) return 0;
+    const info = db
+      .prepare(
+        `WITH ranked AS (
+           SELECT id,
+                  row_number() OVER (PARTITION BY task_id ORDER BY created_at DESC, id DESC) AS rn
+           FROM task_messages
+         )
+         DELETE FROM task_messages
+         WHERE id IN (SELECT id FROM ranked WHERE rn > ?)`
+      )
+      .run(keep) as any;
+    return Number(info?.changes ?? 0);
+  }
+
+  function trimRunsByTask(taskId: string, keep: number): number {
+    if (keep <= 0) return 0;
+    const info = db
+      .prepare(
+        `DELETE FROM agent_runs
+         WHERE id IN (
+           SELECT id
+           FROM agent_runs
+           WHERE task_id = ? AND status <> 'running'
+           ORDER BY created_at DESC, id DESC
+           LIMIT -1 OFFSET ?
+         )`
+      )
+      .run(taskId, keep) as any;
+    return Number(info?.changes ?? 0);
+  }
+
+  function trimRunsGlobal(keep: number): number {
+    if (keep <= 0) return 0;
+    const info = db
+      .prepare(
+        `WITH ranked AS (
+           SELECT id,
+                  row_number() OVER (PARTITION BY task_id ORDER BY created_at DESC, id DESC) AS rn
+           FROM agent_runs
+           WHERE task_id IS NOT NULL AND status <> 'running'
+         )
+         DELETE FROM agent_runs
+         WHERE id IN (SELECT id FROM ranked WHERE rn > ?)`
+      )
+      .run(keep) as any;
+    return Number(info?.changes ?? 0);
+  }
+
+  function trimRunsByAge(days: number, taskId?: string): number {
+    if (days <= 0) return 0;
+    if (taskId) {
+      const info = db
+        .prepare(
+          `DELETE FROM agent_runs
+           WHERE task_id = ?
+             AND status <> 'running'
+             AND julianday(created_at) < julianday('now') - ?`
+        )
+        .run(taskId, days) as any;
+      return Number(info?.changes ?? 0);
+    }
+    const info = db
+      .prepare(
+        `DELETE FROM agent_runs
+         WHERE status <> 'running'
+           AND julianday(created_at) < julianday('now') - ?`
+      )
+      .run(days) as any;
+    return Number(info?.changes ?? 0);
+  }
+
+  function runRetentionCleanup(scope?: { taskId?: string }): { removedMessages: number; removedRuns: number } {
+    const taskId = scope?.taskId ?? null;
+    let removedMessages = 0;
+    let removedRuns = 0;
+
+    if (retention.taskMessagesPerTask > 0) {
+      removedMessages += taskId
+        ? trimTaskMessagesByTask(taskId, retention.taskMessagesPerTask)
+        : trimTaskMessagesGlobal(retention.taskMessagesPerTask);
+    }
+    if (retention.runsPerTask > 0) {
+      removedRuns += taskId
+        ? trimRunsByTask(taskId, retention.runsPerTask)
+        : trimRunsGlobal(retention.runsPerTask);
+    }
+    if (retention.runsMaxAgeDays > 0) {
+      removedRuns += trimRunsByAge(retention.runsMaxAgeDays, taskId ?? undefined);
+    }
+
+    if (removedMessages > 0 || removedRuns > 0) {
+      const tag = taskId ? `task=${taskId}` : 'global';
+      console.log(
+        `[dzzenos-api] retention cleanup (${tag}): removed_messages=${removedMessages}, removed_runs=${removedRuns}`
+      );
+    }
+
+    return { removedMessages, removedRuns };
+  }
+
+  try {
+    runRetentionCleanup();
+  } catch (err) {
+    console.error('[dzzenos-api] retention startup cleanup failed', err);
+  }
+
+  if (retention.cleanupIntervalSeconds > 0) {
+    const timer = setInterval(() => {
+      try {
+        runRetentionCleanup();
+      } catch (err) {
+        console.error('[dzzenos-api] retention periodic cleanup failed', err);
+      }
+    }, retention.cleanupIntervalSeconds * 1000);
+    timer.unref?.();
+  }
 
   function getTaskMeta(taskId: string) {
     return rowOrNull<{
@@ -2553,6 +2749,11 @@ function main() {
     }
 
     sseBroadcast({ type: 'runs.changed', payload: { runId, taskId: task.id } });
+    try {
+      runRetentionCleanup({ taskId: task.id });
+    } catch (err) {
+      console.error('[dzzenos-api] retention cleanup after run failed', err);
+    }
 
     return { runId, outputText, parsed };
   }
@@ -3179,6 +3380,12 @@ const server = http.createServer(async (req, res) => {
       // --- API ---
       if (req.method === 'GET' && url.pathname === '/runs') {
         const status = url.searchParams.get('status');
+        const before = parseBeforeIsoCursor(url.searchParams.get('before'), 'before');
+        const limit = parsePageLimit(
+          url.searchParams.get('limit'),
+          Math.max(1, parseNonNegativeInt(process.env.DZZENOS_RUNS_PAGE_SIZE, 100)),
+          500
+        );
         const stuckMinutesRaw = url.searchParams.get('stuckMinutes');
         const stuckMinutes = stuckMinutesRaw == null ? null : Number(stuckMinutesRaw);
         const projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
@@ -3201,6 +3408,10 @@ const server = http.createServer(async (req, res) => {
         if (projectId) {
           where.push('r.workspace_id = ?');
           params.push(projectId);
+        }
+        if (before) {
+          where.push('r.created_at < ?');
+          params.push(before);
         }
 
         // If stuckMinutes is provided, return only stuck running runs older than N minutes.
@@ -3235,12 +3446,12 @@ const server = http.createServer(async (req, res) => {
           FROM agent_runs r
           LEFT JOIN tasks t ON t.id = r.task_id
           ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-          ORDER BY r.created_at DESC
-          LIMIT 200
+          ORDER BY r.created_at DESC, r.id DESC
+          LIMIT ?
         `;
 
         const isStuckMinutes = stuckMinutes != null ? stuckMinutes : 5;
-        const rows = db.prepare(sql).all(...params, isStuckMinutes) as any[];
+        const rows = db.prepare(sql).all(...params, isStuckMinutes, limit) as any[];
         const payload = rows.map((r) => ({ ...r, is_stuck: Boolean(r.is_stuck) }));
         return sendJson(res, 200, payload, corsHeaders);
       }
@@ -3823,6 +4034,12 @@ const server = http.createServer(async (req, res) => {
         } catch (e) {
           db.exec('ROLLBACK');
           throw e;
+        }
+
+        try {
+          runRetentionCleanup();
+        } catch (err) {
+          console.error('[dzzenos-api] retention cleanup after automation run failed', err);
         }
 
         sseBroadcast({ type: 'runs.changed', payload: { runId, automationId: id } });
@@ -6278,11 +6495,28 @@ const server = http.createServer(async (req, res) => {
       const chatGet = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/chat$/) : null;
       if (chatGet) {
         const taskId = decodeURIComponent(chatGet[1]);
+        const before = parseBeforeIsoCursor(url.searchParams.get('before'), 'before');
+        const limit = parsePageLimit(
+          url.searchParams.get('limit'),
+          Math.max(1, parseNonNegativeInt(process.env.DZZENOS_CHAT_PAGE_SIZE, 200)),
+          1000
+        );
+        const where: string[] = ['task_id = ?'];
+        const params: any[] = [taskId];
+        if (before) {
+          where.push('created_at < ?');
+          params.push(before);
+        }
         const rows = db
           .prepare(
-            'SELECT id, task_id, role, content, created_at FROM task_messages WHERE task_id = ? ORDER BY created_at ASC'
+            `SELECT id, task_id, role, content, created_at
+             FROM task_messages
+             WHERE ${where.join(' AND ')}
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?`
           )
-          .all(taskId) as any[];
+          .all(...params, limit) as any[];
+        rows.reverse();
         return sendJson(res, 200, rows, corsHeaders);
       }
 
@@ -6364,6 +6598,11 @@ const server = http.createServer(async (req, res) => {
           'assistant',
           reply
         );
+        try {
+          runRetentionCleanup({ taskId });
+        } catch (err) {
+          console.error('[dzzenos-api] retention cleanup after chat failed', err);
+        }
 
         sseBroadcast({ type: 'task.chat.changed', payload: { taskId } });
         return sendJson(res, 200, { reply }, corsHeaders);
@@ -6431,6 +6670,11 @@ const server = http.createServer(async (req, res) => {
           });
 
           db.exec('COMMIT');
+          try {
+            runRetentionCleanup({ taskId });
+          } catch (err) {
+            console.error('[dzzenos-api] retention cleanup after approval failed', err);
+          }
 
           const row = rowOrNull<any>(
             db
@@ -6527,6 +6771,12 @@ const server = http.createServer(async (req, res) => {
           }
         })();
 
+        try {
+          runRetentionCleanup({ taskId });
+        } catch (err) {
+          console.error('[dzzenos-api] retention cleanup after simulate-run failed', err);
+        }
+
         sseBroadcast({
           type: 'runs.changed',
           payload: {
@@ -6544,7 +6794,24 @@ const server = http.createServer(async (req, res) => {
       const runsMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/runs$/) : null;
       if (runsMatch) {
         const taskId = runsMatch[1];
-        const stuckMinutes = Number(url.searchParams.get('stuckMinutes') ?? 5);
+        const stuckMinutesRaw = url.searchParams.get('stuckMinutes');
+        const stuckMinutes = Number(stuckMinutesRaw ?? 5);
+        const before = parseBeforeIsoCursor(url.searchParams.get('before'), 'before');
+        const limit = parsePageLimit(
+          url.searchParams.get('limit'),
+          Math.max(1, parseNonNegativeInt(process.env.DZZENOS_TASK_RUNS_PAGE_SIZE, 50)),
+          200
+        );
+        if (stuckMinutesRaw != null && (!Number.isFinite(stuckMinutes) || stuckMinutes < 0)) {
+          return sendJson(res, 400, { error: 'stuckMinutes must be a non-negative number' }, corsHeaders);
+        }
+
+        const where: string[] = ['task_id = ?'];
+        const params: any[] = [taskId];
+        if (before) {
+          where.push('created_at < ?');
+          params.push(before);
+        }
 
         const runs = db
           .prepare(
@@ -6555,10 +6822,11 @@ const server = http.createServer(async (req, res) => {
                       ELSE 0
                     END as is_stuck
              FROM agent_runs
-             WHERE task_id = ?
-             ORDER BY created_at DESC`
+             WHERE ${where.join(' AND ')}
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?`
           )
-          .all(stuckMinutes, taskId) as any[];
+          .all(stuckMinutes, ...params, limit) as any[];
 
         const runIds = runs.map((r) => r.id);
         const stepsByRun = new Map<string, any[]>();

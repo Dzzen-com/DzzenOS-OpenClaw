@@ -54,6 +54,11 @@ It provides:
 
 **1) On your server: run installer**
 ```bash
+curl -fsSL https://dzzen.com/dzzenos-openclaw-install.sh | bash
+```
+
+Fallback (GitHub raw):
+```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
 ```
 
@@ -111,7 +116,7 @@ See: `Docs/AGENT-INSTALL.md`
 
 - Docs index (for docs platform): [Docs/README.md](Docs/README.md)
 - Install (SSH tunnel): [Docs/INSTALL.md](Docs/INSTALL.md)
-- Install modes (local/server/docker/cloudflare): [Docs/INSTALL-MODES.md](Docs/INSTALL-MODES.md)
+- Install modes (server/docker/cloudflare): [Docs/INSTALL-MODES.md](Docs/INSTALL-MODES.md)
 - Domain mode (Caddy + TLS + login + caching): [Docs/DOMAIN-ACCESS.md](Docs/DOMAIN-ACCESS.md)
 - Agent-driven install: [Docs/AGENT-INSTALL.md](Docs/AGENT-INSTALL.md)
 - Remote access notes: [Docs/remote-access.md](Docs/remote-access.md)

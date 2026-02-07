@@ -22,6 +22,12 @@ export type Options = {
   legacyDbPath?: string;
 };
 
+function parseBusyTimeoutMs(raw: string | undefined): number {
+  const n = Number(raw ?? '');
+  if (!Number.isFinite(n) || n < 0) return 5000;
+  return Math.floor(n);
+}
+
 function parseArgs(argv: string[]): Partial<Options> {
   const out: Partial<Options> = {};
   for (let i = 0; i < argv.length; i++) {
@@ -156,6 +162,7 @@ export function migrate(opts: Options) {
   try {
     db.exec('PRAGMA foreign_keys = ON;');
     db.exec('PRAGMA journal_mode = WAL;');
+    db.exec(`PRAGMA busy_timeout = ${parseBusyTimeoutMs(process.env.DZZENOS_SQLITE_BUSY_TIMEOUT_MS)};`);
 
     db.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (

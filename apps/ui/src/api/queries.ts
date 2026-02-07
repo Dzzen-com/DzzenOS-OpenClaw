@@ -461,8 +461,16 @@ export function stopTask(taskId: string): Promise<{ ok: boolean; stopped: boolea
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' });
 }
 
-export function listTaskRuns(taskId: string): Promise<AgentRun[]> {
-  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/runs`);
+export function listTaskRuns(
+  taskId: string,
+  input?: { stuckMinutes?: number; limit?: number; before?: string }
+): Promise<AgentRun[]> {
+  const qs = new URLSearchParams();
+  if (input?.stuckMinutes != null) qs.set('stuckMinutes', String(input.stuckMinutes));
+  if (input?.limit != null) qs.set('limit', String(input.limit));
+  if (input?.before) qs.set('before', input.before);
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/runs${suf}`);
 }
 
 export function getTaskSession(taskId: string): Promise<TaskSession> {
@@ -507,8 +515,15 @@ export function deleteChecklistItem(taskId: string, itemId: string): Promise<{ o
   });
 }
 
-export function getTaskChat(taskId: string): Promise<TaskMessage[]> {
-  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/chat`);
+export function getTaskChat(
+  taskId: string,
+  input?: { limit?: number; before?: string }
+): Promise<TaskMessage[]> {
+  const qs = new URLSearchParams();
+  if (input?.limit != null) qs.set('limit', String(input.limit));
+  if (input?.before) qs.set('before', input.before);
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}/chat${suf}`);
 }
 
 export function sendTaskChat(
@@ -521,11 +536,21 @@ export function sendTaskChat(
   });
 }
 
-export function listRuns(input?: { status?: AgentRunStatus; stuckMinutes?: number; projectId?: string }): Promise<AgentRunListItem[]> {
+export function listRuns(
+  input?: {
+    status?: AgentRunStatus;
+    stuckMinutes?: number;
+    projectId?: string;
+    limit?: number;
+    before?: string;
+  }
+): Promise<AgentRunListItem[]> {
   const qs = new URLSearchParams();
   if (input?.status) qs.set('status', input.status);
   if (input?.stuckMinutes != null) qs.set('stuckMinutes', String(input.stuckMinutes));
   if (input?.projectId) qs.set('projectId', input.projectId);
+  if (input?.limit != null) qs.set('limit', String(input.limit));
+  if (input?.before) qs.set('before', input.before);
   const suf = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/runs${suf}`);
 }

@@ -2,18 +2,13 @@
 
 Installer supports environment-aware modes:
 
-- `local` - native OpenClaw on laptop/desktop (no domain prompt)
 - `server` - VPS/server (can enable domain setup with Caddy + TLS + login)
 - `docker` - running inside containerized environment (no domain setup by default)
 - `cloudflare` - edge/tunnel/fronted setup (no domain setup by default)
-- `auto` - default, detects environment
+- `auto` - default, detects environment (local/laptop is blocked)
 
 ## Mode behavior details
 
-- `local`
-  - Intended for native laptop/desktop OpenClaw install.
-  - Domain setup is skipped unless explicitly forced.
-  - Good default for macOS local usage.
 - `server`
   - Intended for VPS/bare metal.
   - Domain setup can be enabled interactively or via `--domain ...`.
@@ -29,9 +24,10 @@ Installer supports environment-aware modes:
 
 ## Examples
 
-Local native install:
+VPS first (recommended for solo founders):
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- --mode local
+# Get VPS guidance / free powerful server options:
+# https://dzzen.com/dzzenos/openclaw
 ```
 
 Server with domain setup:

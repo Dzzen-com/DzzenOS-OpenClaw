@@ -16,6 +16,12 @@ type Args = {
   json: boolean;
 };
 
+function parseBusyTimeoutMs(raw: string | undefined): number {
+  const n = Number(raw ?? '');
+  if (!Number.isFinite(n) || n < 0) return 5000;
+  return Math.floor(n);
+}
+
 function parseArgs(argv: string[]): Args {
   const cmdRaw = String(argv[0] ?? '').trim();
   if (cmdRaw !== 'create' && cmdRaw !== 'list' && cmdRaw !== 'restore') {
@@ -76,6 +82,7 @@ function normalizeName(name: string): string {
 function assertDbIntegrity(dbPath: string) {
   const db = new DatabaseSync(dbPath);
   try {
+    db.exec(`PRAGMA busy_timeout = ${parseBusyTimeoutMs(process.env.DZZENOS_SQLITE_BUSY_TIMEOUT_MS)};`);
     const rows = db.prepare('PRAGMA integrity_check;').all() as any[];
     const issues = rows
       .map((row) => String(Object.values(row ?? {})[0] ?? '').trim())
@@ -94,6 +101,7 @@ function createBackup(dbPath: string, backupDir: string, nameArg?: string): stri
   }
   const db = new DatabaseSync(dbPath);
   try {
+    db.exec(`PRAGMA busy_timeout = ${parseBusyTimeoutMs(process.env.DZZENOS_SQLITE_BUSY_TIMEOUT_MS)};`);
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const name = normalizeName(nameArg ?? 'manual') || 'manual';
     const backupPath = path.join(
