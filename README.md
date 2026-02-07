@@ -195,3 +195,7 @@ This project is **source-available** under the **Business Source License 1.1 (BU
 - For companies ≥ $1M revenue and/or prohibited use-cases (hosted/managed service, resale/rebrand), a commercial license is required.
 
 See: [LICENSE](LICENSE), [Docs/licensing.md](Docs/licensing.md), [Docs/licensing/ADDITIONAL-GRANT.md](Docs/licensing/ADDITIONAL-GRANT.md), and [TRADEMARKS.md](TRADEMARKS.md).
+
+---
+
+[![DigitalOcean Referral Badge](https://web-platforms.sfo2.cdn.digitaloceanspaces.com/WWW/Badge%201.svg)](https://www.digitalocean.com/?refcode=698bd7ec98f7&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge)
