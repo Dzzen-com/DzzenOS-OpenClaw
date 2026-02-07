@@ -11,17 +11,19 @@ import { useTranslation } from 'react-i18next';
 
 export function TaskAgent({
   taskId,
+  boardId: _boardId,
   lastRunStatus,
   onOpenAgents,
 }: {
   taskId: string;
+  boardId?: string;
   lastRunStatus: string | null;
   onOpenAgents?: () => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
 
-  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => listAgents() });
   const sessionQ = useQuery({
     queryKey: ['task-session', taskId],
     queryFn: () => getTaskSession(taskId),

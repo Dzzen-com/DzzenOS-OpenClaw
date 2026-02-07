@@ -21,6 +21,11 @@ import type {
   OrchestrationPreview,
   Section,
   Board,
+  BoardAgentSettings,
+  WorkspaceAgentSettings,
+  AgentHeartbeatSettings,
+  WorkspaceStandupSettings,
+  OpenClawCronJobList,
   DocContent,
   MemoryDoc,
   MemoryIndexStatus,
@@ -35,6 +40,20 @@ import type {
   SubAgentLink,
   TaskSession,
 } from './types';
+
+type AgentScopeInput = {
+  workspaceId?: string | null;
+  boardId?: string | null;
+};
+
+function withAgentScope(path: string, scope?: AgentScopeInput): string {
+  if (!scope?.workspaceId && !scope?.boardId) return path;
+  const qs = new URLSearchParams();
+  if (scope.workspaceId) qs.set('workspaceId', scope.workspaceId);
+  if (scope.boardId) qs.set('boardId', scope.boardId);
+  const s = qs.toString();
+  return s ? `${path}?${s}` : path;
+}
 
 export function listProjects(input?: { archived?: 'active' | 'only' | 'all' }): Promise<Project[]> {
   const qs = new URLSearchParams();
@@ -209,6 +228,145 @@ export function deleteBoard(id: string): Promise<{ ok: boolean }> {
   return apiFetch(`/boards/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
+}
+
+export function getBoardAgentSettings(boardId: string): Promise<BoardAgentSettings> {
+  return apiFetch(`/boards/${encodeURIComponent(boardId)}/agent-settings`);
+}
+
+export function upsertBoardAgentSettings(
+  boardId: string,
+  input: {
+    preferred_agent_id?: string | null;
+    skills?: string[];
+    prompt_overrides?: Record<string, string | undefined>;
+    policy?: Record<string, unknown>;
+    memory_path?: string | null;
+    auto_delegate?: boolean;
+    sub_agents?: Array<{
+      key: string;
+      label?: string;
+      agent_id?: string | null;
+      openclaw_agent_id?: string | null;
+      role_prompt?: string | null;
+      model?: string | null;
+      enabled?: boolean;
+    }>;
+  }
+): Promise<BoardAgentSettings> {
+  return apiFetch(`/boards/${encodeURIComponent(boardId)}/agent-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function getWorkspaceAgentSettings(workspaceId: string): Promise<WorkspaceAgentSettings> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/agent-settings`);
+}
+
+export function upsertWorkspaceAgentSettings(
+  workspaceId: string,
+  input: {
+    preferred_agent_id?: string | null;
+    skills?: string[];
+    prompt_overrides?: Record<string, string | undefined>;
+    policy?: Record<string, unknown>;
+    memory_path?: string | null;
+    auto_delegate?: boolean;
+    sub_agents?: Array<{
+      key: string;
+      label?: string;
+      agent_id?: string | null;
+      openclaw_agent_id?: string | null;
+      role_prompt?: string | null;
+      model?: string | null;
+      enabled?: boolean;
+    }>;
+  }
+): Promise<WorkspaceAgentSettings> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/agent-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function listOpenClawCronJobs(input?: { all?: boolean }): Promise<OpenClawCronJobList> {
+  const qs = new URLSearchParams();
+  if (input?.all) qs.set('all', '1');
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/openclaw/cron/jobs${suf}`);
+}
+
+export function getOpenClawCronStatus(): Promise<any> {
+  return apiFetch('/openclaw/cron/status');
+}
+
+export function runOpenClawCronJob(jobId: string, input?: { mode?: 'force' | 'due' }): Promise<any> {
+  return apiFetch(`/openclaw/cron/jobs/${encodeURIComponent(jobId)}/run`, {
+    method: 'POST',
+    body: JSON.stringify({ mode: input?.mode ?? 'force' }),
+  });
+}
+
+export function listOpenClawCronRuns(jobId: string, input?: { limit?: number }): Promise<any> {
+  const qs = new URLSearchParams();
+  if (input?.limit != null) qs.set('limit', String(input.limit));
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/openclaw/cron/jobs/${encodeURIComponent(jobId)}/runs${suf}`);
+}
+
+export function deleteOpenClawCronJob(jobId: string): Promise<any> {
+  return apiFetch(`/openclaw/cron/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
+}
+
+export function getAgentHeartbeatSettings(agentId: string): Promise<AgentHeartbeatSettings> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/heartbeat-settings`);
+}
+
+export function upsertAgentHeartbeatSettings(
+  agentId: string,
+  input: {
+    enabled?: boolean;
+    interval_minutes?: number;
+    offset_minutes?: number;
+    mode?: 'isolated' | 'main';
+    message?: string;
+    model?: string | null;
+    sync?: boolean;
+  }
+): Promise<AgentHeartbeatSettings> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/heartbeat-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function runAgentHeartbeatNow(agentId: string): Promise<{ run: unknown; settings: AgentHeartbeatSettings }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/heartbeat-run`, { method: 'POST' });
+}
+
+export function getWorkspaceStandupSettings(workspaceId: string): Promise<WorkspaceStandupSettings> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/standup-settings`);
+}
+
+export function upsertWorkspaceStandupSettings(
+  workspaceId: string,
+  input: {
+    enabled?: boolean;
+    time_utc?: string;
+    prompt?: string | null;
+    model?: string | null;
+    sync?: boolean;
+  }
+): Promise<WorkspaceStandupSettings> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/standup-settings`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+}
+
+export function runWorkspaceStandupNow(workspaceId: string): Promise<{ run: unknown; settings: WorkspaceStandupSettings }> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/standup-run`, { method: 'POST' });
 }
 
 export function listTasks(
@@ -433,12 +591,12 @@ export function runAutomation(id: string): Promise<{ runId: string }> {
 }
 
 // --- Agents ---
-export function listAgents(): Promise<Agent[]> {
-  return apiFetch('/agents');
+export function listAgents(scope?: AgentScopeInput): Promise<Agent[]> {
+  return apiFetch(withAgentScope('/agents', scope));
 }
 
-export function updateAgents(input: Agent[]): Promise<Agent[]> {
-  return apiFetch('/agents', {
+export function updateAgents(input: Agent[], scope?: AgentScopeInput): Promise<Agent[]> {
+  return apiFetch(withAgentScope('/agents', scope), {
     method: 'PUT',
     body: JSON.stringify(input),
   });
@@ -449,7 +607,16 @@ export function createAgent(
     Partial<
       Pick<
         Agent,
-        'emoji' | 'enabled' | 'role' | 'description' | 'category' | 'tags' | 'skills' | 'prompt_overrides' | 'sort_order'
+        | 'emoji'
+        | 'enabled'
+        | 'role'
+        | 'description'
+        | 'category'
+        | 'tags'
+        | 'skills'
+        | 'prompt_overrides'
+        | 'sort_order'
+        | 'workspace_id'
       >
     >
 ): Promise<Agent> {
@@ -476,9 +643,10 @@ export function patchAgent(
       | 'prompt_overrides'
       | 'sort_order'
     >
-  >
+  >,
+  scope?: AgentScopeInput
 ): Promise<Agent> {
-  return apiFetch(`/agents/${encodeURIComponent(id)}`, {
+  return apiFetch(withAgentScope(`/agents/${encodeURIComponent(id)}`, scope), {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
@@ -523,25 +691,25 @@ export function getOrchestrationPreview(agentId: string): Promise<OrchestrationP
   return apiFetch(`/agents/${encodeURIComponent(agentId)}/orchestration/preview`);
 }
 
-export function resetAgent(id: string): Promise<Agent> {
-  return apiFetch(`/agents/${encodeURIComponent(id)}/reset`, { method: 'POST' });
+export function resetAgent(id: string, scope?: AgentScopeInput): Promise<Agent> {
+  return apiFetch(withAgentScope(`/agents/${encodeURIComponent(id)}/reset`, scope), { method: 'POST' });
 }
 
-export function duplicateAgent(id: string): Promise<{ id: string }> {
-  return apiFetch(`/agents/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
+export function duplicateAgent(id: string, scope?: AgentScopeInput): Promise<{ id: string }> {
+  return apiFetch(withAgentScope(`/agents/${encodeURIComponent(id)}/duplicate`, scope), { method: 'POST' });
 }
 
-export function deleteAgent(id: string): Promise<{ ok: boolean }> {
-  return apiFetch(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export function deleteAgent(id: string, scope?: AgentScopeInput): Promise<{ ok: boolean }> {
+  return apiFetch(withAgentScope(`/agents/${encodeURIComponent(id)}`, scope), { method: 'DELETE' });
 }
 
 // --- Marketplace (embedded) ---
-export function listMarketplaceAgents(): Promise<MarketplaceAgent[]> {
-  return apiFetch('/marketplace/agents');
+export function listMarketplaceAgents(scope?: AgentScopeInput): Promise<MarketplaceAgent[]> {
+  return apiFetch(withAgentScope('/marketplace/agents', scope));
 }
 
-export function installMarketplaceAgent(presetKey: string): Promise<{ id: string }> {
-  return apiFetch(`/marketplace/agents/${encodeURIComponent(presetKey)}/install`, { method: 'POST' });
+export function installMarketplaceAgent(presetKey: string, scope?: AgentScopeInput): Promise<{ id: string }> {
+  return apiFetch(withAgentScope(`/marketplace/agents/${encodeURIComponent(presetKey)}/install`, scope), { method: 'POST' });
 }
 
 // --- Skills ---

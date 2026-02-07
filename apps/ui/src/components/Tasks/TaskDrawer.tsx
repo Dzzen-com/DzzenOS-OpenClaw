@@ -429,6 +429,7 @@ export function TaskDrawer({
                   {task?.id ? (
                     <TaskAgent
                       taskId={task.id}
+                      boardId={task.board_id}
                       lastRunStatus={runsQ.data?.[0]?.status ?? null}
                       onOpenAgents={onOpenAgents}
                     />

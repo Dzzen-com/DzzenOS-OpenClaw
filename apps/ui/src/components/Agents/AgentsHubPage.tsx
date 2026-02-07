@@ -47,7 +47,7 @@ export function AgentsHubPage({
   onSelectTab: (tab: AgentsTab) => void;
 }) {
   const { t } = useTranslation();
-  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => listAgents() });
 
   const tabs: AgentsTab[] = ['overview', 'models', 'profiles', 'subagents', 'skills', 'orchestration'];
 
@@ -95,7 +95,7 @@ function AgentsOrchestrationEditor({
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => listAgents() });
   const agents = agentsQ.data ?? [];
   const [agentId, setAgentId] = useState<string>('');
 

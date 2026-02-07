@@ -209,6 +209,7 @@ export function AgentDrawer({
 
   const canReset = Boolean(agent?.preset_key);
   const canDelete = Boolean(agent && !agent.preset_key);
+  const agentScope = agent?.workspace_id ? { workspaceId: agent.workspace_id } : undefined;
 
   const dirtyPayload = useMemo(
     () => ({
@@ -237,7 +238,7 @@ export function AgentDrawer({
       if (isCreate) {
         return createAgent(dirtyPayload);
       }
-      return patchAgent(agent.id, dirtyPayload);
+      return patchAgent(agent.id, dirtyPayload, agentScope);
     },
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['agents'] });
@@ -247,7 +248,7 @@ export function AgentDrawer({
   });
 
   const resetM = useMutation({
-    mutationFn: async () => resetAgent(agent!.id),
+    mutationFn: async () => resetAgent(agent!.id, agentScope),
     onSuccess: async (a) => {
       await qc.invalidateQueries({ queryKey: ['agents'] });
       await qc.invalidateQueries({ queryKey: ['marketplace-agents'] });
@@ -265,7 +266,7 @@ export function AgentDrawer({
   });
 
   const duplicateM = useMutation({
-    mutationFn: async () => duplicateAgent(agent!.id),
+    mutationFn: async () => duplicateAgent(agent!.id, agentScope),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['agents'] });
       await qc.invalidateQueries({ queryKey: ['marketplace-agents'] });
@@ -273,7 +274,7 @@ export function AgentDrawer({
   });
 
   const deleteM = useMutation({
-    mutationFn: async () => deleteAgent(agent!.id),
+    mutationFn: async () => deleteAgent(agent!.id, agentScope),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['agents'] });
       await qc.invalidateQueries({ queryKey: ['marketplace-agents'] });

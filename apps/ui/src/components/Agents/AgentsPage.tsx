@@ -126,8 +126,8 @@ export function AgentsPage() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [search, category]);
 
-  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
-  const marketplaceQ = useQuery({ queryKey: ['marketplace-agents'], queryFn: listMarketplaceAgents });
+  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => listAgents() });
+  const marketplaceQ = useQuery({ queryKey: ['marketplace-agents'], queryFn: () => listMarketplaceAgents() });
 
   const toggleEnabledM = useMutation({
     mutationFn: async (vars: { id: string; enabled: boolean }) => patchAgent(vars.id, { enabled: vars.enabled }),

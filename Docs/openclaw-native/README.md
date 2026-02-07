@@ -10,3 +10,13 @@ Path note:
 
 Recommended reading order:
 - `spec/INDEX.md`
+
+Implementation notes:
+- `PROJECT-AGENT-ARCHITECTURE.md`
+
+OpenClaw cron integration notes:
+- DzzenOS does not run its own scheduler for heartbeat/standup.
+- Use OpenClaw CLI as runtime bridge (`openclaw cron ...`).
+- Optional env overrides for API:
+  - `DZZENOS_OPENCLAW_BIN` (default: `openclaw`)
+  - `DZZENOS_OPENCLAW_ARGS` (extra args, e.g. `-y openclaw@latest`)

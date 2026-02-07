@@ -29,6 +29,87 @@ export type Section = {
 // Legacy alias for gradual migration of components.
 export type Board = Section;
 
+export type BoardAgentSubAgent = {
+  key: string;
+  label: string;
+  agent_id: string | null;
+  openclaw_agent_id: string | null;
+  role_prompt: string | null;
+  model: string | null;
+  enabled: boolean;
+};
+
+export type BoardAgentSettings = {
+  board_id: string;
+  workspace_id?: string;
+  preferred_agent_id: string | null;
+  preferred_agent_display_name?: string | null;
+  preferred_agent_openclaw_id?: string | null;
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  policy: Record<string, unknown>;
+  memory_path: string | null;
+  auto_delegate: boolean;
+  sub_agents: BoardAgentSubAgent[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type WorkspaceAgentSettings = {
+  workspace_id: string;
+  preferred_agent_id: string | null;
+  preferred_agent_display_name?: string | null;
+  preferred_agent_openclaw_id?: string | null;
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  policy: Record<string, unknown>;
+  memory_path: string | null;
+  auto_delegate: boolean;
+  sub_agents: BoardAgentSubAgent[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentHeartbeatSettings = {
+  agent_id: string;
+  workspace_id: string;
+  enabled: boolean;
+  interval_minutes: number;
+  offset_minutes: number;
+  mode: 'isolated' | 'main';
+  message: string;
+  model: string | null;
+  cron_job_id: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  sync_error?: string | null;
+  sync_raw?: unknown;
+};
+
+export type WorkspaceStandupSettings = {
+  workspace_id: string;
+  enabled: boolean;
+  time_utc: string;
+  prompt: string | null;
+  model: string | null;
+  cron_job_id: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  sync_error?: string | null;
+  sync_raw?: unknown;
+};
+
+export type OpenClawCronJobList = {
+  jobs: unknown[];
+  raw: unknown;
+};
+
 export type ProjectStatus = {
   id: string;
   project_id: string;
@@ -153,6 +234,7 @@ export type DocContent = {
 
 export type Agent = {
   id: string;
+  workspace_id?: string | null;
   display_name: string;
   emoji: string | null;
   openclaw_agent_id: string;
