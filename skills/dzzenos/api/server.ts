@@ -533,23 +533,6 @@ function boardAgentSettingsRowToDto(r: any) {
   };
 }
 
-function workspaceAgentSettingsRowToDto(r: any) {
-  return {
-    workspace_id: String(r.workspace_id),
-    preferred_agent_id: r.preferred_agent_id ?? null,
-    skills: parseStringArrayJson(r.skills_json),
-    prompt_overrides: parsePromptOverridesJson(r.prompt_overrides_json),
-    policy: parseJsonObject(r.policy_json),
-    memory_path: r.memory_path ?? null,
-    auto_delegate: Boolean(r.auto_delegate),
-    sub_agents: parseSubAgentsJson(r.sub_agents_json),
-    created_at: String(r.created_at ?? ''),
-    updated_at: String(r.updated_at ?? ''),
-    preferred_agent_display_name: r.preferred_agent_display_name ?? null,
-    preferred_agent_openclaw_id: r.preferred_agent_openclaw_id ?? null,
-  };
-}
-
 function getDefaultBoardId(db: DatabaseSync): string | null {
   const row = rowOrNull<{ id: string }>(
     db.prepare('SELECT id FROM boards ORDER BY position ASC, created_at ASC LIMIT 1').all() as any
