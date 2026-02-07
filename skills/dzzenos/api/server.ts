@@ -870,10 +870,6 @@ function main() {
     appendTextFile(sectionMemoryPath(params.sectionId), changeEntry);
   }
 
-  function appendBoardSummary(params: { boardId: string; title: string; summary: string }) {
-    appendSectionSummary({ sectionId: params.boardId, title: params.title, summary: params.summary });
-  }
-
   const args = parseArgs(process.argv.slice(2));
 
   const migrationsDir = path.resolve(
