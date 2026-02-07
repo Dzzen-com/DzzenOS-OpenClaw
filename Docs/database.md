@@ -30,6 +30,40 @@ Overrides:
 
 When moving from old installs (`./data/dzzenos.db`), DzzenOS performs a one-time automatic legacy DB move when using the new default path.
 
+## Runtime SQLite tuning
+
+DzzenOS API enables WAL mode and applies conservative runtime pragmas for better concurrency and responsiveness:
+
+- `busy_timeout` (default: `5000` ms)
+- `synchronous` (default: `NORMAL`)
+- `temp_store=MEMORY`
+
+Optional env overrides:
+
+- `DZZENOS_SQLITE_BUSY_TIMEOUT_MS=8000`
+- `DZZENOS_SQLITE_SYNCHRONOUS=OFF|NORMAL|FULL`
+
+### Pagination defaults
+
+To avoid large payloads on growing history tables:
+
+- `GET /runs` default page size: `DZZENOS_RUNS_PAGE_SIZE` (default `100`, max `500`)
+- `GET /tasks/:id/runs` default page size: `DZZENOS_TASK_RUNS_PAGE_SIZE` (default `50`, max `200`)
+- `GET /tasks/:id/chat` default page size: `DZZENOS_CHAT_PAGE_SIZE` (default `200`, max `1000`)
+
+All endpoints above support `?before=<ISO timestamp>&limit=<n>`.
+
+### Retention defaults
+
+DzzenOS runs periodic cleanup to keep SQLite size predictable:
+
+- `DZZENOS_RETENTION_TASK_MESSAGES_PER_TASK` (default `2000`)
+- `DZZENOS_RETENTION_RUNS_PER_TASK` (default `300`)
+- `DZZENOS_RETENTION_RUNS_MAX_AGE_DAYS` (default `90`)
+- `DZZENOS_RETENTION_CLEANUP_INTERVAL_SECONDS` (default `900`)
+
+Set any of these to `0` to disable that specific rule.
+
 ## Migrations
 
 Migrations are plain SQL files in:

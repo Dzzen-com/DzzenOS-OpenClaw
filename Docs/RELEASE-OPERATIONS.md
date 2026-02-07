@@ -16,6 +16,17 @@ Default flow:
 6. Activate new release and write release metadata files.
 7. Install deps, build UI, publish to OpenClaw Canvas.
 
+Preflight includes OpenClaw detection. If OpenClaw is missing, installer exits with:
+
+- docs link: `https://docs.openclaw.ai/start/getting-started`
+- install command: `curl -fsSL https://openclaw.ai/install.sh | bash`
+
+Local/laptop install mode is disabled. Installer requires server-like deployment for always-on operation.
+
+VPS guidance:
+
+- `https://dzzen.com/dzzenos/openclaw`
+
 Release metadata files:
 
 - `<install-dir>/.dzzenos-release-tag`
@@ -26,6 +37,12 @@ Release metadata files:
 ## Installer commands
 
 Install/update latest:
+
+```bash
+curl -fsSL https://dzzen.com/dzzenos-openclaw-install.sh | bash
+```
+
+Fallback:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
@@ -84,6 +101,7 @@ Legacy data migration:
 
 - Old DB path (`./data/dzzenos.db`) is moved once to new default location when applicable.
 - Old workspace dir (`./data/workspace`) is moved once to new default location when applicable.
+- During release activation, installer also carries legacy `./data` forward into the new payload (before snapshot swap), so upgrades do not lose old repo-local data.
 
 ## Backup and restore operations
 

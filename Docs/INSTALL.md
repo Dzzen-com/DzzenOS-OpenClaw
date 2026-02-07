@@ -14,8 +14,30 @@ Under the hood each run performs:
 
 ## Quick install/update
 
+Prerequisite: OpenClaw must already be installed on the target host.
+
+OpenClaw docs: https://docs.openclaw.ai/start/getting-started
+
+Typical install command:
+```bash
+curl -fsSL https://openclaw.ai/install.sh | bash
+```
+
+Then install/update DzzenOS:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash
+```
+
+Local/laptop install mode is intentionally disabled.
+Use a VPS for always-on autonomous operation:
+
+- https://dzzen.com/dzzenos/openclaw
+
+Branded one-liner (if you publish the wrapper at this URL):
+
+```bash
+curl -fsSL https://dzzen.com/dzzenos-openclaw-install.sh | bash
 ```
 
 ## Pin exact version
@@ -60,7 +82,7 @@ ssh -N -L 18789:127.0.0.1:18789 root@<server-ip>
 
 ## Useful flags
 
-- `--mode auto|local|server|docker|cloudflare`
+- `--mode auto|server|docker|cloudflare` (`local` is disabled)
 - `--ui-profile local|domain`
 - `--domain <example.com>`
 - `--domain-email <mail>`
@@ -98,6 +120,25 @@ bash ~/dzzenos-openclaw/scripts/dzzenos-admin.sh db backup restore --file <backu
 Important:
 - DzzenOS DB and workspace files are stored in OS data directories, not in OpenClaw state dir by default.
 - In server/domain mode, `DZZENOS_DATA_DIR` defaults to `/var/lib/dzzenos-openclaw`.
+
+## Branded installer URL
+
+To support:
+
+```bash
+curl -fsSL https://dzzen.com/dzzenos-openclaw-install.sh | bash
+```
+
+publish a script at `https://dzzen.com/dzzenos-openclaw-install.sh` that forwards to this repo installer:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+curl -fsSL https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh | bash -s -- "$@"
+```
+
+Equivalent option: configure `dzzen.com/dzzenos-openclaw-install.sh` as HTTP redirect/proxy to:
+- `https://raw.githubusercontent.com/Dzzen-com/DzzenOS-OpenClaw/main/scripts/install.sh`
 
 ## Related docs
 

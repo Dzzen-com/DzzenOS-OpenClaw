@@ -32,7 +32,7 @@ JSON_MODE=0
 ROLLBACK_ONLY=0
 ASSUME_YES=0
 REQUESTED_VERSION="${DZZENOS_VERSION:-}"
-INSTALL_MODE="${INSTALL_MODE:-auto}" # auto|local|server|docker|cloudflare
+INSTALL_MODE="${INSTALL_MODE:-auto}" # auto|server|docker|cloudflare
 UI_PROFILE="${DZZENOS_UI_PROFILE:-}"  # local|domain
 SETUP_DOMAIN_OVERRIDE="" # yes|no|""
 
@@ -117,7 +117,7 @@ DzzenOS installer
 Options:
   --version <tag>        Install/update a specific GitHub release tag (default: latest release)
   --rollback             Roll back to latest rollback snapshot
-  --mode <mode>          auto|local|server|docker|cloudflare
+  --mode <mode>          auto|server|docker|cloudflare (local disabled)
   --ui-profile <value>   local|domain (build routing profile)
   --domain <name>        Enable/setup domain mode (server mode)
   --domain-email <mail>  Email for TLS cert (optional)
@@ -197,6 +197,27 @@ check_node_version() {
   fi
 }
 
+check_openclaw_installed() {
+  if command -v openclaw >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -f "$OPENCLAW_CONFIG_PATH" ]; then
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+OpenClaw was not detected on this server.
+Install OpenClaw first, then run DzzenOS installer again.
+
+Docs:
+  https://docs.openclaw.ai/start/getting-started
+
+Install command:
+  curl -fsSL https://openclaw.ai/install.sh | bash
+EOF
+  exit 1
+}
+
 read_current_version() {
   if [ -f "$INSTALL_DIR/.dzzenos-release-tag" ]; then
     cat "$INSTALL_DIR/.dzzenos-release-tag"
@@ -207,9 +228,12 @@ read_current_version() {
 
 detect_mode() {
   case "$INSTALL_MODE" in
-    local|server|docker|cloudflare)
+    server|docker|cloudflare)
       echo "$INSTALL_MODE"
       return
+      ;;
+    local)
+      die "Local mode is disabled. Use a VPS/server for always-on autonomous operation. Guide: https://dzzen.com/dzzenos/openclaw"
       ;;
     auto)
       ;;
@@ -241,6 +265,20 @@ detect_mode() {
       echo "server"
       ;;
   esac
+}
+
+require_non_local_mode() {
+  local mode="$1"
+  if [ "$mode" = "local" ]; then
+    cat >&2 <<'EOF'
+Local/laptop install mode is disabled for DzzenOS platform.
+Reason: DzzenOS is intended for always-on autonomous operation on a server.
+
+Get a VPS and setup guidance:
+  https://dzzen.com/dzzenos/openclaw
+EOF
+    exit 1
+  fi
 }
 
 warn_if_gateway_public() {
@@ -354,6 +392,35 @@ apply_release_from_tarball() {
   local current_before
   current_before=""
   if [ -d "$INSTALL_DIR" ]; then
+    local legacy_data_dir="$INSTALL_DIR/data"
+    local legacy_db="$legacy_data_dir/dzzenos.db"
+    local legacy_workspace="$legacy_data_dir/workspace"
+    local next_legacy_data_dir="$extract_dir/data"
+    local next_legacy_db="$next_legacy_data_dir/dzzenos.db"
+    local next_legacy_workspace="$next_legacy_data_dir/workspace"
+    local carried_legacy_data=0
+
+    if [ -f "$legacy_db" ] && [ ! -f "$next_legacy_db" ]; then
+      ensure_dir "$next_legacy_data_dir"
+      cp -f "$legacy_db" "$next_legacy_db"
+      for suffix in -wal -shm; do
+        local legacy_aux="${legacy_db}${suffix}"
+        [ -f "$legacy_aux" ] || continue
+        cp -f "$legacy_aux" "${next_legacy_db}${suffix}"
+      done
+      carried_legacy_data=1
+    fi
+
+    if [ -d "$legacy_workspace" ] && [ ! -d "$next_legacy_workspace" ]; then
+      ensure_dir "$next_legacy_data_dir"
+      cp -R "$legacy_workspace" "$next_legacy_workspace"
+      carried_legacy_data=1
+    fi
+
+    if [ "$carried_legacy_data" -eq 1 ]; then
+      warn "Detected legacy repo data in $legacy_data_dir; carried it forward into the new release payload to prevent upgrade data loss."
+    fi
+
     current_before="$(read_current_version)"
     local snap="$ROLLBACKS_DIR/$(timestamp_utc)_${current_before}"
     ensure_dir "$ROLLBACKS_DIR"
@@ -621,11 +688,13 @@ main() {
   need_cmd node
   need_cmd corepack
   check_node_version
+  check_openclaw_installed
   ensure_dir "$STATE_DIR"
   ensure_dir "$ROLLBACKS_DIR"
   ok "Environment checks passed"
 
   APPLIED_MODE="$(detect_mode)"
+  require_non_local_mode "$APPLIED_MODE"
   if [ "$JSON_MODE" -eq 0 ]; then
     info "detected mode: $APPLIED_MODE"
   fi
