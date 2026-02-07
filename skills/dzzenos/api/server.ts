@@ -646,7 +646,15 @@ function agentRowToDto(r: any) {
 
 function getDefaultProjectId(db: DatabaseSync): string | null {
   const row = rowOrNull<{ id: string }>(
-    db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any
+    db
+      .prepare(
+        `SELECT id
+           FROM workspaces
+          WHERE COALESCE(is_archived, 0) = 0
+          ORDER BY position ASC, created_at ASC
+          LIMIT 1`
+      )
+      .all() as any
   );
   return row?.id ?? null;
 }
@@ -2344,7 +2352,7 @@ const server = http.createServer(async (req, res) => {
         const a = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM automations WHERE id = ?').all(id) as any);
         if (!a) return sendJson(res, 404, { error: 'Automation not found' }, corsHeaders);
 
-        const workspaceId = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any)?.id;
+        const workspaceId = getDefaultProjectId(db);
         if (!workspaceId) return sendJson(res, 400, { error: 'No workspace exists' }, corsHeaders);
 
         const runId = randomUUID();
@@ -3256,7 +3264,19 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && url.pathname === '/memory/scopes') {
         const projects = db
-          .prepare('SELECT id, name, description, created_at, updated_at FROM workspaces ORDER BY created_at ASC')
+          .prepare(
+            `SELECT
+               id,
+               name,
+               description,
+               position,
+               COALESCE(is_archived, 0) as is_archived,
+               archived_at,
+               created_at,
+               updated_at
+             FROM workspaces
+             ORDER BY COALESCE(is_archived, 0) ASC, position ASC, created_at ASC`
+          )
           .all();
         const sections = db
           .prepare(
@@ -3440,21 +3460,34 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && url.pathname === '/navigation/projects-tree') {
         const projectIdFilter = normalizeString(url.searchParams.get('projectId') ?? '');
+        const includeArchived = normalizeString(url.searchParams.get('includeArchived')) === '1';
         const limitRaw = Number(url.searchParams.get('limitPerSection') ?? '');
         const limitPerSection = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(20, Math.max(1, Math.floor(limitRaw))) : 5;
+        const where: string[] = [];
+        const params: any[] = [];
+        if (projectIdFilter) {
+          where.push('w.id = ?');
+          params.push(projectIdFilter);
+        }
+        if (!includeArchived) {
+          where.push('COALESCE(w.is_archived, 0) = 0');
+        }
         const projectRows = db
           .prepare(
             `SELECT
                w.id,
                w.name,
                w.description,
+               w.position,
+               COALESCE(w.is_archived, 0) as is_archived,
+               w.archived_at,
                w.created_at,
                w.updated_at
              FROM workspaces w
-             ${projectIdFilter ? 'WHERE w.id = ?' : ''}
-             ORDER BY w.created_at ASC`
+             ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY COALESCE(w.is_archived, 0) ASC, w.position ASC, w.created_at ASC`
           )
-          .all(...(projectIdFilter ? [projectIdFilter] : [])) as any[];
+          .all(...params) as any[];
 
         const projects = projectRows.map((p) => {
           const counters = rowOrNull<any>(
@@ -3467,6 +3500,26 @@ const server = http.createServer(async (req, res) => {
                  FROM tasks t
                  JOIN boards b ON b.id = t.board_id
                  WHERE COALESCE(t.workspace_id, b.workspace_id) = ?`
+              )
+              .all(p.id) as any
+          );
+          const needsUserCounter = rowOrNull<any>(
+            db
+              .prepare(
+                `SELECT COUNT(DISTINCT t.id) as c
+                   FROM tasks t
+                   JOIN boards b ON b.id = t.board_id
+                  WHERE COALESCE(t.workspace_id, b.workspace_id) = ?
+                    AND (
+                      t.status = 'review'
+                      OR EXISTS (
+                        SELECT 1
+                          FROM approvals ap
+                          JOIN agent_runs ar ON ar.id = ap.run_id
+                         WHERE ap.status = 'pending'
+                           AND ar.task_id = t.id
+                      )
+                    )`
               )
               .all(p.id) as any
           );
@@ -3510,14 +3563,79 @@ const server = http.createServer(async (req, res) => {
               tasks,
             };
           });
+          const inProgressTasks = db
+            .prepare(
+              `SELECT
+                 t.id,
+                 t.board_id as section_id,
+                 t.board_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                 t.title,
+                 t.status,
+                 t.updated_at,
+                 0 as pending_approval
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE COALESCE(t.workspace_id, b.workspace_id) = ?
+                AND t.status = 'doing'
+              ORDER BY t.updated_at DESC
+              LIMIT ?`
+            )
+            .all(p.id, limitPerSection);
+          const needsUserTasks = db
+            .prepare(
+              `SELECT DISTINCT
+                 t.id,
+                 t.board_id as section_id,
+                 t.board_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                 t.title,
+                 t.status,
+                 t.updated_at,
+                 CASE
+                   WHEN EXISTS (
+                     SELECT 1
+                       FROM approvals ap
+                       JOIN agent_runs ar ON ar.id = ap.run_id
+                      WHERE ap.status = 'pending'
+                        AND ar.task_id = t.id
+                   ) THEN 1
+                   ELSE 0
+                 END as pending_approval
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE COALESCE(t.workspace_id, b.workspace_id) = ?
+                AND (
+                  t.status = 'review'
+                  OR EXISTS (
+                    SELECT 1
+                      FROM approvals ap
+                      JOIN agent_runs ar ON ar.id = ap.run_id
+                     WHERE ap.status = 'pending'
+                       AND ar.task_id = t.id
+                  )
+                )
+              ORDER BY pending_approval DESC, t.updated_at DESC
+              LIMIT ?`
+            )
+            .all(p.id, limitPerSection);
           return {
             ...p,
             counters: {
               total: Number(counters?.total ?? 0),
               doing: Number(counters?.doing ?? 0),
               review: Number(counters?.review ?? 0),
+              needs_user: Number(needsUserCounter?.c ?? 0),
             },
             sections,
+            focus_lists: {
+              in_progress_total: Number(counters?.doing ?? 0),
+              needs_user_total: Number(needsUserCounter?.c ?? 0),
+              in_progress: inProgressTasks,
+              needs_user: needsUserTasks,
+            },
           };
         });
 
@@ -3525,18 +3643,29 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/projects') {
+        const archivedMode = normalizeString(url.searchParams.get('archived'));
+        const where =
+          archivedMode === 'only'
+            ? 'WHERE COALESCE(w.is_archived, 0) = 1'
+            : archivedMode === 'all'
+              ? ''
+              : 'WHERE COALESCE(w.is_archived, 0) = 0';
         const projects = db
           .prepare(
             `SELECT
                w.id,
                w.name,
                w.description,
+               w.position,
+               COALESCE(w.is_archived, 0) as is_archived,
+               w.archived_at,
                w.created_at,
                w.updated_at,
                (SELECT COUNT(*) FROM boards b WHERE b.workspace_id = w.id) as section_count,
                (SELECT COUNT(*) FROM tasks t WHERE COALESCE(t.workspace_id, w.id) = w.id) as task_count
              FROM workspaces w
-             ORDER BY w.created_at ASC`
+             ${where}
+             ORDER BY COALESCE(w.is_archived, 0) ASC, w.position ASC, w.created_at ASC`
           )
           .all();
         return sendJson(res, 200, projects, corsHeaders);
@@ -3549,9 +3678,16 @@ const server = http.createServer(async (req, res) => {
         if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
 
         const projectId = randomUUID();
+        const nextPosition = Number(
+          rowOrNull<{ v: number }>(
+            db.prepare('SELECT COALESCE(MAX(position), -1) as v FROM workspaces WHERE COALESCE(is_archived, 0) = 0').all() as any
+          )?.v ?? -1
+        ) + 1;
         db.exec('BEGIN');
         try {
-          db.prepare('INSERT INTO workspaces(id, name, description) VALUES (?, ?, ?)').run(projectId, name, description);
+          db
+            .prepare('INSERT INTO workspaces(id, name, description, position, is_archived, archived_at) VALUES (?, ?, ?, ?, 0, NULL)')
+            .run(projectId, name, description, nextPosition);
           const insSection = db.prepare(
             'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
           );
@@ -3579,12 +3715,41 @@ const server = http.createServer(async (req, res) => {
         }
 
         const project = rowOrNull<any>(
-          db.prepare('SELECT id, name, description, created_at, updated_at FROM workspaces WHERE id = ?').all(projectId) as any
+          db
+            .prepare(
+              `SELECT id, name, description, position, COALESCE(is_archived, 0) as is_archived, archived_at, created_at, updated_at
+                 FROM workspaces
+                WHERE id = ?`
+            )
+            .all(projectId) as any
         );
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
         sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
         sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
         return sendJson(res, 201, project, corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/projects/reorder') {
+        const body = await readJson(req);
+        const orderedIds = Array.isArray(body?.orderedIds) ? body.orderedIds.map((id: any) => String(id)) : [];
+        if (orderedIds.length === 0) return sendJson(res, 400, { error: 'orderedIds must be a non-empty array' }, corsHeaders);
+
+        db.exec('BEGIN');
+        try {
+          const upd = db.prepare(
+            'UPDATE workspaces SET position = ? WHERE id = ? AND COALESCE(is_archived, 0) = 0'
+          );
+          orderedIds.forEach((id: string, idx: number) => {
+            upd.run(idx, id);
+          });
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        sseBroadcast({ type: 'projects.changed', payload: {} });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       const patchProjectMatch = req.method === 'PATCH' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
@@ -3606,14 +3771,48 @@ const server = http.createServer(async (req, res) => {
           updates.push('description = ?');
           params.push(description);
         }
-        if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update (name/description)' }, corsHeaders);
+        if (body?.position !== undefined) {
+          const position = Number(body.position);
+          if (!Number.isFinite(position)) return sendJson(res, 400, { error: 'position must be a number' }, corsHeaders);
+          updates.push('position = ?');
+          params.push(Math.max(0, Math.floor(position)));
+        }
+        if (body?.isArchived !== undefined || body?.is_archived !== undefined) {
+          const raw = body?.isArchived ?? body?.is_archived;
+          const isArchived =
+            raw === true || raw === 1 || raw === '1' || String(raw).toLowerCase() === 'true';
+          updates.push('is_archived = ?');
+          params.push(isArchived ? 1 : 0);
+          updates.push('archived_at = ?');
+          params.push(isArchived ? new Date().toISOString() : null);
+          if (body?.position === undefined) {
+            const maxRow = rowOrNull<{ v: number }>(
+              db
+                .prepare(
+                  'SELECT COALESCE(MAX(position), -1) as v FROM workspaces WHERE COALESCE(is_archived, 0) = ? AND id <> ?'
+                )
+                .all(isArchived ? 1 : 0, projectId) as any
+            );
+            updates.push('position = ?');
+            params.push(Number(maxRow?.v ?? -1) + 1);
+          }
+        }
+        if (!updates.length) {
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position/isArchived)' }, corsHeaders);
+        }
 
         params.push(projectId);
         const info = db.prepare(`UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`).run(...params);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
 
         const project = rowOrNull<any>(
-          db.prepare('SELECT id, name, description, created_at, updated_at FROM workspaces WHERE id = ?').all(projectId) as any
+          db
+            .prepare(
+              `SELECT id, name, description, position, COALESCE(is_archived, 0) as is_archived, archived_at, created_at, updated_at
+                 FROM workspaces
+                WHERE id = ?`
+            )
+            .all(projectId) as any
         );
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
         return sendJson(res, 200, project, corsHeaders);

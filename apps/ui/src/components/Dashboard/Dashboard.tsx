@@ -40,7 +40,7 @@ export function Dashboard({
 }) {
   const [capture, setCapture] = useState('');
 
-  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: listProjects });
+  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => listProjects({ archived: 'active' }) });
   const sectionsQ = useQuery({
     queryKey: ['sections', projectId, 'dashboard'],
     queryFn: () => {

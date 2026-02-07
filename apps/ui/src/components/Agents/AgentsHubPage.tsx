@@ -10,6 +10,7 @@ import {
   replaceSubagents,
 } from '../../api/queries';
 import { PageHeader } from '../Layout/PageHeader';
+import { VerticalTopMenu } from '../Layout/VerticalTopMenu';
 import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
@@ -75,31 +76,14 @@ export function AgentsHubPage({
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader title={t('Agents')} subtitle={t('Agent profiles, models, skills and sub-agent orchestration.')} />
-      <div className="mt-4 grid gap-4 lg:grid-cols-[220px,1fr]">
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle>{t('Agent menu')}</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-1">
-            {tabs.map((item) => (
-              <button
-                key={item}
-                type="button"
-                onClick={() => onSelectTab(item)}
-                className={
-                  'rounded-md border px-3 py-2 text-left text-sm transition ' +
-                  (item === tab
-                    ? 'border-primary/60 bg-surface-2/80 text-foreground'
-                    : 'border-border/70 bg-surface-1/50 text-muted-foreground hover:bg-surface-2/60')
-                }
-              >
-                {localLabel(item, t)}
-              </button>
-            ))}
-          </CardContent>
-        </Card>
-        <div>{content}</div>
-      </div>
+      <VerticalTopMenu
+        title={t('Agents Menu')}
+        activeKey={tab}
+        onSelect={(key) => onSelectTab(key as AgentsTab)}
+        items={tabs.map((item) => ({ key: item, label: localLabel(item, t) }))}
+        className="mt-4 max-w-[320px]"
+      />
+      <div>{content}</div>
     </div>
   );
 }

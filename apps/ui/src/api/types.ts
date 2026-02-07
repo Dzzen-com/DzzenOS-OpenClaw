@@ -4,6 +4,9 @@ export type Project = {
   id: string;
   name: string;
   description: string | null;
+  position: number;
+  is_archived: number | boolean;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
   section_count?: number;
@@ -45,6 +48,7 @@ export type NavigationTreeTask = {
   workspace_id: string;
   title: string;
   status: TaskStatus;
+  pending_approval?: number | boolean;
   updated_at: string;
 };
 
@@ -62,8 +66,15 @@ export type NavigationTreeProject = Project & {
     total: number;
     doing: number;
     review: number;
+    needs_user: number;
   };
   sections: NavigationTreeSection[];
+  focus_lists: {
+    in_progress_total: number;
+    needs_user_total: number;
+    in_progress: NavigationTreeTask[];
+    needs_user: NavigationTreeTask[];
+  };
 };
 
 export type NavigationTree = {

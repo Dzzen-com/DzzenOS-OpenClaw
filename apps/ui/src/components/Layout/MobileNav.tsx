@@ -1,7 +1,7 @@
 import { StatusDot } from '../ui/StatusDot';
 import { useTranslation } from 'react-i18next';
 
-type PageKey = 'dashboard' | 'agents' | 'memory' | 'projects' | 'docs';
+type PageKey = 'dashboard' | 'agents' | 'projects' | 'docs' | 'settings';
 
 export function MobileNav({
   page,
@@ -14,9 +14,9 @@ export function MobileNav({
   const items: { key: PageKey; label: string }[] = [
     { key: 'dashboard', label: t('Dashboard') },
     { key: 'agents', label: t('Agents') },
-    { key: 'memory', label: t('Memory') },
     { key: 'projects', label: t('Projects') },
     { key: 'docs', label: t('Docs') },
+    { key: 'settings', label: t('Settings') },
   ];
 
   return (

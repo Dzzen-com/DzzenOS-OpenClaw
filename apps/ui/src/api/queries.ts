@@ -36,8 +36,12 @@ import type {
   TaskSession,
 } from './types';
 
-export function listProjects(): Promise<Project[]> {
-  return apiFetch('/projects');
+export function listProjects(input?: { archived?: 'active' | 'only' | 'all' }): Promise<Project[]> {
+  const qs = new URLSearchParams();
+  if (input?.archived === 'only') qs.set('archived', 'only');
+  if (input?.archived === 'all') qs.set('archived', 'all');
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/projects${suffix}`);
 }
 
 export function createProject(input: { name: string; description?: string | null }): Promise<Project> {
@@ -47,10 +51,20 @@ export function createProject(input: { name: string; description?: string | null
   });
 }
 
-export function patchProject(id: string, patch: { name?: string; description?: string | null }): Promise<Project> {
+export function patchProject(
+  id: string,
+  patch: { name?: string; description?: string | null; position?: number; isArchived?: boolean }
+): Promise<Project> {
   return apiFetch(`/projects/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+  });
+}
+
+export function reorderProjects(input: { orderedIds: string[] }): Promise<{ ok: boolean }> {
+  return apiFetch('/projects/reorder', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }
 
@@ -138,10 +152,11 @@ export function patchProjectStatus(
   });
 }
 
-export function getProjectsTree(input?: { projectId?: string; limitPerSection?: number }): Promise<NavigationTree> {
+export function getProjectsTree(input?: { projectId?: string; limitPerSection?: number; includeArchived?: boolean }): Promise<NavigationTree> {
   const qs = new URLSearchParams();
   if (input?.projectId) qs.set('projectId', input.projectId);
   if (input?.limitPerSection != null) qs.set('limitPerSection', String(input.limitPerSection));
+  if (input?.includeArchived) qs.set('includeArchived', '1');
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/navigation/projects-tree${suffix}`);
 }

@@ -28,11 +28,17 @@ function scopeLabel(scope: ScopeKey, t: (s: string) => string) {
   return t('Task Memory');
 }
 
-export function MemoryPage() {
+export function MemoryPage({
+  forcedScope,
+  forcedScopeId,
+}: {
+  forcedScope?: ScopeKey;
+  forcedScopeId?: string | null;
+} = {}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [scope, setScope] = useState<ScopeKey>('overview');
-  const [scopeId, setScopeId] = useState('');
+  const [scope, setScope] = useState<ScopeKey>(forcedScope ?? 'overview');
+  const [scopeId, setScopeId] = useState(forcedScopeId ?? '');
   const [draft, setDraft] = useState('');
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
@@ -87,6 +93,16 @@ export function MemoryPage() {
     setEmbeddingModelId(modelsQ.data?.embedding_model_id ?? '');
   }, [modelsQ.data?.provider_id, modelsQ.data?.model_id, modelsQ.data?.embedding_model_id]);
 
+  useEffect(() => {
+    if (!forcedScope) return;
+    setScope(forcedScope);
+  }, [forcedScope]);
+
+  useEffect(() => {
+    if (forcedScopeId == null) return;
+    setScopeId(forcedScopeId);
+  }, [forcedScopeId]);
+
   const scopeItems = useMemo(() => {
     const scopes = scopesQ.data;
     if (!scopes) return [];
@@ -123,22 +139,29 @@ export function MemoryPage() {
               <CardTitle>{t('Scope')}</CardTitle>
             </CardHeader>
             <CardContent className="grid gap-2">
-              <select
-                className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
-                value={scope}
-                onChange={(e) => setScope(e.target.value as ScopeKey)}
-              >
-                {SCOPE_OPTIONS.map((item) => (
-                  <option key={item} value={item}>
-                    {scopeLabel(item, t)}
-                  </option>
-                ))}
-              </select>
+              {forcedScope ? (
+                <div className="rounded-md border border-border/70 bg-surface-1/50 px-3 py-2 text-sm text-foreground">
+                  {scopeLabel(forcedScope, t)}
+                </div>
+              ) : (
+                <select
+                  className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value as ScopeKey)}
+                >
+                  {SCOPE_OPTIONS.map((item) => (
+                    <option key={item} value={item}>
+                      {scopeLabel(item, t)}
+                    </option>
+                  ))}
+                </select>
+              )}
               {scope !== 'overview' ? (
                 <select
                   className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
                   value={scopeId}
                   onChange={(e) => setScopeId(e.target.value)}
+                  disabled={!!forcedScopeId}
                 >
                   {scopeItems.length ? (
                     scopeItems.map((item) => (

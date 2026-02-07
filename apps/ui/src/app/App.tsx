@@ -13,6 +13,8 @@ import { MemoryPage } from '../components/Docs/MemoryPage';
 import { AgentsHubPage } from '../components/Agents/AgentsHubPage';
 import { ProjectHomePage } from '../components/Projects/ProjectHomePage';
 import { TaskPage } from '../components/Tasks/TaskPage';
+import { ProjectsArchivePage } from '../components/Projects/ProjectsArchivePage';
+import { VerticalTopMenu } from '../components/Layout/VerticalTopMenu';
 
 import type { SectionViewMode, Task } from '../api/types';
 import {
@@ -24,23 +26,27 @@ import {
   listProjects,
   listSections,
   listTasks,
+  patchProject,
   patchTask,
+  reorderProjects,
   reorderTasks,
 } from '../api/queries';
 import { startRealtime } from './realtime';
 
 type AgentsTab = 'overview' | 'models' | 'profiles' | 'subagents' | 'skills' | 'orchestration';
+type SettingsTab = 'archive';
 
 type AppRoute =
   | { main: 'dashboard'; projectId: string | null }
   | { main: 'agents'; tab: AgentsTab }
-  | { main: 'memory' }
   | { main: 'docs' }
+  | { main: 'settings'; tab: SettingsTab }
   | {
       main: 'projects';
       projectId: string | null;
       sectionId: string | null;
       taskId: string | null;
+      memory: boolean;
       mode: SectionViewMode | null;
       legacyAlias: boolean;
     };
@@ -68,16 +74,27 @@ function parseRouteFromLocation(loc: Location | URL): AppRoute {
 
   if (path.startsWith('/agents')) {
     const seg = path.split('/').filter(Boolean)[1];
-    const tab = (AGENTS_TABS.includes(seg as AgentsTab) ? (seg as AgentsTab) : 'overview');
+    const tab = AGENTS_TABS.includes(seg as AgentsTab) ? (seg as AgentsTab) : 'overview';
     return { main: 'agents', tab };
   }
 
-  if (path.startsWith('/memory')) {
-    return { main: 'memory' };
+  if (path === '/docs') return { main: 'docs' };
+
+  if (path.startsWith('/settings')) {
+    const seg = path.split('/').filter(Boolean)[1];
+    return { main: 'settings', tab: seg === 'archive' ? 'archive' : 'archive' };
   }
 
-  if (path.startsWith('/docs')) {
-    return { main: 'docs' };
+  if (path.startsWith('/memory')) {
+    return {
+      main: 'projects',
+      projectId: params.get('projectId'),
+      sectionId: null,
+      taskId: null,
+      memory: true,
+      mode: null,
+      legacyAlias: false,
+    };
   }
 
   if (path.startsWith('/projects') || path.startsWith('/kanban')) {
@@ -90,6 +107,7 @@ function parseRouteFromLocation(loc: Location | URL): AppRoute {
         projectId: params.get('projectId'),
         sectionId: params.get('sectionId') ?? params.get('boardId'),
         taskId: params.get('taskId'),
+        memory: false,
         mode: params.get('mode') === 'threads' ? 'threads' : params.get('mode') === 'kanban' ? 'kanban' : null,
         legacyAlias: true,
       };
@@ -105,6 +123,7 @@ function parseRouteFromLocation(loc: Location | URL): AppRoute {
         projectId,
         sectionId: segments[3] ?? null,
         taskId: null,
+        memory: false,
         mode,
         legacyAlias: false,
       };
@@ -116,6 +135,19 @@ function parseRouteFromLocation(loc: Location | URL): AppRoute {
         projectId,
         sectionId: null,
         taskId: segments[3] ?? null,
+        memory: false,
+        mode,
+        legacyAlias: false,
+      };
+    }
+
+    if (segments[2] === 'memory') {
+      return {
+        main: 'projects',
+        projectId,
+        sectionId: null,
+        taskId: null,
+        memory: true,
         mode,
         legacyAlias: false,
       };
@@ -126,6 +158,7 @@ function parseRouteFromLocation(loc: Location | URL): AppRoute {
       projectId,
       sectionId: null,
       taskId: null,
+      memory: false,
       mode,
       legacyAlias: false,
     };
@@ -142,11 +175,12 @@ function buildRoutePath(route: AppRoute): string {
     return `/dashboard${suffix}`;
   }
   if (route.main === 'agents') return `/agents/${route.tab}`;
-  if (route.main === 'memory') return '/memory';
   if (route.main === 'docs') return '/docs';
+  if (route.main === 'settings') return `/settings/${route.tab}`;
 
   if (!route.projectId) return '/projects';
   if (route.taskId) return `/projects/${encodeURIComponent(route.projectId)}/tasks/${encodeURIComponent(route.taskId)}`;
+  if (route.memory) return `/projects/${encodeURIComponent(route.projectId)}/memory`;
   if (!route.sectionId) return `/projects/${encodeURIComponent(route.projectId)}`;
 
   const qs = new URLSearchParams();
@@ -180,7 +214,7 @@ export function App() {
     setRoute(next);
   };
 
-  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: listProjects });
+  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => listProjects({ archived: 'active' }) });
 
   const fallbackProjectId = projectsQ.data?.[0]?.id ?? null;
   const selectedProjectId = useMemo(() => {
@@ -201,8 +235,7 @@ export function App() {
 
   const selectedSectionId = useMemo(() => {
     if (route.main !== 'projects') return null;
-    if (!route.sectionId) return null;
-    return route.sectionId;
+    return route.sectionId ?? null;
   }, [route]);
 
   const [sectionViewMode, setSectionViewMode] = useState<SectionViewMode>('kanban');
@@ -231,7 +264,12 @@ export function App() {
         viewMode: sectionViewMode,
       });
     },
-    enabled: !!selectedProjectId && !!selectedSectionId && route.main === 'projects' && !route.taskId,
+    enabled:
+      !!selectedProjectId &&
+      !!selectedSectionId &&
+      route.main === 'projects' &&
+      !route.taskId &&
+      !route.memory,
   });
 
   const projectTasksQ = useQuery({
@@ -240,25 +278,19 @@ export function App() {
       if (!selectedProjectId) return Promise.resolve([] as Task[]);
       return listTasks({ projectId: selectedProjectId });
     },
-    enabled: !!selectedProjectId && route.main === 'projects' && !route.sectionId && !route.taskId,
+    enabled: !!selectedProjectId && route.main === 'projects' && !route.sectionId && !route.taskId && !route.memory,
   });
 
   const treeQ = useQuery({
-    queryKey: ['projects-tree', selectedProjectId],
-    queryFn: () => getProjectsTree({ projectId: selectedProjectId ?? undefined, limitPerSection: 5 }),
+    queryKey: ['projects-tree'],
+    queryFn: () => getProjectsTree({ limitPerSection: 5 }),
   });
 
   useEffect(() => {
     if (route.main !== 'projects') return;
 
     if (route.legacyAlias) {
-      navigate(
-        {
-          ...route,
-          legacyAlias: false,
-        },
-        { replace: true }
-      );
+      navigate({ ...route, legacyAlias: false }, { replace: true });
       return;
     }
 
@@ -269,6 +301,7 @@ export function App() {
           projectId: fallbackProjectId,
           sectionId: null,
           taskId: null,
+          memory: false,
           mode: null,
           legacyAlias: false,
         },
@@ -284,7 +317,11 @@ export function App() {
   }, [qc]);
 
   const openProject = (projectId: string) => {
-    navigate({ main: 'projects', projectId, sectionId: null, taskId: null, mode: null, legacyAlias: false });
+    navigate({ main: 'projects', projectId, sectionId: null, taskId: null, memory: false, mode: null, legacyAlias: false });
+  };
+
+  const openProjectMemory = (projectId: string) => {
+    navigate({ main: 'projects', projectId, sectionId: null, taskId: null, memory: true, mode: null, legacyAlias: false });
   };
 
   const openSection = (projectId: string, sectionId: string, mode?: SectionViewMode | null) => {
@@ -294,6 +331,7 @@ export function App() {
       projectId,
       sectionId,
       taskId: null,
+      memory: false,
       mode: nextMode,
       legacyAlias: false,
     });
@@ -305,6 +343,7 @@ export function App() {
       projectId,
       sectionId: null,
       taskId,
+      memory: false,
       mode: null,
       legacyAlias: false,
     });
@@ -316,6 +355,29 @@ export function App() {
       await qc.invalidateQueries({ queryKey: ['projects'] });
       await qc.invalidateQueries({ queryKey: ['projects-tree'] });
       openProject(project.id);
+    },
+  });
+
+  const reorderProjectsM = useMutation({
+    mutationFn: async (orderedIds: string[]) => reorderProjects({ orderedIds }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['projects'] });
+      await qc.invalidateQueries({ queryKey: ['projects-tree'] });
+    },
+  });
+
+  const archiveProjectM = useMutation({
+    mutationFn: async (projectId: string) => patchProject(projectId, { isArchived: true }),
+    onSuccess: async (_, projectId) => {
+      await qc.invalidateQueries({ queryKey: ['projects'] });
+      await qc.invalidateQueries({ queryKey: ['projects-tree'] });
+      if (selectedProjectId === projectId) {
+        if (fallbackProjectId && fallbackProjectId !== projectId) {
+          openProject(fallbackProjectId);
+        } else {
+          navigate({ main: 'dashboard', projectId: null });
+        }
+      }
     },
   });
 
@@ -365,9 +427,25 @@ export function App() {
     () => (projectsQ.data ?? []).find((project) => project.id === selectedProjectId) ?? null,
     [projectsQ.data, selectedProjectId]
   );
+  const firstWorkSectionId = useMemo(
+    () =>
+      (sectionsQ.data ?? []).find((section) => section.section_kind === 'section')?.id ??
+      sectionsQ.data?.[0]?.id ??
+      null,
+    [sectionsQ.data]
+  );
+  const projectMenuKey = route.main !== 'projects' ? 'overview' : route.memory ? 'memory' : route.sectionId || route.taskId ? 'work' : 'overview';
 
   const sidebarMain: MainNavKey =
-    route.main === 'projects' ? 'projects' : route.main === 'agents' ? 'agents' : route.main === 'memory' ? 'memory' : route.main === 'docs' ? 'docs' : 'dashboard';
+    route.main === 'projects'
+      ? 'projects'
+      : route.main === 'agents'
+        ? 'agents'
+        : route.main === 'docs'
+          ? 'docs'
+          : route.main === 'settings'
+            ? 'settings'
+            : 'dashboard';
 
   return (
     <>
@@ -380,16 +458,17 @@ export function App() {
                 navigate({ main: 'dashboard', projectId: selectedProjectId });
               } else if (main === 'agents') {
                 navigate({ main: 'agents', tab: 'overview' });
-              } else if (main === 'memory') {
-                navigate({ main: 'memory' });
               } else if (main === 'docs') {
                 navigate({ main: 'docs' });
+              } else if (main === 'settings') {
+                navigate({ main: 'settings', tab: 'archive' });
               } else {
                 navigate({
                   main: 'projects',
                   projectId: selectedProjectId,
                   sectionId: null,
                   taskId: null,
+                  memory: false,
                   mode: null,
                   legacyAlias: false,
                 });
@@ -400,11 +479,13 @@ export function App() {
             treeLoading={treeQ.isLoading}
             treeError={treeQ.isError ? treeQ.error : null}
             selectedProjectId={selectedProjectId}
-            selectedSectionId={selectedSectionId ?? sectionForTask}
             selectedTaskId={route.main === 'projects' ? route.taskId : null}
             onOpenProject={(projectId) => openProject(projectId)}
-            onOpenSection={(projectId, sectionId) => openSection(projectId, sectionId)}
             onOpenTask={(projectId, taskId) => openTask(projectId, taskId)}
+            onOpenProjectMemory={(projectId) => openProjectMemory(projectId)}
+            onArchiveProject={(projectId) => archiveProjectM.mutate(projectId)}
+            onReorderProjects={(orderedIds) => reorderProjectsM.mutate(orderedIds)}
+            onOpenArchivePage={() => navigate({ main: 'settings', tab: 'archive' })}
             mobileOpen={mobileNav.open}
             onCloseMobile={() => mobileNav.setOpen(false)}
           />
@@ -417,16 +498,17 @@ export function App() {
                 navigate({ main: 'dashboard', projectId: selectedProjectId });
               } else if (page === 'agents') {
                 navigate({ main: 'agents', tab: 'overview' });
-              } else if (page === 'memory') {
-                navigate({ main: 'memory' });
               } else if (page === 'docs') {
                 navigate({ main: 'docs' });
+              } else if (page === 'settings') {
+                navigate({ main: 'settings', tab: 'archive' });
               } else {
                 navigate({
                   main: 'projects',
                   projectId: selectedProjectId,
                   sectionId: null,
                   taskId: null,
+                  memory: false,
                   mode: null,
                   legacyAlias: false,
                 });
@@ -463,111 +545,170 @@ export function App() {
           />
         ) : route.main === 'agents' ? (
           <AgentsHubPage tab={route.tab} onSelectTab={(tab) => navigate({ main: 'agents', tab })} />
-        ) : route.main === 'memory' ? (
-          <div className="mx-auto w-full max-w-6xl">
-            <MemoryPage />
-          </div>
         ) : route.main === 'docs' ? (
           <div className="mx-auto w-full max-w-6xl">
             <DocsPage />
           </div>
-        ) : route.taskId ? (
-          <TaskPage
-            taskId={route.taskId}
-            onBack={() => {
-              const projectId = selectedProjectId;
-              const sectionId = sectionForTask;
-              if (projectId && sectionId) {
-                openSection(projectId, sectionId);
-                return;
-              }
-              if (projectId) {
-                openProject(projectId);
-                return;
-              }
-              navigate({ main: 'dashboard', projectId: null });
-            }}
-            onOpenAgents={() => navigate({ main: 'agents', tab: 'overview' })}
-          />
-        ) : route.sectionId ? (
+        ) : route.main === 'settings' ? (
           <div className="mx-auto w-full max-w-6xl">
-            <KanbanPage
-              projects={projectsQ.data ?? []}
-              projectsLoading={projectsQ.isLoading}
-              projectsError={projectsQ.isError ? projectsQ.error : null}
-              sections={sectionsQ.data ?? []}
-              sectionsLoading={sectionsQ.isLoading}
-              sectionsError={sectionsQ.isError ? sectionsQ.error : null}
-              selectedProjectId={selectedProjectId}
-              onSelectProject={(projectId) => openProject(projectId)}
-              selectedSectionId={selectedSectionId}
-              onSelectSection={(sectionId) => {
-                if (!selectedProjectId) return;
-                openSection(selectedProjectId, sectionId, sectionViewMode);
+            <VerticalTopMenu
+              title="Settings"
+              activeKey={route.tab}
+              onSelect={(key) => navigate({ main: 'settings', tab: key as SettingsTab })}
+              items={[{ key: 'archive', label: 'Archive' }]}
+              className="mt-2 max-w-[320px]"
+            />
+            <ProjectsArchivePage
+              onOpenProject={(projectId) => {
+                openProject(projectId);
               }}
-              viewMode={sectionViewMode}
-              onChangeViewMode={(mode) => {
-                setSectionViewMode(mode);
-                if (selectedSectionId) localStorage.setItem(viewModeStorageKey(selectedSectionId), mode);
-                if (selectedProjectId && selectedSectionId) {
-                  openSection(selectedProjectId, selectedSectionId, mode);
-                }
-              }}
-              onCreateProject={async (name) => {
-                await createProjectM.mutateAsync(name);
-              }}
-              onCreateSection={async (name) => {
-                await createSectionM.mutateAsync(name);
-              }}
-              tasks={tasksQ.data ?? []}
-              tasksLoading={tasksQ.isLoading}
-              tasksError={tasksQ.isError ? tasksQ.error : null}
-              selectedTaskId={null}
-              onSelectTask={(taskId) => {
-                if (!selectedProjectId) return;
-                openTask(selectedProjectId, taskId);
-              }}
-              onMoveTask={(id, status) => moveM.mutate({ id, status })}
-              moveDisabled={moveM.isPending || reorderM.isPending}
-              onReorder={(_status, orderedIds) => {
-                if (!selectedSectionId) return;
-                reorderM.mutate({ sectionId: selectedSectionId, orderedIds });
-              }}
-              onQuickCreate={async (status, title) => {
-                if (!selectedProjectId) return;
-                await createTaskM.mutateAsync({
-                  projectId: selectedProjectId,
-                  sectionId: selectedSectionId,
-                  title,
-                  status,
-                });
-              }}
-              onCreateTask={async (title) => {
-                if (!selectedProjectId) return;
-                await createTaskM.mutateAsync({
-                  projectId: selectedProjectId,
-                  sectionId: selectedSectionId,
-                  title,
-                  status: 'ideas',
-                });
-              }}
-              createTaskError={createTaskM.isError ? createTaskM.error : null}
-              moveError={moveM.isError ? moveM.error : null}
-              reorderError={reorderM.isError ? reorderM.error : null}
             />
           </div>
+        ) : route.main === 'projects' ? (
+          <>
+            <VerticalTopMenu
+              title={selectedProject?.name ?? 'Project'}
+              activeKey={projectMenuKey}
+              onSelect={(key) => {
+                if (!selectedProjectId) return;
+                if (key === 'overview') {
+                  openProject(selectedProjectId);
+                  return;
+                }
+                if (key === 'work') {
+                  const sectionId = selectedSectionId ?? sectionForTask ?? firstWorkSectionId;
+                  if (sectionId) openSection(selectedProjectId, sectionId, sectionViewMode);
+                  return;
+                }
+                if (key === 'memory') openProjectMemory(selectedProjectId);
+              }}
+              items={[
+                { key: 'overview', label: 'Project Pulse' },
+                { key: 'work', label: 'Work' },
+                { key: 'memory', label: 'Memory' },
+              ]}
+              className="mx-auto mt-2 w-full max-w-6xl"
+            />
+
+            {route.taskId ? (
+              <TaskPage
+                taskId={route.taskId}
+                onBack={() => {
+                  const projectId = selectedProjectId;
+                  const sectionId = sectionForTask ?? firstWorkSectionId;
+                  if (projectId && sectionId) {
+                    openSection(projectId, sectionId);
+                    return;
+                  }
+                  if (projectId) {
+                    openProject(projectId);
+                    return;
+                  }
+                  navigate({ main: 'dashboard', projectId: null });
+                }}
+                onOpenAgents={() => navigate({ main: 'agents', tab: 'overview' })}
+              />
+            ) : route.memory ? (
+              <div className="mx-auto w-full max-w-6xl">
+                <MemoryPage forcedScope="project" forcedScopeId={selectedProjectId} />
+              </div>
+            ) : route.sectionId ? (
+              <div className="mx-auto w-full max-w-6xl">
+                <KanbanPage
+                  projects={projectsQ.data ?? []}
+                  projectsLoading={projectsQ.isLoading}
+                  projectsError={projectsQ.isError ? projectsQ.error : null}
+                  sections={sectionsQ.data ?? []}
+                  sectionsLoading={sectionsQ.isLoading}
+                  sectionsError={sectionsQ.isError ? sectionsQ.error : null}
+                  selectedProjectId={selectedProjectId}
+                  onSelectProject={(projectId) => openProject(projectId)}
+                  selectedSectionId={selectedSectionId}
+                  onSelectSection={(sectionId) => {
+                    if (!selectedProjectId) return;
+                    openSection(selectedProjectId, sectionId, sectionViewMode);
+                  }}
+                  viewMode={sectionViewMode}
+                  onChangeViewMode={(mode) => {
+                    setSectionViewMode(mode);
+                    if (selectedSectionId) localStorage.setItem(viewModeStorageKey(selectedSectionId), mode);
+                    if (selectedProjectId && selectedSectionId) {
+                      openSection(selectedProjectId, selectedSectionId, mode);
+                    }
+                  }}
+                  onCreateProject={async (name) => {
+                    await createProjectM.mutateAsync(name);
+                  }}
+                  onCreateSection={async (name) => {
+                    await createSectionM.mutateAsync(name);
+                  }}
+                  tasks={tasksQ.data ?? []}
+                  tasksLoading={tasksQ.isLoading}
+                  tasksError={tasksQ.isError ? tasksQ.error : null}
+                  selectedTaskId={null}
+                  onSelectTask={(taskId) => {
+                    if (!selectedProjectId) return;
+                    openTask(selectedProjectId, taskId);
+                  }}
+                  onMoveTask={(id, status) => moveM.mutate({ id, status })}
+                  moveDisabled={moveM.isPending || reorderM.isPending}
+                  onReorder={(_status, orderedIds) => {
+                    if (!selectedSectionId) return;
+                    reorderM.mutate({ sectionId: selectedSectionId, orderedIds });
+                  }}
+                  onQuickCreate={async (status, title) => {
+                    if (!selectedProjectId) return;
+                    await createTaskM.mutateAsync({
+                      projectId: selectedProjectId,
+                      sectionId: selectedSectionId,
+                      title,
+                      status,
+                    });
+                  }}
+                  onCreateTask={async (title) => {
+                    if (!selectedProjectId) return;
+                    await createTaskM.mutateAsync({
+                      projectId: selectedProjectId,
+                      sectionId: selectedSectionId,
+                      title,
+                      status: 'ideas',
+                    });
+                  }}
+                  createTaskError={createTaskM.isError ? createTaskM.error : null}
+                  moveError={moveM.isError ? moveM.error : null}
+                  reorderError={reorderM.isError ? reorderM.error : null}
+                />
+              </div>
+            ) : (
+              <ProjectHomePage
+                project={selectedProject}
+                sections={sectionsQ.data ?? []}
+                tasks={projectTasksQ.data ?? []}
+                onOpenSection={(sectionId) => {
+                  if (!selectedProjectId) return;
+                  openSection(selectedProjectId, sectionId);
+                }}
+                onOpenTask={(taskId) => {
+                  if (!selectedProjectId) return;
+                  openTask(selectedProjectId, taskId);
+                }}
+              />
+            )}
+          </>
         ) : (
-          <ProjectHomePage
-            project={selectedProject}
-            sections={sectionsQ.data ?? []}
-            tasks={projectTasksQ.data ?? []}
-            onOpenSection={(sectionId) => {
+          <Dashboard
+            projectId={selectedProjectId}
+            onSelectProject={(projectId) => navigate({ main: 'dashboard', projectId })}
+            onSelectTask={({ projectId, taskId }) => openTask(projectId, taskId)}
+            onQuickCapture={async (title) => {
               if (!selectedProjectId) return;
-              openSection(selectedProjectId, sectionId);
-            }}
-            onOpenTask={(taskId) => {
-              if (!selectedProjectId) return;
-              openTask(selectedProjectId, taskId);
+              const inbox = (sectionsQ.data ?? []).find((section) => section.section_kind === 'inbox') ?? sectionsQ.data?.[0] ?? null;
+              await createTaskM.mutateAsync({
+                projectId: selectedProjectId,
+                sectionId: inbox?.id,
+                title,
+                status: 'ideas',
+              });
             }}
           />
         )}
