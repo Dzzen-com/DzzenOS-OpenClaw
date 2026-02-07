@@ -7,3 +7,6 @@ This folder is the **English** spec for the first open-source release.
 
 Recommended reading order:
 - `spec/INDEX.md`
+
+Implementation notes:
+- `PROJECT-AGENT-ARCHITECTURE.md`

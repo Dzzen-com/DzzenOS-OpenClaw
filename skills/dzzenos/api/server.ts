@@ -83,6 +83,15 @@ type AllowedOrigins = {
 };
 
 type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+type BoardAgentSubAgent = {
+  key: string;
+  label: string;
+  agent_id: string | null;
+  openclaw_agent_id: string | null;
+  role_prompt: string | null;
+  model: string | null;
+  enabled: boolean;
+};
 
 function parseAllowedOrigins(raw: string | undefined): AllowedOrigins {
   const origins = new Set<string>();
@@ -367,6 +376,70 @@ function jsonStringifyPromptOverrides(value: PromptOverrides): string {
   return JSON.stringify(out);
 }
 
+function parseJsonObject(raw: any): Record<string, any> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as any;
+  if (typeof raw !== 'string') return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as any;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function parseSubAgentsJson(raw: any): BoardAgentSubAgent[] {
+  const src = (() => {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw !== 'string') return [];
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const out: BoardAgentSubAgent[] = [];
+  const seen = new Set<string>();
+  for (const row of src) {
+    if (!row || typeof row !== 'object') continue;
+    const keyRaw = normalizeString((row as any).key);
+    if (!keyRaw) continue;
+    const key = keyRaw.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    const label = normalizeString((row as any).label) || key;
+    const agentId = normalizeString((row as any).agent_id) || normalizeString((row as any).agentId) || null;
+    const openclawAgentId =
+      normalizeString((row as any).openclaw_agent_id) || normalizeString((row as any).openclawAgentId) || null;
+    const rolePrompt = normalizeString((row as any).role_prompt) || normalizeString((row as any).rolePrompt) || null;
+    const model = normalizeString((row as any).model) || null;
+    const enabled = (row as any).enabled !== false;
+
+    out.push({
+      key,
+      label,
+      agent_id: agentId,
+      openclaw_agent_id: openclawAgentId,
+      role_prompt: rolePrompt,
+      model,
+      enabled,
+    });
+  }
+  return out;
+}
+
+function jsonStringifySubAgents(value: BoardAgentSubAgent[]): string {
+  const out = parseSubAgentsJson(value);
+  return JSON.stringify(out);
+}
+
 function parseCapabilitiesJson(raw: any): SkillCapabilities {
   const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
 
@@ -422,6 +495,7 @@ function skillRowToDto(r: any) {
 function agentRowToDto(r: any) {
   return {
     id: String(r.id),
+    workspace_id: r.workspace_id ?? null,
     display_name: String(r.display_name ?? ''),
     emoji: r.emoji ?? null,
     openclaw_agent_id: String(r.openclaw_agent_id ?? ''),
@@ -442,6 +516,40 @@ function agentRowToDto(r: any) {
   };
 }
 
+function boardAgentSettingsRowToDto(r: any) {
+  return {
+    board_id: String(r.board_id),
+    preferred_agent_id: r.preferred_agent_id ?? null,
+    skills: parseStringArrayJson(r.skills_json),
+    prompt_overrides: parsePromptOverridesJson(r.prompt_overrides_json),
+    policy: parseJsonObject(r.policy_json),
+    memory_path: r.memory_path ?? null,
+    auto_delegate: Boolean(r.auto_delegate),
+    sub_agents: parseSubAgentsJson(r.sub_agents_json),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+    preferred_agent_display_name: r.preferred_agent_display_name ?? null,
+    preferred_agent_openclaw_id: r.preferred_agent_openclaw_id ?? null,
+  };
+}
+
+function workspaceAgentSettingsRowToDto(r: any) {
+  return {
+    workspace_id: String(r.workspace_id),
+    preferred_agent_id: r.preferred_agent_id ?? null,
+    skills: parseStringArrayJson(r.skills_json),
+    prompt_overrides: parsePromptOverridesJson(r.prompt_overrides_json),
+    policy: parseJsonObject(r.policy_json),
+    memory_path: r.memory_path ?? null,
+    auto_delegate: Boolean(r.auto_delegate),
+    sub_agents: parseSubAgentsJson(r.sub_agents_json),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+    preferred_agent_display_name: r.preferred_agent_display_name ?? null,
+    preferred_agent_openclaw_id: r.preferred_agent_openclaw_id ?? null,
+  };
+}
+
 function getDefaultBoardId(db: DatabaseSync): string | null {
   const row = rowOrNull<{ id: string }>(
     db.prepare('SELECT id FROM boards ORDER BY position ASC, created_at ASC LIMIT 1').all() as any
@@ -454,6 +562,13 @@ function getDefaultWorkspaceId(db: DatabaseSync): string | null {
     db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any
   );
   return row?.id ?? null;
+}
+
+function getWorkspaceIdByBoardId(db: DatabaseSync, boardId: string): string | null {
+  const row = rowOrNull<{ workspace_id: string }>(
+    db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
+  );
+  return row?.workspace_id ?? null;
 }
 
 function main() {
@@ -520,6 +635,7 @@ function main() {
     sessionKey: string;
     text: string;
     agentOpenClawId?: string | null;
+    model?: string | null;
     signal?: AbortSignal;
   }): Promise<{ text: string; raw: any }> {
     if (!openResponsesUrl) {
@@ -541,7 +657,7 @@ function main() {
     const res = await fetch(openResponsesUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model: openResponsesModel, input: input.text }),
+      body: JSON.stringify({ model: input.model ?? openResponsesModel, input: input.text }),
       signal: input.signal,
     });
 
@@ -651,44 +767,185 @@ function main() {
     );
   }
 
-  function getAgentRowById(agentId: string) {
+  function getBoardMeta(boardId: string) {
     return rowOrNull<{
       id: string;
-      display_name: string;
-      openclaw_agent_id: string;
+      workspace_id: string;
+      name: string;
+      description: string | null;
     }>(
       db
-        .prepare(
-          'SELECT id, display_name, openclaw_agent_id FROM agents WHERE id = ? AND enabled = 1'
-        )
-        .all(agentId) as any
+        .prepare('SELECT id, workspace_id, name, description FROM boards WHERE id = ?')
+        .all(boardId) as any
     );
   }
 
-  function getDefaultAgentRow() {
-    if (defaultAgentId) {
-      const row = rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+  function getWorkspaceMeta(workspaceId: string) {
+    return rowOrNull<{
+      id: string;
+      name: string;
+      description: string | null;
+    }>(
+      db
+        .prepare('SELECT id, name, description FROM workspaces WHERE id = ?')
+        .all(workspaceId) as any
+    );
+  }
+
+  function getBoardAgentSettingsRow(boardId: string) {
+    return rowOrNull<any>(
+      db
+        .prepare(
+          `SELECT
+             s.board_id, s.preferred_agent_id, s.skills_json, s.prompt_overrides_json,
+             s.policy_json, s.memory_path, s.auto_delegate, s.sub_agents_json,
+             s.created_at, s.updated_at,
+             a.display_name as preferred_agent_display_name,
+             a.openclaw_agent_id as preferred_agent_openclaw_id
+           FROM board_agent_settings s
+           LEFT JOIN agents a ON a.id = s.preferred_agent_id
+           WHERE s.board_id = ?`
+        )
+        .all(boardId) as any
+    );
+  }
+
+  function getWorkspaceAgentSettingsRow(workspaceId: string) {
+    return rowOrNull<{
+      workspace_id: string;
+      preferred_agent_id: string | null;
+      skills_json: string;
+      prompt_overrides_json: string;
+      policy_json: string;
+      memory_path: string | null;
+      auto_delegate: number;
+      sub_agents_json: string;
+      created_at: string | null;
+      updated_at: string | null;
+      preferred_agent_display_name: string | null;
+      preferred_agent_openclaw_id: string | null;
+    }>(
+      db
+        .prepare(
+          `SELECT
+             s.workspace_id, s.preferred_agent_id, s.skills_json, s.prompt_overrides_json,
+             s.policy_json, s.memory_path, s.auto_delegate, s.sub_agents_json,
+             s.created_at, s.updated_at,
+             a.display_name as preferred_agent_display_name,
+             a.openclaw_agent_id as preferred_agent_openclaw_id
+           FROM workspace_agent_settings s
+           LEFT JOIN agents a ON a.id = s.preferred_agent_id
+           WHERE s.workspace_id = ?`
+        )
+        .all(workspaceId) as any
+    );
+  }
+
+  function getAgentRowById(agentId: string, workspaceId?: string | null) {
+    return rowOrNull<{
+      id: string;
+      workspace_id: string | null;
+      display_name: string;
+      openclaw_agent_id: string;
+      skills_json: string;
+      prompt_overrides_json: string;
+    }>(
+      db
+        .prepare(
+          `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+           FROM agents
+           WHERE id = ?
+             AND enabled = 1
+             AND (? IS NULL OR workspace_id = ?)`
+        )
+        .all(agentId, workspaceId ?? null, workspaceId ?? null) as any
+    );
+  }
+
+  function getDefaultAgentRow(workspaceId?: string | null) {
+    const scopeWorkspaceId = workspaceId ?? getDefaultWorkspaceId(db);
+    if (scopeWorkspaceId && defaultAgentId) {
+      const row = rowOrNull<{
+        id: string;
+        workspace_id: string | null;
+        display_name: string;
+        openclaw_agent_id: string;
+        skills_json: string;
+        prompt_overrides_json: string;
+      }>(
         db
           .prepare(
-            'SELECT id, display_name, openclaw_agent_id FROM agents WHERE openclaw_agent_id = ? AND enabled = 1'
+            `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+             FROM agents
+             WHERE openclaw_agent_id = ?
+               AND enabled = 1
+               AND workspace_id = ?
+             ORDER BY sort_order ASC, created_at ASC
+             LIMIT 1`
           )
-          .all(defaultAgentId) as any
+          .all(defaultAgentId, scopeWorkspaceId) as any
       );
       if (row) return row;
     }
-    return rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+    if (scopeWorkspaceId) {
+      const row = rowOrNull<{
+        id: string;
+        workspace_id: string | null;
+        display_name: string;
+        openclaw_agent_id: string;
+        skills_json: string;
+        prompt_overrides_json: string;
+      }>(
+        db
+          .prepare(
+            `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+             FROM agents
+             WHERE enabled = 1
+               AND workspace_id = ?
+             ORDER BY sort_order ASC, created_at ASC
+             LIMIT 1`
+          )
+          .all(scopeWorkspaceId) as any
+      );
+      if (row) return row;
+    }
+    return rowOrNull<{
+      id: string;
+      workspace_id: string | null;
+      display_name: string;
+      openclaw_agent_id: string;
+      skills_json: string;
+      prompt_overrides_json: string;
+    }>(
       db
         .prepare(
-          'SELECT id, display_name, openclaw_agent_id FROM agents WHERE enabled = 1 ORDER BY created_at ASC LIMIT 1'
+          `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+           FROM agents
+           WHERE enabled = 1
+           ORDER BY sort_order ASC, created_at ASC
+           LIMIT 1`
         )
         .all() as any
     );
   }
 
+  function resolveAgentWorkspaceId(input: { workspaceId?: string | null; boardId?: string | null }) {
+    const workspaceId = normalizeString(input.workspaceId ?? '');
+    if (workspaceId) return workspaceId;
+    const boardId = normalizeString(input.boardId ?? '');
+    if (boardId) {
+      const byBoard = getWorkspaceIdByBoardId(db, boardId);
+      if (!byBoard) throw new HttpError(404, 'Board not found');
+      return byBoard;
+    }
+    return getDefaultWorkspaceId(db);
+  }
+
   function ensureTaskSession(
-    taskId: string,
+    task: { id: string; board_id: string; workspace_id: string },
     opts?: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null }
   ) {
+    const taskId = task.id;
     const existing = rowOrNull<{
       task_id: string;
       agent_id: string | null;
@@ -700,11 +957,28 @@ function main() {
         .all(taskId) as any
     );
     if (existing) {
-      if (opts?.agentId && existing.agent_id !== opts.agentId) {
-        db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(opts.agentId, taskId);
+      let shouldRefresh = false;
+      if (opts && Object.prototype.hasOwnProperty.call(opts, 'agentId')) {
+        const nextAgentId = opts.agentId ?? null;
+        if (existing.agent_id !== nextAgentId) {
+          db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(nextAgentId, taskId);
+          shouldRefresh = true;
+        }
       }
-      if (opts?.reasoningLevel && existing.reasoning_level !== opts.reasoningLevel) {
-        db.prepare('UPDATE task_sessions SET reasoning_level = ? WHERE task_id = ?').run(opts.reasoningLevel, taskId);
+      if (opts && Object.prototype.hasOwnProperty.call(opts, 'reasoningLevel')) {
+        const nextReasoning = opts.reasoningLevel ?? 'auto';
+        if (existing.reasoning_level !== nextReasoning) {
+          db.prepare('UPDATE task_sessions SET reasoning_level = ? WHERE task_id = ?').run(nextReasoning, taskId);
+          shouldRefresh = true;
+        }
+      }
+      const expectedSessionKey = `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
+      if (existing.session_key !== expectedSessionKey) {
+        db.prepare('UPDATE task_sessions SET session_key = ? WHERE task_id = ?').run(expectedSessionKey, taskId);
+        shouldRefresh = true;
+      }
+      if (!shouldRefresh) {
+        return existing;
       }
       return rowOrNull<{
         task_id: string;
@@ -718,7 +992,7 @@ function main() {
       );
     }
 
-    const sessionKey = taskId;
+    const sessionKey = `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
     const reasoningLevel = opts?.reasoningLevel ?? 'auto';
     db.prepare('INSERT INTO task_sessions(task_id, agent_id, session_key, reasoning_level) VALUES (?, ?, ?, ?)').run(
       taskId,
@@ -770,14 +1044,110 @@ function main() {
     return err?.name === 'AbortError' || String(err?.message ?? '').toLowerCase().includes('aborted');
   }
 
+  function getResolvedBoardAgentSettings(boardId: string) {
+    const row = getBoardAgentSettingsRow(boardId);
+    if (row) return row;
+    return {
+      board_id: boardId,
+      preferred_agent_id: null,
+      skills_json: '[]',
+      prompt_overrides_json: '{}',
+      policy_json: '{}',
+      memory_path: null,
+      auto_delegate: 1,
+      sub_agents_json: '[]',
+      created_at: null,
+      updated_at: null,
+      preferred_agent_display_name: null,
+      preferred_agent_openclaw_id: null,
+    };
+  }
+
+  function getResolvedWorkspaceAgentSettings(workspaceId: string) {
+    const row = getWorkspaceAgentSettingsRow(workspaceId);
+    if (row) return row;
+    return {
+      workspace_id: workspaceId,
+      preferred_agent_id: null,
+      skills_json: '[]',
+      prompt_overrides_json: '{}',
+      policy_json: '{}',
+      memory_path: null,
+      auto_delegate: 1,
+      sub_agents_json: '[]',
+      created_at: null,
+      updated_at: null,
+      preferred_agent_display_name: null,
+      preferred_agent_openclaw_id: null,
+    };
+  }
+
+  function resolvePromptForMode(input: {
+    mode: 'plan' | 'execute' | 'report' | 'chat';
+    agentPromptOverridesRaw?: any;
+    boardPromptOverridesRaw?: any;
+  }) {
+    const fallback =
+      input.mode === 'plan'
+        ? 'You are a task planner. Return JSON: { "description": "...", "checklist": ["..."] }.'
+        : input.mode === 'execute'
+          ? 'You are executing the task. Return JSON: { "status": "review" | "doing", "report": "..." }.'
+          : input.mode === 'report'
+            ? 'Summarize the completion for changelog. Return bullet points.'
+            : 'You are helping in task chat. Be concise and actionable.';
+
+    const agentPromptOverrides = parsePromptOverridesJson(input.agentPromptOverridesRaw);
+    const boardPromptOverrides = parsePromptOverridesJson(input.boardPromptOverridesRaw);
+    const systemPrompt = boardPromptOverrides.system ?? agentPromptOverrides.system ?? null;
+    const modePrompt = (boardPromptOverrides as any)[input.mode] ?? (agentPromptOverrides as any)[input.mode] ?? fallback;
+    return { systemPrompt, modePrompt };
+  }
+
+  function resolvePreferredTaskAgent(input: {
+    task: { id: string; board_id: string; workspace_id: string };
+    sessionAgentId?: string | null;
+    boardPreferredAgentId?: string | null;
+  }) {
+    if (input.sessionAgentId) {
+      const row = getAgentRowById(input.sessionAgentId, input.task.workspace_id);
+      if (row) return row;
+    }
+    if (input.boardPreferredAgentId) {
+      const row = getAgentRowById(input.boardPreferredAgentId, input.task.workspace_id);
+      if (row) return row;
+    }
+    return getDefaultAgentRow(input.task.workspace_id);
+  }
+
   async function runTask(opts: { taskId: string; mode: 'plan' | 'execute' | 'report'; agentId?: string | null }) {
     const task = getTaskMeta(opts.taskId);
     if (!task) throw new Error('Task not found');
+    if (opts.agentId && !getAgentRowById(opts.agentId, task.workspace_id)) {
+      throw new Error('Invalid agentId');
+    }
 
-    const session = ensureTaskSession(task.id, { agentId: opts.agentId ?? null });
-    const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
+    const boardSettings = getResolvedBoardAgentSettings(task.board_id);
+    const boardMeta = getBoardMeta(task.board_id);
+    const session =
+      opts.agentId !== undefined ? ensureTaskSession(task, { agentId: opts.agentId }) : ensureTaskSession(task);
+    const agentRow = resolvePreferredTaskAgent({
+      task,
+      sessionAgentId: session?.agent_id ?? null,
+      boardPreferredAgentId: boardSettings.preferred_agent_id ?? null,
+    });
     const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
     const agentDisplayName = agentRow?.display_name ?? 'orchestrator';
+    const sessionKey = session?.session_key ?? `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
+    const { systemPrompt, modePrompt } = resolvePromptForMode({
+      mode: opts.mode,
+      agentPromptOverridesRaw: agentRow?.prompt_overrides_json ?? '{}',
+      boardPromptOverridesRaw: boardSettings.prompt_overrides_json ?? '{}',
+    });
+    const boardSkills = parseStringArrayJson(boardSettings.skills_json);
+    const agentSkills = parseStringArrayJson(agentRow?.skills_json ?? '[]');
+    const effectiveSkills = [...new Set([...agentSkills, ...boardSkills])];
+    const boardPolicy = parseJsonObject(boardSettings.policy_json);
+    const memoryPath = normalizeString(boardSettings.memory_path ?? '') || null;
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
 
@@ -803,46 +1173,173 @@ function main() {
 
     let outputText = '';
     let parsed: any = null;
+    let stepIndex = 1;
+    const delegatedOutputs: Array<{ key: string; label: string; text: string; error?: string }> = [];
+    let usageObserved = false;
+    let usageInputTokens = 0;
+    let usageOutputTokens = 0;
+    let usageTotalTokens = 0;
+
+    const addUsage = (usage: any) => {
+      if (!usage || typeof usage !== 'object') return;
+      const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? null);
+      const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? null);
+      const totalTokens = Number(usage.total_tokens ?? null);
+      if (Number.isFinite(inputTokens)) {
+        usageInputTokens += inputTokens;
+        usageObserved = true;
+      }
+      if (Number.isFinite(outputTokens)) {
+        usageOutputTokens += outputTokens;
+        usageObserved = true;
+      }
+      if (Number.isFinite(totalTokens)) {
+        usageTotalTokens += totalTokens;
+        usageObserved = true;
+      }
+    };
 
     try {
-      const prompt =
-        opts.mode === 'plan'
-          ? 'You are a task planner. Return JSON: { "description": "...", "checklist": ["..."] }.'
-          : opts.mode === 'execute'
-            ? 'You are executing the task. Return JSON: { "status": "review" | "doing", "report": "..." }.'
-            : 'Summarize the completion for changelog. Return bullet points.';
-
       const reasoning = resolveReasoning(session?.reasoning_level ?? 'auto', task.description);
       const reasoningPrefix = reasoning ? `/think ${reasoning}` : '';
-      const inputText =
-        `${reasoningPrefix ? `${reasoningPrefix}\n` : ''}${prompt}\n\n` +
-        `Task title: ${task.title}\nTask description: ${task.description ?? ''}`;
+
+      if (opts.mode === 'execute') {
+        const subAgents = parseSubAgentsJson(boardSettings.sub_agents_json).filter((s) => s.enabled);
+        const autoDelegate = Boolean(boardSettings.auto_delegate);
+        if (autoDelegate && subAgents.length) {
+          for (const sub of subAgents) {
+            const subStepId = randomUUID();
+            db.prepare(
+              'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).run(
+              subStepId,
+              runId,
+              stepIndex++,
+              `delegate:${sub.key}`,
+              'running',
+              JSON.stringify({
+                sub_agent: sub,
+                board_id: task.board_id,
+                task_id: task.id,
+              }),
+              null
+            );
+
+            const subAgentRow = sub.agent_id ? getAgentRowById(sub.agent_id, task.workspace_id) : null;
+            const subAgentOpenclawId = subAgentRow?.openclaw_agent_id ?? sub.openclaw_agent_id ?? null;
+            const subSessionKey = `${sessionKey}:worker:${sub.key}`;
+
+            const delegatePromptParts: string[] = [];
+            if (sub.role_prompt) delegatePromptParts.push(`Role: ${sub.role_prompt}`);
+            delegatePromptParts.push(
+              'You are a delegated specialist for this task. Return concise actionable output in Markdown.'
+            );
+            delegatePromptParts.push(`Task title: ${task.title}`);
+            delegatePromptParts.push(`Task description: ${task.description ?? ''}`);
+            delegatePromptParts.push(`Board context: ${boardMeta?.description ?? ''}`);
+            if (effectiveSkills.length) delegatePromptParts.push(`Preferred skills overlay: ${effectiveSkills.join(', ')}`);
+            if (memoryPath) delegatePromptParts.push(`Memory path hint: ${memoryPath}`);
+            if (Object.keys(boardPolicy).length) {
+              delegatePromptParts.push(`Policy context: ${JSON.stringify(boardPolicy)}`);
+            }
+
+            try {
+              const { text: delegatedText, raw: delegatedRaw } = await callOpenResponses({
+                sessionKey: subSessionKey,
+                agentOpenClawId: subAgentOpenclawId,
+                model: sub.model,
+                text: delegatePromptParts.join('\n\n'),
+                signal: controller.signal,
+              });
+              addUsage(delegatedRaw?.usage ?? null);
+              delegatedOutputs.push({ key: sub.key, label: sub.label, text: delegatedText.trim() });
+              db.prepare(
+                "UPDATE run_steps SET status = 'succeeded', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+              ).run(
+                JSON.stringify({
+                  text: delegatedText,
+                  usage: delegatedRaw?.usage ?? null,
+                  model: sub.model ?? null,
+                  openclaw_agent_id: subAgentOpenclawId,
+                }),
+                subStepId
+              );
+            } catch (err: any) {
+              if (isAbortError(err)) throw err;
+              const errorText = String(err?.message ?? err);
+              delegatedOutputs.push({ key: sub.key, label: sub.label, text: '', error: errorText });
+              db.prepare(
+                "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+              ).run(
+                JSON.stringify({
+                  error: errorText,
+                  model: sub.model ?? null,
+                  openclaw_agent_id: subAgentOpenclawId,
+                }),
+                subStepId
+              );
+            }
+          }
+        }
+      }
+
+      const inputSections: string[] = [];
+      if (systemPrompt) inputSections.push(`System profile:\n${systemPrompt}`);
+      if (reasoningPrefix) inputSections.push(reasoningPrefix);
+      inputSections.push(modePrompt);
+      inputSections.push(`Task title: ${task.title}\nTask description: ${task.description ?? ''}`);
+      if (effectiveSkills.length) inputSections.push(`Preferred skills overlay: ${effectiveSkills.join(', ')}`);
+      if (memoryPath) inputSections.push(`Memory path hint: ${memoryPath}`);
+      if (Object.keys(boardPolicy).length) inputSections.push(`Policy context: ${JSON.stringify(boardPolicy)}`);
+      if (delegatedOutputs.length) {
+        const delegationSummary = delegatedOutputs
+          .map((d) => {
+            if (d.error) return `### ${d.label}\nError: ${d.error}`;
+            return `### ${d.label}\n${d.text}`;
+          })
+          .join('\n\n');
+        inputSections.push(`Delegated worker outputs:\n${delegationSummary}`);
+      }
+      const inputText = inputSections.join('\n\n');
 
       const { text, raw } = await callOpenResponses({
-        sessionKey: session?.session_key ?? task.id,
+        sessionKey,
         agentOpenClawId,
         text: inputText,
         signal: controller.signal,
       });
+      addUsage(raw?.usage ?? null);
 
       outputText = text;
       parsed = tryParseJson(text);
 
       db.prepare(
         "UPDATE run_steps SET status = 'succeeded', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-      ).run(JSON.stringify({ text: outputText, parsed, usage: raw?.usage ?? null }), stepId);
+      ).run(
+        JSON.stringify({
+          text: outputText,
+          parsed,
+          usage: raw?.usage ?? null,
+          delegated_count: delegatedOutputs.length,
+          delegated: delegatedOutputs,
+          board_settings: {
+            preferred_agent_id: boardSettings.preferred_agent_id ?? null,
+            auto_delegate: Boolean(boardSettings.auto_delegate),
+            memory_path: memoryPath,
+            skills: effectiveSkills,
+          },
+        }),
+        stepId
+      );
 
-      const usage = raw?.usage ?? null;
-      if (usage && typeof usage === 'object') {
-        const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? null);
-        const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? null);
-        const totalTokens = Number(usage.total_tokens ?? null);
+      if (usageObserved) {
+        const computedTotal = usageTotalTokens || usageInputTokens + usageOutputTokens;
         db.prepare(
           'UPDATE agent_runs SET input_tokens = ?, output_tokens = ?, total_tokens = ? WHERE id = ?'
         ).run(
-          Number.isFinite(inputTokens) ? inputTokens : null,
-          Number.isFinite(outputTokens) ? outputTokens : null,
-          Number.isFinite(totalTokens) ? totalTokens : null,
+          usageInputTokens > 0 ? usageInputTokens : null,
+          usageOutputTokens > 0 ? usageOutputTokens : null,
+          computedTotal > 0 ? computedTotal : null,
           runId
         );
       }
@@ -853,16 +1350,16 @@ function main() {
     } catch (err: any) {
       if (isAbortError(err)) {
         db.prepare(
-          "UPDATE run_steps SET status = 'cancelled', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-        ).run(JSON.stringify({ error: 'cancelled' }), stepId);
+          "UPDATE run_steps SET status = 'cancelled', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE run_id = ? AND status = 'running'"
+        ).run(JSON.stringify({ error: 'cancelled' }), runId);
         db.prepare(
           "UPDATE agent_runs SET status = 'cancelled', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
         ).run(runId);
         return { runId, outputText: '', parsed: null, cancelled: true };
       }
       db.prepare(
-        "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-      ).run(JSON.stringify({ error: String(err?.message ?? err) }), stepId);
+        "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE run_id = ? AND status = 'running'"
+      ).run(JSON.stringify({ error: String(err?.message ?? err) }), runId);
       db.prepare(
         "UPDATE agent_runs SET status = 'failed', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
       ).run(runId);
@@ -1849,9 +2346,15 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/marketplace/agents') {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const installedRows = db
-          .prepare('SELECT id, preset_key FROM agents WHERE preset_key IS NOT NULL')
-          .all() as any[];
+          .prepare('SELECT id, preset_key FROM agents WHERE workspace_id = ? AND preset_key IS NOT NULL')
+          .all(workspaceId) as any[];
         const installedByKey = new Map<string, string>();
         for (const r of installedRows) {
           if (typeof r?.preset_key === 'string' && typeof r?.id === 'string') installedByKey.set(r.preset_key, r.id);
@@ -1869,6 +2372,12 @@ const server = http.createServer(async (req, res) => {
         ? url.pathname.match(/^\/marketplace\/agents\/([^/]+)\/install$/)
         : null;
       if (marketplaceInstallMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const presetKey = decodeURIComponent(marketplaceInstallMatch[1]);
         const preset = getMarketplaceAgentPreset(presetKey);
         if (!preset) return sendJson(res, 404, { error: 'Preset not found' }, corsHeaders);
@@ -1877,7 +2386,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         const existing = rowOrNull<{ id: string }>(
-          db.prepare('SELECT id FROM agents WHERE preset_key = ? LIMIT 1').all(presetKey) as any
+          db.prepare('SELECT id FROM agents WHERE workspace_id = ? AND preset_key = ? LIMIT 1').all(workspaceId, presetKey) as any
         );
         if (existing?.id) return sendJson(res, 200, { id: existing.id }, corsHeaders);
 
@@ -1888,6 +2397,7 @@ const server = http.createServer(async (req, res) => {
 
         const presetDefaults = {
           preset_key: preset.preset_key,
+          workspace_id: workspaceId,
           display_name: preset.display_name,
           emoji: preset.emoji,
           description: preset.description,
@@ -1903,12 +2413,13 @@ const server = http.createServer(async (req, res) => {
 
         db.prepare(
           `INSERT INTO agents(
-            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
             description, category, tags_json, skills_json, prompt_overrides_json,
             preset_key, preset_defaults_json, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           id,
+          workspaceId,
           preset.display_name,
           preset.emoji,
           openclawAgentId,
@@ -1929,10 +2440,16 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/agents') {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const rows = db
           .prepare(
             `SELECT
-              a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+              a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
               a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
               a.preset_key, a.sort_order, a.created_at, a.updated_at,
               (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -1943,12 +2460,13 @@ const server = http.createServer(async (req, res) => {
               (SELECT COUNT(*)
                  FROM task_sessions ts
                  JOIN agent_runs ar ON ar.task_id = ts.task_id
-                WHERE ts.agent_id = a.id
+               WHERE ts.agent_id = a.id
                   AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
              FROM agents a
+             WHERE a.workspace_id = ?
              ORDER BY a.enabled DESC, a.sort_order ASC, a.display_name ASC`
           )
-          .all() as any[];
+          .all(workspaceId) as any[];
 
         return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
       }
@@ -1971,15 +2489,26 @@ const server = http.createServer(async (req, res) => {
         const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
         const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
         const sortOrder = Number.isFinite(Number(body?.sort_order)) ? Number(body.sort_order) : 0;
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId:
+            typeof body?.workspaceId === 'string'
+              ? body.workspaceId
+              : typeof body?.workspace_id === 'string'
+                ? body.workspace_id
+                : null,
+          boardId: typeof body?.boardId === 'string' ? body.boardId : null,
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
 
         db.prepare(
           `INSERT INTO agents(
-            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
             description, category, tags_json, skills_json, prompt_overrides_json,
             preset_key, preset_defaults_json, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
         ).run(
           id,
+          workspaceId,
           displayName,
           emoji,
           openclawAgentId,
@@ -1997,7 +2526,7 @@ const server = http.createServer(async (req, res) => {
           db
             .prepare(
               `SELECT
-                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2022,6 +2551,12 @@ const server = http.createServer(async (req, res) => {
 
       const agentPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
       if (agentPatchMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(agentPatchMatch[1]);
         const body = await readJson(req);
 
@@ -2101,15 +2636,15 @@ const server = http.createServer(async (req, res) => {
 
         if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
 
-        params.push(id);
-        const info = db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        params.push(id, workspaceId);
+        const info = db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`).run(...params);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
 
         const row = rowOrNull<any>(
           db
             .prepare(
               `SELECT
-                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2123,9 +2658,10 @@ const server = http.createServer(async (req, res) => {
                   WHERE ts.agent_id = a.id
                     AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
                FROM agents a
-               WHERE a.id = ?`
+               WHERE a.id = ?
+                 AND a.workspace_id = ?`
             )
-            .all(id) as any
+            .all(id, workspaceId) as any
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
@@ -2134,9 +2670,15 @@ const server = http.createServer(async (req, res) => {
 
       const agentResetMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/reset$/) : null;
       if (agentResetMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(agentResetMatch[1]);
         const row = rowOrNull<{ preset_key: string | null; preset_defaults_json: string | null }>(
-          db.prepare('SELECT preset_key, preset_defaults_json FROM agents WHERE id = ?').all(id) as any
+          db.prepare('SELECT preset_key, preset_defaults_json FROM agents WHERE id = ? AND workspace_id = ?').all(id, workspaceId) as any
         );
         if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         if (!row.preset_key || !row.preset_defaults_json) {
@@ -2167,7 +2709,8 @@ const server = http.createServer(async (req, res) => {
                  skills_json = ?,
                  prompt_overrides_json = ?,
                  sort_order = ?
-           WHERE id = ?`
+           WHERE id = ?
+             AND workspace_id = ?`
         ).run(
           normalizeString((defaults as any).display_name) || normalizeString((defaults as any).displayName) || 'Agent',
           (defaults as any).emoji ?? null,
@@ -2180,14 +2723,15 @@ const server = http.createServer(async (req, res) => {
           jsonStringifyArray(Array.isArray((defaults as any).skills) ? (defaults as any).skills : []),
           jsonStringifyPromptOverrides(parsePromptOverridesJson((defaults as any).prompt_overrides)),
           Number.isFinite(Number((defaults as any).sort_order)) ? Number((defaults as any).sort_order) : 0,
-          id
+          id,
+          workspaceId
         );
 
         const updated = rowOrNull<any>(
           db
             .prepare(
               `SELECT
-                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2201,9 +2745,10 @@ const server = http.createServer(async (req, res) => {
                   WHERE ts.agent_id = a.id
                     AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
                FROM agents a
-               WHERE a.id = ?`
+               WHERE a.id = ?
+                 AND a.workspace_id = ?`
             )
-            .all(id) as any
+            .all(id, workspaceId) as any
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
@@ -2212,17 +2757,24 @@ const server = http.createServer(async (req, res) => {
 
       const agentDuplicateMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/duplicate$/) : null;
       if (agentDuplicateMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(agentDuplicateMatch[1]);
         const src = rowOrNull<any>(
           db
             .prepare(
               `SELECT
-                id, display_name, emoji, openclaw_agent_id, enabled, role,
+                id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
                 description, category, tags_json, skills_json, prompt_overrides_json, sort_order
                FROM agents
-               WHERE id = ?`
+               WHERE id = ?
+                 AND workspace_id = ?`
             )
-            .all(id) as any
+            .all(id, workspaceId) as any
         );
         if (!src) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
 
@@ -2231,12 +2783,13 @@ const server = http.createServer(async (req, res) => {
 
         db.prepare(
           `INSERT INTO agents(
-            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
             description, category, tags_json, skills_json, prompt_overrides_json,
             preset_key, preset_defaults_json, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
         ).run(
           newId,
+          workspaceId,
           displayName,
           src.emoji ?? null,
           String(src.openclaw_agent_id ?? DEFAULT_OPENCLAW_AGENT_ID),
@@ -2256,16 +2809,22 @@ const server = http.createServer(async (req, res) => {
 
       const deleteAgentMatch = req.method === 'DELETE' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
       if (deleteAgentMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(deleteAgentMatch[1]);
         const row = rowOrNull<{ preset_key: string | null }>(
-          db.prepare('SELECT preset_key FROM agents WHERE id = ?').all(id) as any
+          db.prepare('SELECT preset_key FROM agents WHERE id = ? AND workspace_id = ?').all(id, workspaceId) as any
         );
         if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         if (row.preset_key) {
           return sendJson(res, 400, { error: 'Installed presets cannot be deleted (disable instead)' }, corsHeaders);
         }
 
-        const info = db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+        const info = db.prepare('DELETE FROM agents WHERE id = ? AND workspace_id = ?').run(id, workspaceId);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         sseBroadcast({ type: 'agents.changed', payload: {} });
         return sendJson(res, 200, { ok: true }, corsHeaders);
@@ -2275,11 +2834,17 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'PUT' && url.pathname === '/agents') {
         const body = await readJson(req);
         if (!Array.isArray(body)) return sendJson(res, 400, { error: 'Expected JSON array' }, corsHeaders);
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
 
         const upsert = db.prepare(
-          `INSERT INTO agents(id, display_name, emoji, openclaw_agent_id, enabled, role)
-           VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO agents(id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
+             workspace_id = excluded.workspace_id,
              display_name = excluded.display_name,
              emoji = excluded.emoji,
              openclaw_agent_id = excluded.openclaw_agent_id,
@@ -2300,7 +2865,7 @@ const server = http.createServer(async (req, res) => {
             if (!displayName) throw new Error('agent.display_name is required');
             if (!openclawAgentId) throw new Error('agent.openclaw_agent_id is required');
 
-            upsert.run(id, displayName, emoji, openclawAgentId, enabled, role);
+            upsert.run(id, workspaceId, displayName, emoji, openclawAgentId, enabled, role);
           }
           db.exec('COMMIT');
         } catch (e) {
@@ -2311,7 +2876,7 @@ const server = http.createServer(async (req, res) => {
         const rows = db
           .prepare(
             `SELECT
-              a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+              a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
               a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
               a.preset_key, a.sort_order, a.created_at, a.updated_at,
               (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2322,12 +2887,13 @@ const server = http.createServer(async (req, res) => {
               (SELECT COUNT(*)
                  FROM task_sessions ts
                  JOIN agent_runs ar ON ar.task_id = ts.task_id
-                WHERE ts.agent_id = a.id
+              WHERE ts.agent_id = a.id
                   AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
              FROM agents a
+             WHERE a.workspace_id = ?
              ORDER BY a.enabled DESC, a.sort_order ASC, a.display_name ASC`
           )
-          .all() as any[];
+          .all(workspaceId) as any[];
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
         return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
@@ -2465,6 +3031,93 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
+      const boardAgentSettingsGet = req.method === 'GET' ? url.pathname.match(/^\/boards\/([^/]+)\/agent-settings$/) : null;
+      if (boardAgentSettingsGet) {
+        const boardId = requireUuid(safeDecodeURIComponent(boardAgentSettingsGet[1]), 'boardId');
+        const board = getBoardMeta(boardId);
+        if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        const row = getResolvedBoardAgentSettings(boardId);
+        return sendJson(
+          res,
+          200,
+          {
+            ...boardAgentSettingsRowToDto(row),
+            workspace_id: board.workspace_id,
+          },
+          corsHeaders
+        );
+      }
+
+      const boardAgentSettingsPut = req.method === 'PUT' ? url.pathname.match(/^\/boards\/([^/]+)\/agent-settings$/) : null;
+      if (boardAgentSettingsPut) {
+        const boardId = requireUuid(safeDecodeURIComponent(boardAgentSettingsPut[1]), 'boardId');
+        const board = getBoardMeta(boardId);
+        if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        const body = await readJson(req);
+
+        const preferredAgentId =
+          body?.preferred_agent_id === null || body?.preferredAgentId === null
+            ? null
+            : normalizeString(body?.preferred_agent_id ?? body?.preferredAgentId) || null;
+        if (preferredAgentId && !getAgentRowById(preferredAgentId, board.workspace_id)) {
+          return sendJson(res, 400, { error: 'preferred_agent_id must belong to the board workspace' }, corsHeaders);
+        }
+
+        const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
+        const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
+        const policy = parseJsonObject(body?.policy ?? body?.policy_json);
+        const memoryPath = body?.memory_path === null || body?.memoryPath === null
+          ? null
+          : normalizeString(body?.memory_path ?? body?.memoryPath) || null;
+        const autoDelegate = body?.auto_delegate === undefined && body?.autoDelegate === undefined
+          ? true
+          : body?.auto_delegate === false || body?.autoDelegate === false
+            ? false
+            : true;
+        const subAgents = parseSubAgentsJson(body?.sub_agents ?? body?.sub_agents_json);
+
+        for (const sub of subAgents) {
+          if (sub.agent_id && !getAgentRowById(sub.agent_id, board.workspace_id)) {
+            return sendJson(res, 400, { error: `sub-agent ${sub.key}: agent_id is not in this workspace` }, corsHeaders);
+          }
+        }
+
+        db.prepare(
+          `INSERT INTO board_agent_settings(
+             board_id, preferred_agent_id, skills_json, prompt_overrides_json, policy_json, memory_path, auto_delegate, sub_agents_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(board_id) DO UPDATE SET
+             preferred_agent_id = excluded.preferred_agent_id,
+             skills_json = excluded.skills_json,
+             prompt_overrides_json = excluded.prompt_overrides_json,
+             policy_json = excluded.policy_json,
+             memory_path = excluded.memory_path,
+             auto_delegate = excluded.auto_delegate,
+             sub_agents_json = excluded.sub_agents_json`
+        ).run(
+          boardId,
+          preferredAgentId,
+          jsonStringifyArray(skills),
+          jsonStringifyPromptOverrides(promptOverrides),
+          JSON.stringify(policy),
+          memoryPath,
+          autoDelegate ? 1 : 0,
+          jsonStringifySubAgents(subAgents)
+        );
+
+        const row = getBoardAgentSettingsRow(boardId);
+        sseBroadcast({ type: 'boards.agent-settings.changed', payload: { boardId } });
+        return sendJson(
+          res,
+          200,
+          {
+            ...(row ? boardAgentSettingsRowToDto(row) : boardAgentSettingsRowToDto(getResolvedBoardAgentSettings(boardId))),
+            workspace_id: board.workspace_id,
+          },
+          corsHeaders
+        );
+      }
+
       if (req.method === 'GET' && url.pathname === '/tasks') {
         let boardId = url.searchParams.get('boardId');
         if (!boardId) boardId = getDefaultBoardId(db);
@@ -2587,20 +3240,34 @@ const server = http.createServer(async (req, res) => {
       if (taskSessionPost) {
         const taskId = decodeURIComponent(taskSessionPost[1]);
         const body = await readJson(req);
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
-        const reasoningLevel = typeof body?.reasoningLevel === 'string' ? body.reasoningLevel : null;
+        const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
+        const hasReasoningLevel = body && Object.prototype.hasOwnProperty.call(body, 'reasoningLevel');
+        const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
+        const reasoningLevel = hasReasoningLevel ? (typeof body?.reasoningLevel === 'string' ? body.reasoningLevel : null) : undefined;
 
-        const task = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM tasks WHERE id = ?').all(taskId) as any);
+        const task = rowOrNull<{ id: string; board_id: string; workspace_id: string }>(
+          db
+            .prepare(
+              `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               WHERE t.id = ?`
+            )
+            .all(taskId) as any
+        );
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
 
-        if (agentId && !getAgentRowById(agentId)) {
+        if (agentId && !getAgentRowById(agentId, task.workspace_id)) {
           return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
         }
         if (reasoningLevel && !REASONING_LEVELS.has(reasoningLevel as ReasoningLevel)) {
           return sendJson(res, 400, { error: 'Invalid reasoningLevel' }, corsHeaders);
         }
 
-        ensureTaskSession(taskId, { agentId, reasoningLevel: (reasoningLevel as ReasoningLevel | null) ?? undefined });
+        const sessionOpts: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null } = {};
+        if (hasAgentId) sessionOpts.agentId = agentId ?? null;
+        if (hasReasoningLevel) sessionOpts.reasoningLevel = (reasoningLevel as ReasoningLevel | null) ?? null;
+        ensureTaskSession(task, Object.keys(sessionOpts).length ? sessionOpts : undefined);
         const row = rowOrNull<any>(
           db
             .prepare(
@@ -2625,11 +3292,15 @@ const server = http.createServer(async (req, res) => {
         if (!['plan', 'execute', 'report'].includes(mode)) {
           return sendJson(res, 400, { error: 'mode must be one of: plan, execute, report' }, corsHeaders);
         }
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
+        const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
         try {
           const result = await runTask({ taskId, mode: mode as any, agentId });
           return sendJson(res, 200, result, corsHeaders);
         } catch (err: any) {
+          if (String(err?.message ?? '') === 'Invalid agentId') {
+            return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
+          }
           return sendJson(res, 500, { error: String(err?.message ?? err) }, corsHeaders);
         }
       }
@@ -2768,15 +3439,34 @@ const server = http.createServer(async (req, res) => {
         const taskId = decodeURIComponent(chatPost[1]);
         const body = await readJson(req);
         const text = typeof body?.text === 'string' ? body.text.trim() : '';
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
+        const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
         if (!text) return sendJson(res, 400, { error: 'text is required' }, corsHeaders);
 
         const task = getTaskMeta(taskId);
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        if (agentId && !getAgentRowById(agentId, task.workspace_id)) {
+          return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
+        }
 
-        const session = ensureTaskSession(taskId, agentId);
-        const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
+        const session = hasAgentId ? ensureTaskSession(task, { agentId: agentId ?? null }) : ensureTaskSession(task);
+        const agentRow = session?.agent_id
+          ? getAgentRowById(session.agent_id, task.workspace_id)
+          : getDefaultAgentRow(task.workspace_id);
         const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
+        const boardSettings = getResolvedBoardAgentSettings(task.board_id);
+        const { systemPrompt, modePrompt } = resolvePromptForMode({
+          mode: 'chat',
+          agentPromptOverridesRaw: agentRow?.prompt_overrides_json ?? '{}',
+          boardPromptOverridesRaw: boardSettings.prompt_overrides_json ?? '{}',
+        });
+        const chatInputParts: string[] = [];
+        if (systemPrompt) chatInputParts.push(`System profile:\n${systemPrompt}`);
+        chatInputParts.push(modePrompt);
+        chatInputParts.push(`Task title: ${task.title}`);
+        chatInputParts.push(`Task description: ${task.description ?? ''}`);
+        chatInputParts.push(`User message: ${text}`);
+        const chatInputText = chatInputParts.join('\n\n');
 
         const userMsgId = randomUUID();
         db.prepare('INSERT INTO task_messages(id, task_id, role, content) VALUES (?, ?, ?, ?)').run(
@@ -2789,9 +3479,9 @@ const server = http.createServer(async (req, res) => {
         let reply = '';
         try {
           const result = await callOpenResponses({
-            sessionKey: session?.session_key ?? taskId,
+            sessionKey: session?.session_key ?? `project:${task.workspace_id}:board:${task.board_id}:task:${taskId}`,
             agentOpenClawId,
-            text,
+            text: chatInputText,
           });
           reply = result.text;
         } catch (err: any) {
@@ -3013,9 +3703,15 @@ const server = http.createServer(async (req, res) => {
       if (patchMatch) {
         const id = patchMatch[1];
         const body = await readJson(req);
-        const existing = rowOrNull<{ status: string; board_id: string; title: string; description: string | null }>(
+        const existing = rowOrNull<{ status: string; board_id: string; workspace_id: string; title: string; description: string | null }>(
           db
-            .prepare('SELECT status, board_id, title, description FROM tasks WHERE id = ?')
+            .prepare(
+              `SELECT t.status as status, t.board_id as board_id, b.workspace_id as workspace_id,
+                      t.title as title, t.description as description
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               WHERE t.id = ?`
+            )
             .all(id) as any
         );
         if (!existing) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
@@ -3080,7 +3776,7 @@ const server = http.createServer(async (req, res) => {
             const summary = await generateTaskSummary({
               taskTitle: task?.title ?? existing.title,
               taskDescription: task?.description ?? existing.description,
-              sessionKey: id,
+              sessionKey: `project:${existing.workspace_id}:board:${existing.board_id}:task:${id}`,
               agentOpenClawId: null,
             });
             appendBoardSummary({ boardId: task?.board_id ?? existing.board_id, title: task?.title ?? existing.title, summary });

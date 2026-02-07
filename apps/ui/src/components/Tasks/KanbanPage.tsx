@@ -1,9 +1,9 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { Board, Task, TaskStatus } from '../../api/types';
-import { createBoard, patchTask } from '../../api/queries';
+import type { Agent, Board, BoardAgentSettings, Task, TaskStatus } from '../../api/types';
+import { createBoard, getBoardAgentSettings, listAgents, patchTask, upsertBoardAgentSettings } from '../../api/queries';
 import { cn } from '../../lib/cn';
 import { formatUpdatedAt } from './taskTime';
 
@@ -75,8 +75,34 @@ export function KanbanPage({
   const [showArchived, setShowArchived] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [preferredAgentIdDraft, setPreferredAgentIdDraft] = useState('');
+  const [skillsDraft, setSkillsDraft] = useState('');
+  const [memoryPathDraft, setMemoryPathDraft] = useState('');
+  const [autoDelegateDraft, setAutoDelegateDraft] = useState(true);
+  const [systemPromptDraft, setSystemPromptDraft] = useState('');
+  const [planPromptDraft, setPlanPromptDraft] = useState('');
+  const [executePromptDraft, setExecutePromptDraft] = useState('');
+  const [chatPromptDraft, setChatPromptDraft] = useState('');
+  const [reportPromptDraft, setReportPromptDraft] = useState('');
+  const [policyDraft, setPolicyDraft] = useState('{}');
+  const [subAgentsDraft, setSubAgentsDraft] = useState('[]');
   const quickRef = useRef<HTMLInputElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
+
+  const boardAgentsQ = useQuery({
+    queryKey: ['agents', { boardId: selectedBoardId, scope: 'board-settings' }],
+    queryFn: () => listAgents({ boardId: selectedBoardId! }),
+    enabled: agentSettingsOpen && !!selectedBoardId,
+  });
+
+  const boardSettingsQ = useQuery({
+    queryKey: ['board-agent-settings', selectedBoardId],
+    queryFn: () => getBoardAgentSettings(selectedBoardId!),
+    enabled: agentSettingsOpen && !!selectedBoardId,
+    retry: false,
+  });
 
   const createM = useMutation({
     mutationFn: async () => {
@@ -105,6 +131,57 @@ export function KanbanPage({
     },
   });
 
+  const saveBoardSettingsM = useMutation({
+    mutationFn: async () => {
+      if (!selectedBoardId) throw new Error('No board selected');
+      let parsedPolicy: Record<string, unknown> = {};
+      let parsedSubAgents: unknown[] = [];
+      try {
+        parsedPolicy = policyDraft.trim() ? (JSON.parse(policyDraft) as Record<string, unknown>) : {};
+      } catch {
+        throw new Error('Policy JSON is invalid');
+      }
+      try {
+        parsedSubAgents = subAgentsDraft.trim() ? (JSON.parse(subAgentsDraft) as unknown[]) : [];
+      } catch {
+        throw new Error('Sub-agents JSON is invalid');
+      }
+      if (!Array.isArray(parsedSubAgents)) {
+        throw new Error('Sub-agents JSON must be an array');
+      }
+      const promptOverrides = {
+        system: systemPromptDraft.trim() || undefined,
+        plan: planPromptDraft.trim() || undefined,
+        execute: executePromptDraft.trim() || undefined,
+        chat: chatPromptDraft.trim() || undefined,
+        report: reportPromptDraft.trim() || undefined,
+      };
+      return upsertBoardAgentSettings(selectedBoardId, {
+        preferred_agent_id: preferredAgentIdDraft || null,
+        skills: skillsDraft
+          .split(',')
+          .map((v) => v.trim())
+          .filter(Boolean),
+        prompt_overrides: promptOverrides,
+        policy: parsedPolicy,
+        memory_path: memoryPathDraft.trim() || null,
+        auto_delegate: autoDelegateDraft,
+        sub_agents: parsedSubAgents as any,
+      });
+    },
+    onSuccess: async () => {
+      setSettingsError(null);
+      if (selectedBoardId) {
+        await qc.invalidateQueries({ queryKey: ['board-agent-settings', selectedBoardId] });
+      }
+      await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
+      setAgentSettingsOpen(false);
+    },
+    onError: (err: any) => {
+      setSettingsError(String(err?.message ?? err));
+    },
+  });
+
   const sortedBoards = useMemo(() => {
     return [...boards].sort((a, b) => {
       if (a.position !== b.position) return a.position - b.position;
@@ -127,6 +204,25 @@ export function KanbanPage({
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const visibleIds = useMemo(() => filteredTasks.map((t) => t.id), [filteredTasks]);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
+  const boardAgents = (boardAgentsQ.data ?? []) as Agent[];
+
+  useEffect(() => {
+    if (!agentSettingsOpen) return;
+    const s = boardSettingsQ.data as BoardAgentSettings | undefined;
+    if (!s) return;
+    setPreferredAgentIdDraft(s.preferred_agent_id ?? '');
+    setSkillsDraft((s.skills ?? []).join(', '));
+    setMemoryPathDraft(s.memory_path ?? '');
+    setAutoDelegateDraft(Boolean(s.auto_delegate));
+    setSystemPromptDraft(s.prompt_overrides?.system ?? '');
+    setPlanPromptDraft(s.prompt_overrides?.plan ?? '');
+    setExecutePromptDraft(s.prompt_overrides?.execute ?? '');
+    setChatPromptDraft(s.prompt_overrides?.chat ?? '');
+    setReportPromptDraft(s.prompt_overrides?.report ?? '');
+    setPolicyDraft(JSON.stringify(s.policy ?? {}, null, 2));
+    setSubAgentsDraft(JSON.stringify(s.sub_agents ?? [], null, 2));
+    setSettingsError(null);
+  }, [agentSettingsOpen, boardSettingsQ.data]);
 
   useEffect(() => {
     if (!selectionMode) {
@@ -377,6 +473,13 @@ export function KanbanPage({
                   <Button
                     variant="secondary"
                     size="sm"
+                    onClick={() => setAgentSettingsOpen(true)}
+                  >
+                    Board AI
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
                     onClick={() => setSelectionMode((prev) => !prev)}
                   >
                     {selectionMode ? 'Done selecting' : 'Select'}
@@ -482,6 +585,149 @@ export function KanbanPage({
           />
         )}
       </div>
+
+      <Dialog.Root open={agentSettingsOpen} onOpenChange={setAgentSettingsOpen}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
+          <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[94vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-surface-1/90 p-5 shadow-popover backdrop-blur">
+            <Dialog.Title className="text-sm font-semibold text-foreground">Board AI Settings</Dialog.Title>
+            <Dialog.Description className="mt-1 text-xs text-muted-foreground">
+              Overlay policy for this board: preferred agent, prompt overrides, skills, and delegated sub-agents.
+            </Dialog.Description>
+
+            <div className="mt-4 grid max-h-[72vh] gap-3 overflow-auto pr-1">
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Preferred agent</label>
+                <select
+                  className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
+                  value={preferredAgentIdDraft}
+                  onChange={(e) => setPreferredAgentIdDraft(e.target.value)}
+                  disabled={boardAgentsQ.isLoading}
+                >
+                  <option value="">Auto (project default)</option>
+                  {boardAgents.filter((a) => a.enabled).map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.display_name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Skills overlay (comma separated)</label>
+                <Input
+                  value={skillsDraft}
+                  onChange={(e) => setSkillsDraft(e.target.value)}
+                  placeholder="research.web, writing.blog, social.packager"
+                />
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Memory path</label>
+                  <Input
+                    value={memoryPathDraft}
+                    onChange={(e) => setMemoryPathDraft(e.target.value)}
+                    placeholder="memory/boards/content.md"
+                  />
+                </div>
+                <label className="mt-6 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={autoDelegateDraft}
+                    onChange={(e) => setAutoDelegateDraft(e.target.checked)}
+                  />
+                  Enable sub-agent delegation in execute mode
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">System prompt override</label>
+                  <textarea
+                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                    value={systemPromptDraft}
+                    onChange={(e) => setSystemPromptDraft(e.target.value)}
+                    placeholder="Global role for this board..."
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Execute prompt override</label>
+                  <textarea
+                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                    value={executePromptDraft}
+                    onChange={(e) => setExecutePromptDraft(e.target.value)}
+                    placeholder="Execution rules for this board..."
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Plan prompt override</label>
+                  <textarea
+                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                    value={planPromptDraft}
+                    onChange={(e) => setPlanPromptDraft(e.target.value)}
+                    placeholder="Planning style..."
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Report prompt override</label>
+                  <textarea
+                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                    value={reportPromptDraft}
+                    onChange={(e) => setReportPromptDraft(e.target.value)}
+                    placeholder="Reporting style..."
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Chat prompt override</label>
+                <textarea
+                  className="min-h-[72px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
+                  value={chatPromptDraft}
+                  onChange={(e) => setChatPromptDraft(e.target.value)}
+                  placeholder="Task chat behavior..."
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Policy JSON</label>
+                <textarea
+                  className="min-h-[120px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 font-mono text-xs text-foreground outline-none"
+                  value={policyDraft}
+                  onChange={(e) => setPolicyDraft(e.target.value)}
+                  placeholder='{"tools":{"mode":"allowlist","allow":["dzzen.*"]}}'
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Sub-agents JSON</label>
+                <textarea
+                  className="min-h-[140px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 font-mono text-xs text-foreground outline-none"
+                  value={subAgentsDraft}
+                  onChange={(e) => setSubAgentsDraft(e.target.value)}
+                  placeholder='[{"key":"research","label":"Research Worker","agent_id":"...","role_prompt":"Collect facts","enabled":true}]'
+                />
+              </div>
+
+              {settingsError ? <InlineAlert>{settingsError}</InlineAlert> : null}
+              {boardSettingsQ.isError ? <InlineAlert>{String(boardSettingsQ.error)}</InlineAlert> : null}
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button variant="ghost" onClick={() => setAgentSettingsOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => saveBoardSettingsM.mutate()}
+                disabled={saveBoardSettingsM.isPending || !selectedBoardId}
+              >
+                {saveBoardSettingsM.isPending ? 'Saving…' : 'Save settings'}
+              </Button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   );
 }

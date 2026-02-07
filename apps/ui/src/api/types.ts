@@ -8,6 +8,32 @@ export type Board = {
   updated_at: string;
 };
 
+export type BoardAgentSubAgent = {
+  key: string;
+  label: string;
+  agent_id: string | null;
+  openclaw_agent_id: string | null;
+  role_prompt: string | null;
+  model: string | null;
+  enabled: boolean;
+};
+
+export type BoardAgentSettings = {
+  board_id: string;
+  workspace_id?: string;
+  preferred_agent_id: string | null;
+  preferred_agent_display_name?: string | null;
+  preferred_agent_openclaw_id?: string | null;
+  skills: string[];
+  prompt_overrides: PromptOverrides;
+  policy: Record<string, unknown>;
+  memory_path: string | null;
+  auto_delegate: boolean;
+  sub_agents: BoardAgentSubAgent[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type TaskStatus = 'ideas' | 'todo' | 'doing' | 'review' | 'release' | 'done' | 'archived';
 export type ChecklistState = 'todo' | 'doing' | 'done';
 export type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
@@ -70,6 +96,7 @@ export type DocContent = {
 
 export type Agent = {
   id: string;
+  workspace_id?: string | null;
   display_name: string;
   emoji: string | null;
   openclaw_agent_id: string;
