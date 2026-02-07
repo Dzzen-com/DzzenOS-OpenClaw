@@ -4147,7 +4147,6 @@ const server = http.createServer(async (req, res) => {
           if (!sectionRow) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
           nextSectionId = sectionRow.id;
           nextProjectId = sectionRow.workspace_id;
-          nextWorkspaceId = sectionRow.workspace_id;
           nextIsInbox = sectionRow.section_kind === 'inbox' ? 1 : 0;
           updates.push('board_id = ?');
           params.push(nextSectionId);
