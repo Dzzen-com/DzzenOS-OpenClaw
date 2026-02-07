@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
 type SseClient = {
   id: string;
@@ -83,6 +84,16 @@ type AllowedOrigins = {
 };
 
 type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+type HeartbeatMode = 'isolated' | 'main';
+type BoardAgentSubAgent = {
+  key: string;
+  label: string;
+  agent_id: string | null;
+  openclaw_agent_id: string | null;
+  role_prompt: string | null;
+  model: string | null;
+  enabled: boolean;
+};
 
 function parseAllowedOrigins(raw: string | undefined): AllowedOrigins {
   const origins = new Set<string>();
@@ -196,6 +207,144 @@ function rowOrNull<T>(rows: T[]): T | null {
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function parseIsoDate(raw: any): Date | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d;
+}
+
+function addMinutes(input: Date, minutes: number): Date {
+  return new Date(input.getTime() + Math.max(0, minutes) * 60_000);
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
+function toUtcDateKey(d: Date): string {
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+function startOfUtcDay(d: Date): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+}
+
+function normalizeUtcTime(value: any): string {
+  const raw = normalizeString(value) || '23:30';
+  const m = /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/.exec(raw);
+  if (!m) return '23:30';
+  return `${pad2(Number(m[1]))}:${m[2]}`;
+}
+
+function computeNextStandupUtc(input: { now: Date; timeUtc: string }): Date {
+  const safeTime = normalizeUtcTime(input.timeUtc);
+  const [hRaw, mRaw] = safeTime.split(':');
+  const h = Number(hRaw);
+  const m = Number(mRaw);
+  const todayTarget = new Date(Date.UTC(
+    input.now.getUTCFullYear(),
+    input.now.getUTCMonth(),
+    input.now.getUTCDate(),
+    h,
+    m,
+    0,
+    0
+  ));
+  if (todayTarget.getTime() > input.now.getTime()) return todayTarget;
+  return addMinutes(todayTarget, 24 * 60);
+}
+
+function normalizeHeartbeatMode(value: any): HeartbeatMode {
+  return normalizeString(value) === 'main' ? 'main' : 'isolated';
+}
+
+function normalizeIntervalMinutes(value: any, fallback = 15): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(24 * 60, Math.max(1, Math.round(n)));
+}
+
+function normalizeOffsetMinutes(value: any): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  const out = Math.round(n);
+  return Math.max(0, Math.min(24 * 60 - 1, out));
+}
+
+function computeNextHeartbeatAt(input: {
+  now: Date;
+  intervalMinutes: number;
+  offsetMinutes: number;
+}): Date {
+  const intervalMs = Math.max(1, input.intervalMinutes) * 60_000;
+  const offsetMs = Math.max(0, input.offsetMinutes) * 60_000;
+  const epoch = input.now.getTime();
+  const bucket = Math.floor((epoch - offsetMs) / intervalMs) + 1;
+  return new Date(bucket * intervalMs + offsetMs);
+}
+
+function slugifyLabel(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function parseMentions(text: string): string[] {
+  const out = new Set<string>();
+  const re = /(^|[\s(])@([a-zA-Z0-9._-]{2,64})/g;
+  let m: RegExpExecArray | null = null;
+  while ((m = re.exec(text)) != null) {
+    const token = m[2]?.trim().toLowerCase();
+    if (token) out.add(token);
+  }
+  return [...out];
+}
+
+function parseSpaceSeparatedArgs(raw: string): string[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  return trimmed.split(/\s+/).filter(Boolean);
+}
+
+function pickCronJobId(raw: any): string | null {
+  const candidates = [
+    raw?.id,
+    raw?.jobId,
+    raw?.job?.id,
+    raw?.result?.id,
+    raw?.data?.id,
+    raw?.job?.jobId,
+  ];
+  for (const c of candidates) {
+    const s = normalizeString(c);
+    if (s) return s;
+  }
+  return null;
+}
+
+function pickCronNextRunAt(raw: any): string | null {
+  const candidates = [
+    raw?.nextRunAt,
+    raw?.next_run_at,
+    raw?.job?.nextRunAt,
+    raw?.job?.next_run_at,
+    raw?.result?.nextRunAt,
+    raw?.result?.next_run_at,
+  ];
+  for (const c of candidates) {
+    const d = parseIsoDate(c);
+    if (d) return d.toISOString();
+  }
+  return null;
 }
 
 const TASK_STATUSES = new Set(['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived']);
@@ -367,6 +516,70 @@ function jsonStringifyPromptOverrides(value: PromptOverrides): string {
   return JSON.stringify(out);
 }
 
+function parseJsonObject(raw: any): Record<string, any> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as any;
+  if (typeof raw !== 'string') return {};
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as any;
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+function parseSubAgentsJson(raw: any): BoardAgentSubAgent[] {
+  const src = (() => {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw !== 'string') return [];
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const out: BoardAgentSubAgent[] = [];
+  const seen = new Set<string>();
+  for (const row of src) {
+    if (!row || typeof row !== 'object') continue;
+    const keyRaw = normalizeString((row as any).key);
+    if (!keyRaw) continue;
+    const key = keyRaw.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+
+    const label = normalizeString((row as any).label) || key;
+    const agentId = normalizeString((row as any).agent_id) || normalizeString((row as any).agentId) || null;
+    const openclawAgentId =
+      normalizeString((row as any).openclaw_agent_id) || normalizeString((row as any).openclawAgentId) || null;
+    const rolePrompt = normalizeString((row as any).role_prompt) || normalizeString((row as any).rolePrompt) || null;
+    const model = normalizeString((row as any).model) || null;
+    const enabled = (row as any).enabled !== false;
+
+    out.push({
+      key,
+      label,
+      agent_id: agentId,
+      openclaw_agent_id: openclawAgentId,
+      role_prompt: rolePrompt,
+      model,
+      enabled,
+    });
+  }
+  return out;
+}
+
+function jsonStringifySubAgents(value: BoardAgentSubAgent[]): string {
+  const out = parseSubAgentsJson(value);
+  return JSON.stringify(out);
+}
+
 function parseCapabilitiesJson(raw: any): SkillCapabilities {
   const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
 
@@ -422,6 +635,7 @@ function skillRowToDto(r: any) {
 function agentRowToDto(r: any) {
   return {
     id: String(r.id),
+    workspace_id: r.workspace_id ?? null,
     display_name: String(r.display_name ?? ''),
     emoji: r.emoji ?? null,
     openclaw_agent_id: String(r.openclaw_agent_id ?? ''),
@@ -442,6 +656,40 @@ function agentRowToDto(r: any) {
   };
 }
 
+function boardAgentSettingsRowToDto(r: any) {
+  return {
+    board_id: String(r.board_id),
+    preferred_agent_id: r.preferred_agent_id ?? null,
+    skills: parseStringArrayJson(r.skills_json),
+    prompt_overrides: parsePromptOverridesJson(r.prompt_overrides_json),
+    policy: parseJsonObject(r.policy_json),
+    memory_path: r.memory_path ?? null,
+    auto_delegate: Boolean(r.auto_delegate),
+    sub_agents: parseSubAgentsJson(r.sub_agents_json),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+    preferred_agent_display_name: r.preferred_agent_display_name ?? null,
+    preferred_agent_openclaw_id: r.preferred_agent_openclaw_id ?? null,
+  };
+}
+
+function workspaceAgentSettingsRowToDto(r: any) {
+  return {
+    workspace_id: String(r.workspace_id),
+    preferred_agent_id: r.preferred_agent_id ?? null,
+    skills: parseStringArrayJson(r.skills_json),
+    prompt_overrides: parsePromptOverridesJson(r.prompt_overrides_json),
+    policy: parseJsonObject(r.policy_json),
+    memory_path: r.memory_path ?? null,
+    auto_delegate: Boolean(r.auto_delegate),
+    sub_agents: parseSubAgentsJson(r.sub_agents_json),
+    created_at: String(r.created_at ?? ''),
+    updated_at: String(r.updated_at ?? ''),
+    preferred_agent_display_name: r.preferred_agent_display_name ?? null,
+    preferred_agent_openclaw_id: r.preferred_agent_openclaw_id ?? null,
+  };
+}
+
 function getDefaultBoardId(db: DatabaseSync): string | null {
   const row = rowOrNull<{ id: string }>(
     db.prepare('SELECT id FROM boards ORDER BY position ASC, created_at ASC LIMIT 1').all() as any
@@ -454,6 +702,13 @@ function getDefaultWorkspaceId(db: DatabaseSync): string | null {
     db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any
   );
   return row?.id ?? null;
+}
+
+function getWorkspaceIdByBoardId(db: DatabaseSync, boardId: string): string | null {
+  const row = rowOrNull<{ workspace_id: string }>(
+    db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
+  );
+  return row?.workspace_id ?? null;
 }
 
 function main() {
@@ -503,6 +758,194 @@ function main() {
     process.env.OPENRESPONSES_MODEL ?? process.env.DZZENOS_OPENRESPONSES_MODEL ?? 'openclaw:main';
   const defaultAgentId = process.env.DZZENOS_DEFAULT_AGENT_ID ?? '';
   const taskAbortControllers = new Map<string, AbortController>();
+  const openClawBin = normalizeString(process.env.DZZENOS_OPENCLAW_BIN) || 'openclaw';
+  const openClawBaseArgs = parseSpaceSeparatedArgs(process.env.DZZENOS_OPENCLAW_ARGS ?? '');
+
+  function runOpenClawCliJson(args: string[]) {
+    const cmdArgs = [...openClawBaseArgs, ...args];
+    try {
+      const stdout = execFileSync(openClawBin, cmdArgs, {
+        encoding: 'utf8',
+        env: process.env,
+        maxBuffer: 8 * 1024 * 1024,
+      });
+      const text = String(stdout ?? '').trim();
+      if (!text) return {};
+      try {
+        return JSON.parse(text);
+      } catch {
+        throw new Error(`Invalid OpenClaw JSON output: ${text.slice(0, 400)}`);
+      }
+    } catch (err: any) {
+      const stderr = String(err?.stderr ?? '').trim();
+      const stdout = String(err?.stdout ?? '').trim();
+      const reason = stderr || stdout || String(err?.message ?? err);
+      if (String(reason).includes('command not found') || err?.code === 'ENOENT') {
+        throw new Error(
+          `OpenClaw CLI not found. Set DZZENOS_OPENCLAW_BIN or install openclaw. (${openClawBin})`
+        );
+      }
+      throw new Error(`OpenClaw CLI error: ${reason}`);
+    }
+  }
+
+  function openClawCronStatus() {
+    return runOpenClawCliJson(['cron', 'status', '--json']);
+  }
+
+  function openClawCronList(input?: { includeDisabled?: boolean }) {
+    const args = ['cron', 'list', '--json'];
+    if (input?.includeDisabled) args.push('--all');
+    const raw = runOpenClawCliJson(args);
+    const jobs = Array.isArray((raw as any)?.jobs) ? (raw as any).jobs : [];
+    return { raw, jobs };
+  }
+
+  function openClawCronRuns(jobId: string, limit = 50) {
+    return runOpenClawCliJson(['cron', 'runs', '--id', jobId, '--limit', String(Math.max(1, limit))]);
+  }
+
+  function openClawCronRun(jobId: string, mode: 'force' | 'due' = 'force') {
+    const args = ['cron', 'run', jobId];
+    if (mode === 'due') args.push('--due');
+    return runOpenClawCliJson(args);
+  }
+
+  function openClawCronRemove(jobId: string) {
+    return runOpenClawCliJson(['cron', 'rm', jobId, '--json']);
+  }
+
+  function openClawCronAddHeartbeat(input: {
+    name: string;
+    everyMinutes: number;
+    mode: HeartbeatMode;
+    message: string;
+    agentOpenClawId?: string | null;
+    model?: string | null;
+    enabled: boolean;
+  }) {
+    const args = [
+      'cron',
+      'add',
+      '--name',
+      input.name,
+      '--every',
+      `${Math.max(1, input.everyMinutes)}m`,
+      '--session',
+      input.mode,
+      '--wake',
+      'now',
+      '--json',
+    ];
+    if (!input.enabled) args.push('--disabled');
+    if (input.agentOpenClawId) args.push('--agent', input.agentOpenClawId);
+    if (input.mode === 'main') {
+      args.push('--system-event', input.message || 'Heartbeat check');
+    } else {
+      args.push('--message', input.message || 'Heartbeat check');
+      args.push('--no-deliver');
+      if (input.model) args.push('--model', input.model);
+    }
+    return runOpenClawCliJson(args);
+  }
+
+  function openClawCronEditHeartbeat(input: {
+    jobId: string;
+    everyMinutes: number;
+    mode: HeartbeatMode;
+    message: string;
+    agentOpenClawId?: string | null;
+    model?: string | null;
+    enabled: boolean;
+  }) {
+    const args = [
+      'cron',
+      'edit',
+      input.jobId,
+      '--session',
+      input.mode,
+      '--every',
+      `${Math.max(1, input.everyMinutes)}m`,
+    ];
+    if (input.enabled) args.push('--enable');
+    else args.push('--disable');
+    if (input.agentOpenClawId) args.push('--agent', input.agentOpenClawId);
+    else args.push('--clear-agent');
+    if (input.mode === 'main') {
+      args.push('--system-event', input.message || 'Heartbeat check');
+    } else {
+      args.push('--message', input.message || 'Heartbeat check');
+      args.push('--no-deliver');
+      if (input.model) args.push('--model', input.model);
+    }
+    return runOpenClawCliJson(args);
+  }
+
+  function openClawCronAddStandup(input: {
+    name: string;
+    hourUtc: number;
+    minuteUtc: number;
+    message: string;
+    agentOpenClawId?: string | null;
+    model?: string | null;
+    enabled: boolean;
+  }) {
+    const expr = `${Math.max(0, Math.min(59, input.minuteUtc))} ${Math.max(0, Math.min(23, input.hourUtc))} * * *`;
+    const args = [
+      'cron',
+      'add',
+      '--name',
+      input.name,
+      '--cron',
+      expr,
+      '--tz',
+      'UTC',
+      '--session',
+      'isolated',
+      '--message',
+      input.message,
+      '--no-deliver',
+      '--wake',
+      'now',
+      '--json',
+    ];
+    if (!input.enabled) args.push('--disabled');
+    if (input.agentOpenClawId) args.push('--agent', input.agentOpenClawId);
+    if (input.model) args.push('--model', input.model);
+    return runOpenClawCliJson(args);
+  }
+
+  function openClawCronEditStandup(input: {
+    jobId: string;
+    hourUtc: number;
+    minuteUtc: number;
+    message: string;
+    agentOpenClawId?: string | null;
+    model?: string | null;
+    enabled: boolean;
+  }) {
+    const expr = `${Math.max(0, Math.min(59, input.minuteUtc))} ${Math.max(0, Math.min(23, input.hourUtc))} * * *`;
+    const args = [
+      'cron',
+      'edit',
+      input.jobId,
+      '--cron',
+      expr,
+      '--tz',
+      'UTC',
+      '--session',
+      'isolated',
+      '--message',
+      input.message,
+      '--no-deliver',
+    ];
+    if (input.enabled) args.push('--enable');
+    else args.push('--disable');
+    if (input.agentOpenClawId) args.push('--agent', input.agentOpenClawId);
+    else args.push('--clear-agent');
+    if (input.model) args.push('--model', input.model);
+    return runOpenClawCliJson(args);
+  }
 
   function boardDocPath(boardId: string) {
     return path.join(docsDir, 'boards', `${boardId}.md`);
@@ -520,6 +963,7 @@ function main() {
     sessionKey: string;
     text: string;
     agentOpenClawId?: string | null;
+    model?: string | null;
     signal?: AbortSignal;
   }): Promise<{ text: string; raw: any }> {
     if (!openResponsesUrl) {
@@ -541,7 +985,7 @@ function main() {
     const res = await fetch(openResponsesUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model: openResponsesModel, input: input.text }),
+      body: JSON.stringify({ model: input.model ?? openResponsesModel, input: input.text }),
       signal: input.signal,
     });
 
@@ -651,44 +1095,185 @@ function main() {
     );
   }
 
-  function getAgentRowById(agentId: string) {
+  function getBoardMeta(boardId: string) {
     return rowOrNull<{
       id: string;
-      display_name: string;
-      openclaw_agent_id: string;
+      workspace_id: string;
+      name: string;
+      description: string | null;
     }>(
       db
-        .prepare(
-          'SELECT id, display_name, openclaw_agent_id FROM agents WHERE id = ? AND enabled = 1'
-        )
-        .all(agentId) as any
+        .prepare('SELECT id, workspace_id, name, description FROM boards WHERE id = ?')
+        .all(boardId) as any
     );
   }
 
-  function getDefaultAgentRow() {
-    if (defaultAgentId) {
-      const row = rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+  function getWorkspaceMeta(workspaceId: string) {
+    return rowOrNull<{
+      id: string;
+      name: string;
+      description: string | null;
+    }>(
+      db
+        .prepare('SELECT id, name, description FROM workspaces WHERE id = ?')
+        .all(workspaceId) as any
+    );
+  }
+
+  function getBoardAgentSettingsRow(boardId: string) {
+    return rowOrNull<any>(
+      db
+        .prepare(
+          `SELECT
+             s.board_id, s.preferred_agent_id, s.skills_json, s.prompt_overrides_json,
+             s.policy_json, s.memory_path, s.auto_delegate, s.sub_agents_json,
+             s.created_at, s.updated_at,
+             a.display_name as preferred_agent_display_name,
+             a.openclaw_agent_id as preferred_agent_openclaw_id
+           FROM board_agent_settings s
+           LEFT JOIN agents a ON a.id = s.preferred_agent_id
+           WHERE s.board_id = ?`
+        )
+        .all(boardId) as any
+    );
+  }
+
+  function getWorkspaceAgentSettingsRow(workspaceId: string) {
+    return rowOrNull<{
+      workspace_id: string;
+      preferred_agent_id: string | null;
+      skills_json: string;
+      prompt_overrides_json: string;
+      policy_json: string;
+      memory_path: string | null;
+      auto_delegate: number;
+      sub_agents_json: string;
+      created_at: string | null;
+      updated_at: string | null;
+      preferred_agent_display_name: string | null;
+      preferred_agent_openclaw_id: string | null;
+    }>(
+      db
+        .prepare(
+          `SELECT
+             s.workspace_id, s.preferred_agent_id, s.skills_json, s.prompt_overrides_json,
+             s.policy_json, s.memory_path, s.auto_delegate, s.sub_agents_json,
+             s.created_at, s.updated_at,
+             a.display_name as preferred_agent_display_name,
+             a.openclaw_agent_id as preferred_agent_openclaw_id
+           FROM workspace_agent_settings s
+           LEFT JOIN agents a ON a.id = s.preferred_agent_id
+           WHERE s.workspace_id = ?`
+        )
+        .all(workspaceId) as any
+    );
+  }
+
+  function getAgentRowById(agentId: string, workspaceId?: string | null) {
+    return rowOrNull<{
+      id: string;
+      workspace_id: string | null;
+      display_name: string;
+      openclaw_agent_id: string;
+      skills_json: string;
+      prompt_overrides_json: string;
+    }>(
+      db
+        .prepare(
+          `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+           FROM agents
+           WHERE id = ?
+             AND enabled = 1
+             AND (? IS NULL OR workspace_id = ?)`
+        )
+        .all(agentId, workspaceId ?? null, workspaceId ?? null) as any
+    );
+  }
+
+  function getDefaultAgentRow(workspaceId?: string | null) {
+    const scopeWorkspaceId = workspaceId ?? getDefaultWorkspaceId(db);
+    if (scopeWorkspaceId && defaultAgentId) {
+      const row = rowOrNull<{
+        id: string;
+        workspace_id: string | null;
+        display_name: string;
+        openclaw_agent_id: string;
+        skills_json: string;
+        prompt_overrides_json: string;
+      }>(
         db
           .prepare(
-            'SELECT id, display_name, openclaw_agent_id FROM agents WHERE openclaw_agent_id = ? AND enabled = 1'
+            `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+             FROM agents
+             WHERE openclaw_agent_id = ?
+               AND enabled = 1
+               AND workspace_id = ?
+             ORDER BY sort_order ASC, created_at ASC
+             LIMIT 1`
           )
-          .all(defaultAgentId) as any
+          .all(defaultAgentId, scopeWorkspaceId) as any
       );
       if (row) return row;
     }
-    return rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+    if (scopeWorkspaceId) {
+      const row = rowOrNull<{
+        id: string;
+        workspace_id: string | null;
+        display_name: string;
+        openclaw_agent_id: string;
+        skills_json: string;
+        prompt_overrides_json: string;
+      }>(
+        db
+          .prepare(
+            `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+             FROM agents
+             WHERE enabled = 1
+               AND workspace_id = ?
+             ORDER BY sort_order ASC, created_at ASC
+             LIMIT 1`
+          )
+          .all(scopeWorkspaceId) as any
+      );
+      if (row) return row;
+    }
+    return rowOrNull<{
+      id: string;
+      workspace_id: string | null;
+      display_name: string;
+      openclaw_agent_id: string;
+      skills_json: string;
+      prompt_overrides_json: string;
+    }>(
       db
         .prepare(
-          'SELECT id, display_name, openclaw_agent_id FROM agents WHERE enabled = 1 ORDER BY created_at ASC LIMIT 1'
+          `SELECT id, workspace_id, display_name, openclaw_agent_id, skills_json, prompt_overrides_json
+           FROM agents
+           WHERE enabled = 1
+           ORDER BY sort_order ASC, created_at ASC
+           LIMIT 1`
         )
         .all() as any
     );
   }
 
+  function resolveAgentWorkspaceId(input: { workspaceId?: string | null; boardId?: string | null }) {
+    const workspaceId = normalizeString(input.workspaceId ?? '');
+    if (workspaceId) return workspaceId;
+    const boardId = normalizeString(input.boardId ?? '');
+    if (boardId) {
+      const byBoard = getWorkspaceIdByBoardId(db, boardId);
+      if (!byBoard) throw new HttpError(404, 'Board not found');
+      return byBoard;
+    }
+    return getDefaultWorkspaceId(db);
+  }
+
   function ensureTaskSession(
-    taskId: string,
+    task: { id: string; board_id: string; workspace_id: string },
     opts?: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null }
   ) {
+    const taskId = task.id;
     const existing = rowOrNull<{
       task_id: string;
       agent_id: string | null;
@@ -700,11 +1285,28 @@ function main() {
         .all(taskId) as any
     );
     if (existing) {
-      if (opts?.agentId && existing.agent_id !== opts.agentId) {
-        db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(opts.agentId, taskId);
+      let shouldRefresh = false;
+      if (opts && Object.prototype.hasOwnProperty.call(opts, 'agentId')) {
+        const nextAgentId = opts.agentId ?? null;
+        if (existing.agent_id !== nextAgentId) {
+          db.prepare('UPDATE task_sessions SET agent_id = ? WHERE task_id = ?').run(nextAgentId, taskId);
+          shouldRefresh = true;
+        }
       }
-      if (opts?.reasoningLevel && existing.reasoning_level !== opts.reasoningLevel) {
-        db.prepare('UPDATE task_sessions SET reasoning_level = ? WHERE task_id = ?').run(opts.reasoningLevel, taskId);
+      if (opts && Object.prototype.hasOwnProperty.call(opts, 'reasoningLevel')) {
+        const nextReasoning = opts.reasoningLevel ?? 'auto';
+        if (existing.reasoning_level !== nextReasoning) {
+          db.prepare('UPDATE task_sessions SET reasoning_level = ? WHERE task_id = ?').run(nextReasoning, taskId);
+          shouldRefresh = true;
+        }
+      }
+      const expectedSessionKey = `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
+      if (existing.session_key !== expectedSessionKey) {
+        db.prepare('UPDATE task_sessions SET session_key = ? WHERE task_id = ?').run(expectedSessionKey, taskId);
+        shouldRefresh = true;
+      }
+      if (!shouldRefresh) {
+        return existing;
       }
       return rowOrNull<{
         task_id: string;
@@ -718,7 +1320,7 @@ function main() {
       );
     }
 
-    const sessionKey = taskId;
+    const sessionKey = `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
     const reasoningLevel = opts?.reasoningLevel ?? 'auto';
     db.prepare('INSERT INTO task_sessions(task_id, agent_id, session_key, reasoning_level) VALUES (?, ?, ?, ?)').run(
       taskId,
@@ -770,14 +1372,415 @@ function main() {
     return err?.name === 'AbortError' || String(err?.message ?? '').toLowerCase().includes('aborted');
   }
 
+  function getResolvedBoardAgentSettings(boardId: string) {
+    const row = getBoardAgentSettingsRow(boardId);
+    if (row) return row;
+    return {
+      board_id: boardId,
+      preferred_agent_id: null,
+      skills_json: '[]',
+      prompt_overrides_json: '{}',
+      policy_json: '{}',
+      memory_path: null,
+      auto_delegate: 1,
+      sub_agents_json: '[]',
+      created_at: null,
+      updated_at: null,
+      preferred_agent_display_name: null,
+      preferred_agent_openclaw_id: null,
+    };
+  }
+
+  function getResolvedWorkspaceAgentSettings(workspaceId: string) {
+    const row = getWorkspaceAgentSettingsRow(workspaceId);
+    if (row) return row;
+    return {
+      workspace_id: workspaceId,
+      preferred_agent_id: null,
+      skills_json: '[]',
+      prompt_overrides_json: '{}',
+      policy_json: '{}',
+      memory_path: null,
+      auto_delegate: 1,
+      sub_agents_json: '[]',
+      created_at: null,
+      updated_at: null,
+      preferred_agent_display_name: null,
+      preferred_agent_openclaw_id: null,
+    };
+  }
+
+  function getAgentHeartbeatSettingsRow(agentId: string) {
+    return rowOrNull<{
+      agent_id: string;
+      workspace_id: string;
+      enabled: number;
+      interval_minutes: number;
+      offset_minutes: number;
+      mode: HeartbeatMode;
+      message: string;
+      model: string | null;
+      cron_job_id: string | null;
+      next_run_at: string | null;
+      last_run_at: string | null;
+      last_error: string | null;
+      created_at: string | null;
+      updated_at: string | null;
+    }>(
+      db
+        .prepare(
+          `SELECT
+             agent_id, workspace_id, enabled, interval_minutes, offset_minutes, mode, message, model,
+             cron_job_id, next_run_at, last_run_at, last_error, created_at, updated_at
+           FROM agent_heartbeat_settings
+           WHERE agent_id = ?`
+        )
+        .all(agentId) as any
+    );
+  }
+
+  function getResolvedAgentHeartbeatSettings(input: { agentId: string; workspaceId: string }) {
+    const row = getAgentHeartbeatSettingsRow(input.agentId);
+    if (row) return row;
+    return {
+      agent_id: input.agentId,
+      workspace_id: input.workspaceId,
+      enabled: 1,
+      interval_minutes: 15,
+      offset_minutes: 0,
+      mode: 'isolated' as HeartbeatMode,
+      message:
+        'You are on heartbeat duty. Check new mentions, assigned tasks, and recent activity. If nothing actionable, reply HEARTBEAT_OK.',
+      model: null,
+      cron_job_id: null,
+      next_run_at: null,
+      last_run_at: null,
+      last_error: null,
+      created_at: null,
+      updated_at: null,
+    };
+  }
+
+  function heartbeatSettingsToDto(row: any) {
+    return {
+      agent_id: String(row.agent_id),
+      workspace_id: String(row.workspace_id),
+      enabled: Boolean(row.enabled),
+      interval_minutes: Number(row.interval_minutes ?? 15),
+      offset_minutes: Number(row.offset_minutes ?? 0),
+      mode: normalizeHeartbeatMode(row.mode),
+      message: String(row.message ?? ''),
+      model: row.model ?? null,
+      cron_job_id: row.cron_job_id ?? null,
+      next_run_at: row.next_run_at ?? null,
+      last_run_at: row.last_run_at ?? null,
+      last_error: row.last_error ?? null,
+      created_at: String(row.created_at ?? ''),
+      updated_at: String(row.updated_at ?? ''),
+    };
+  }
+
+  function getWorkspaceStandupSettingsRow(workspaceId: string) {
+    return rowOrNull<{
+      workspace_id: string;
+      enabled: number;
+      time_utc: string;
+      prompt: string | null;
+      model: string | null;
+      cron_job_id: string | null;
+      next_run_at: string | null;
+      last_run_at: string | null;
+      last_error: string | null;
+      created_at: string | null;
+      updated_at: string | null;
+    }>(
+      db
+        .prepare(
+          `SELECT
+             workspace_id, enabled, time_utc, prompt, model, cron_job_id, next_run_at, last_run_at, last_error, created_at, updated_at
+           FROM workspace_standup_settings
+           WHERE workspace_id = ?`
+        )
+        .all(workspaceId) as any
+    );
+  }
+
+  function getResolvedWorkspaceStandupSettings(workspaceId: string) {
+    const row = getWorkspaceStandupSettingsRow(workspaceId);
+    if (row) return row;
+    return {
+      workspace_id: workspaceId,
+      enabled: 0,
+      time_utc: '23:30',
+      prompt: null,
+      model: null,
+      cron_job_id: null,
+      next_run_at: null,
+      last_run_at: null,
+      last_error: null,
+      created_at: null,
+      updated_at: null,
+    };
+  }
+
+  function standupSettingsToDto(row: any) {
+    return {
+      workspace_id: String(row.workspace_id),
+      enabled: Boolean(row.enabled),
+      time_utc: normalizeUtcTime(row.time_utc),
+      prompt: row.prompt ?? null,
+      model: row.model ?? null,
+      cron_job_id: row.cron_job_id ?? null,
+      next_run_at: row.next_run_at ?? null,
+      last_run_at: row.last_run_at ?? null,
+      last_error: row.last_error ?? null,
+      created_at: String(row.created_at ?? ''),
+      updated_at: String(row.updated_at ?? ''),
+    };
+  }
+
+  function syncHeartbeatForAgent(agentId: string) {
+    const agent = rowOrNull<{
+      id: string;
+      workspace_id: string | null;
+      openclaw_agent_id: string;
+      display_name: string;
+    }>(
+      db
+        .prepare(
+          `SELECT id, workspace_id, openclaw_agent_id, display_name
+           FROM agents
+           WHERE id = ?`
+        )
+        .all(agentId) as any
+    );
+    if (!agent) throw new Error('Agent not found');
+    if (!agent.workspace_id) throw new Error('Agent has no workspace');
+
+    const row = getResolvedAgentHeartbeatSettings({
+      agentId: agent.id,
+      workspaceId: agent.workspace_id,
+    });
+    const mode = normalizeHeartbeatMode(row.mode);
+    const enabled = Boolean(row.enabled);
+    const everyMinutes = normalizeIntervalMinutes(row.interval_minutes, 15);
+    const message =
+      normalizeString(row.message) ||
+      'You are on heartbeat duty. Check new mentions, assigned tasks, and recent activity. If nothing actionable, reply HEARTBEAT_OK.';
+    const model = normalizeString(row.model) || null;
+    const name = `dzzen-heartbeat:${slugifyLabel(agent.openclaw_agent_id || agent.display_name || agent.id) || agent.id}`;
+
+    let cronJobId = normalizeString(row.cron_job_id) || null;
+    let cronRaw: any = null;
+
+    if (!cronJobId) {
+      cronRaw = openClawCronAddHeartbeat({
+        name,
+        everyMinutes,
+        mode,
+        message,
+        agentOpenClawId: agent.openclaw_agent_id,
+        model,
+        enabled,
+      });
+      cronJobId = pickCronJobId(cronRaw);
+      if (!cronJobId) {
+        throw new Error(`Failed to resolve heartbeat cron job id from OpenClaw response: ${JSON.stringify(cronRaw)}`);
+      }
+    } else {
+      cronRaw = openClawCronEditHeartbeat({
+        jobId: cronJobId,
+        everyMinutes,
+        mode,
+        message,
+        agentOpenClawId: agent.openclaw_agent_id,
+        model,
+        enabled,
+      });
+    }
+
+    const nextRunAt = pickCronNextRunAt(cronRaw);
+
+    db.prepare(
+      `UPDATE agent_heartbeat_settings
+       SET cron_job_id = ?, next_run_at = ?, last_run_at = ?, last_error = NULL
+       WHERE agent_id = ?`
+    ).run(cronJobId, nextRunAt, nowIso(), agentId);
+
+    const refreshed = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+    return {
+      settings: refreshed,
+      cron_raw: cronRaw,
+    };
+  }
+
+  function buildStandupPrompt(input: {
+    workspaceName: string;
+    workspaceDescription?: string | null;
+    customPrompt?: string | null;
+  }): string {
+    const custom = normalizeString(input.customPrompt);
+    if (custom) return custom;
+    return [
+      `Generate DAILY STANDUP for workspace: ${input.workspaceName}.`,
+      `Workspace context: ${input.workspaceDescription ?? ''}`,
+      'Use sections: COMPLETED, IN_PROGRESS, BLOCKED, NEEDS_REVIEW, KEY_DECISIONS.',
+      'Be concise and actionable.',
+    ].join('\n');
+  }
+
+  function syncStandupForWorkspace(workspaceId: string) {
+    const workspace = getWorkspaceMeta(workspaceId);
+    if (!workspace) throw new Error('Workspace not found');
+
+    const row = getResolvedWorkspaceStandupSettings(workspaceId);
+    const enabled = Boolean(row.enabled);
+    const timeUtc = normalizeUtcTime(row.time_utc);
+    const [hRaw, mRaw] = timeUtc.split(':');
+    const hourUtc = Number(hRaw);
+    const minuteUtc = Number(mRaw);
+    const prompt = buildStandupPrompt({
+      workspaceName: workspace.name,
+      workspaceDescription: workspace.description ?? null,
+      customPrompt: row.prompt ?? null,
+    });
+    const model = normalizeString(row.model) || null;
+    const workspaceAgentSettings = getResolvedWorkspaceAgentSettings(workspaceId);
+    const preferredAgent = workspaceAgentSettings.preferred_agent_id
+      ? getAgentRowById(workspaceAgentSettings.preferred_agent_id, workspaceId)
+      : getDefaultAgentRow(workspaceId);
+    const openclawAgentId = normalizeString(preferredAgent?.openclaw_agent_id) || null;
+    const name = `dzzen-standup:${slugifyLabel(workspace.name) || workspace.id}`;
+
+    let cronJobId = normalizeString(row.cron_job_id) || null;
+    let cronRaw: any = null;
+    if (!cronJobId) {
+      cronRaw = openClawCronAddStandup({
+        name,
+        hourUtc,
+        minuteUtc,
+        message: prompt,
+        model,
+        agentOpenClawId: openclawAgentId,
+        enabled,
+      });
+      cronJobId = pickCronJobId(cronRaw);
+      if (!cronJobId) {
+        throw new Error(`Failed to resolve standup cron job id from OpenClaw response: ${JSON.stringify(cronRaw)}`);
+      }
+    } else {
+      cronRaw = openClawCronEditStandup({
+        jobId: cronJobId,
+        hourUtc,
+        minuteUtc,
+        message: prompt,
+        model,
+        agentOpenClawId: openclawAgentId,
+        enabled,
+      });
+    }
+
+    const nextRunAt = pickCronNextRunAt(cronRaw);
+    db.prepare(
+      `UPDATE workspace_standup_settings
+       SET cron_job_id = ?, next_run_at = ?, last_run_at = ?, last_error = NULL
+       WHERE workspace_id = ?`
+    ).run(cronJobId, nextRunAt, nowIso(), workspaceId);
+
+    const refreshed = getResolvedWorkspaceStandupSettings(workspaceId);
+    return {
+      settings: refreshed,
+      cron_raw: cronRaw,
+    };
+  }
+
+  function resolvePromptForMode(input: {
+    mode: 'plan' | 'execute' | 'report' | 'chat';
+    agentPromptOverridesRaw?: any;
+    workspacePromptOverridesRaw?: any;
+    boardPromptOverridesRaw?: any;
+  }) {
+    const fallback =
+      input.mode === 'plan'
+        ? 'You are a task planner. Return JSON: { "description": "...", "checklist": ["..."] }.'
+        : input.mode === 'execute'
+          ? 'You are executing the task. Return JSON: { "status": "review" | "doing", "report": "..." }.'
+          : input.mode === 'report'
+            ? 'Summarize the completion for changelog. Return bullet points.'
+            : 'You are helping in task chat. Be concise and actionable.';
+
+    const agentPromptOverrides = parsePromptOverridesJson(input.agentPromptOverridesRaw);
+    const workspacePromptOverrides = parsePromptOverridesJson(input.workspacePromptOverridesRaw);
+    const boardPromptOverrides = parsePromptOverridesJson(input.boardPromptOverridesRaw);
+    const systemPrompt =
+      boardPromptOverrides.system ?? workspacePromptOverrides.system ?? agentPromptOverrides.system ?? null;
+    const modePrompt =
+      (boardPromptOverrides as any)[input.mode] ??
+      (workspacePromptOverrides as any)[input.mode] ??
+      (agentPromptOverrides as any)[input.mode] ??
+      fallback;
+    return { systemPrompt, modePrompt };
+  }
+
+  function resolvePreferredTaskAgent(input: {
+    task: { id: string; board_id: string; workspace_id: string };
+    sessionAgentId?: string | null;
+    boardPreferredAgentId?: string | null;
+    workspacePreferredAgentId?: string | null;
+  }) {
+    if (input.sessionAgentId) {
+      const row = getAgentRowById(input.sessionAgentId, input.task.workspace_id);
+      if (row) return row;
+    }
+    if (input.boardPreferredAgentId) {
+      const row = getAgentRowById(input.boardPreferredAgentId, input.task.workspace_id);
+      if (row) return row;
+    }
+    if (input.workspacePreferredAgentId) {
+      const row = getAgentRowById(input.workspacePreferredAgentId, input.task.workspace_id);
+      if (row) return row;
+    }
+    return getDefaultAgentRow(input.task.workspace_id);
+  }
+
   async function runTask(opts: { taskId: string; mode: 'plan' | 'execute' | 'report'; agentId?: string | null }) {
     const task = getTaskMeta(opts.taskId);
     if (!task) throw new Error('Task not found');
+    if (opts.agentId && !getAgentRowById(opts.agentId, task.workspace_id)) {
+      throw new Error('Invalid agentId');
+    }
 
-    const session = ensureTaskSession(task.id, { agentId: opts.agentId ?? null });
-    const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
+    const workspaceSettings = getResolvedWorkspaceAgentSettings(task.workspace_id);
+    const boardSettings = getResolvedBoardAgentSettings(task.board_id);
+    const boardSettingsRow = getBoardAgentSettingsRow(task.board_id);
+    const boardMeta = getBoardMeta(task.board_id);
+    const workspaceMeta = getWorkspaceMeta(task.workspace_id);
+    const session =
+      opts.agentId !== undefined ? ensureTaskSession(task, { agentId: opts.agentId }) : ensureTaskSession(task);
+    const agentRow = resolvePreferredTaskAgent({
+      task,
+      sessionAgentId: session?.agent_id ?? null,
+      boardPreferredAgentId: boardSettings.preferred_agent_id ?? null,
+      workspacePreferredAgentId: workspaceSettings.preferred_agent_id ?? null,
+    });
     const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
     const agentDisplayName = agentRow?.display_name ?? 'orchestrator';
+    const sessionKey = session?.session_key ?? `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
+    const { systemPrompt, modePrompt } = resolvePromptForMode({
+      mode: opts.mode,
+      agentPromptOverridesRaw: agentRow?.prompt_overrides_json ?? '{}',
+      workspacePromptOverridesRaw: workspaceSettings.prompt_overrides_json ?? '{}',
+      boardPromptOverridesRaw: boardSettings.prompt_overrides_json ?? '{}',
+    });
+    const workspaceSkills = parseStringArrayJson(workspaceSettings.skills_json);
+    const boardSkills = parseStringArrayJson(boardSettings.skills_json);
+    const agentSkills = parseStringArrayJson(agentRow?.skills_json ?? '[]');
+    const effectiveSkills = [...new Set([...agentSkills, ...workspaceSkills, ...boardSkills])];
+    const workspacePolicy = parseJsonObject(workspaceSettings.policy_json);
+    const boardPolicy = parseJsonObject(boardSettings.policy_json);
+    const effectivePolicy = { ...workspacePolicy, ...boardPolicy };
+    const memoryPath =
+      normalizeString(boardSettings.memory_path ?? '') || normalizeString(workspaceSettings.memory_path ?? '') || null;
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
 
@@ -803,46 +1806,182 @@ function main() {
 
     let outputText = '';
     let parsed: any = null;
+    let stepIndex = 1;
+    const delegatedOutputs: Array<{ key: string; label: string; text: string; error?: string }> = [];
+    let usageObserved = false;
+    let usageInputTokens = 0;
+    let usageOutputTokens = 0;
+    let usageTotalTokens = 0;
+
+    const addUsage = (usage: any) => {
+      if (!usage || typeof usage !== 'object') return;
+      const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? null);
+      const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? null);
+      const totalTokens = Number(usage.total_tokens ?? null);
+      if (Number.isFinite(inputTokens)) {
+        usageInputTokens += inputTokens;
+        usageObserved = true;
+      }
+      if (Number.isFinite(outputTokens)) {
+        usageOutputTokens += outputTokens;
+        usageObserved = true;
+      }
+      if (Number.isFinite(totalTokens)) {
+        usageTotalTokens += totalTokens;
+        usageObserved = true;
+      }
+    };
 
     try {
-      const prompt =
-        opts.mode === 'plan'
-          ? 'You are a task planner. Return JSON: { "description": "...", "checklist": ["..."] }.'
-          : opts.mode === 'execute'
-            ? 'You are executing the task. Return JSON: { "status": "review" | "doing", "report": "..." }.'
-            : 'Summarize the completion for changelog. Return bullet points.';
-
       const reasoning = resolveReasoning(session?.reasoning_level ?? 'auto', task.description);
       const reasoningPrefix = reasoning ? `/think ${reasoning}` : '';
-      const inputText =
-        `${reasoningPrefix ? `${reasoningPrefix}\n` : ''}${prompt}\n\n` +
-        `Task title: ${task.title}\nTask description: ${task.description ?? ''}`;
+
+      if (opts.mode === 'execute') {
+        const workspaceSubAgents = parseSubAgentsJson(workspaceSettings.sub_agents_json).filter((s) => s.enabled);
+        const boardSubAgents = parseSubAgentsJson(boardSettings.sub_agents_json).filter((s) => s.enabled);
+        const subAgents = boardSettingsRow ? boardSubAgents : workspaceSubAgents;
+        const autoDelegate = boardSettingsRow
+          ? Boolean(boardSettings.auto_delegate)
+          : Boolean(workspaceSettings.auto_delegate);
+        if (autoDelegate && subAgents.length) {
+          for (const sub of subAgents) {
+            const subStepId = randomUUID();
+            db.prepare(
+              'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            ).run(
+              subStepId,
+              runId,
+              stepIndex++,
+              `delegate:${sub.key}`,
+              'running',
+              JSON.stringify({
+                sub_agent: sub,
+                board_id: task.board_id,
+                task_id: task.id,
+              }),
+              null
+            );
+
+            const subAgentRow = sub.agent_id ? getAgentRowById(sub.agent_id, task.workspace_id) : null;
+            const subAgentOpenclawId = subAgentRow?.openclaw_agent_id ?? sub.openclaw_agent_id ?? null;
+            const subSessionKey = `${sessionKey}:worker:${sub.key}`;
+
+            const delegatePromptParts: string[] = [];
+            if (sub.role_prompt) delegatePromptParts.push(`Role: ${sub.role_prompt}`);
+            delegatePromptParts.push(
+              'You are a delegated specialist for this task. Return concise actionable output in Markdown.'
+            );
+            delegatePromptParts.push(`Task title: ${task.title}`);
+            delegatePromptParts.push(`Task description: ${task.description ?? ''}`);
+            delegatePromptParts.push(`Project context: ${workspaceMeta?.description ?? ''}`);
+            delegatePromptParts.push(`Board context: ${boardMeta?.description ?? ''}`);
+            if (effectiveSkills.length) delegatePromptParts.push(`Preferred skills overlay: ${effectiveSkills.join(', ')}`);
+            if (memoryPath) delegatePromptParts.push(`Memory path hint: ${memoryPath}`);
+            if (Object.keys(effectivePolicy).length) {
+              delegatePromptParts.push(`Policy context: ${JSON.stringify(effectivePolicy)}`);
+            }
+
+            try {
+              const { text: delegatedText, raw: delegatedRaw } = await callOpenResponses({
+                sessionKey: subSessionKey,
+                agentOpenClawId: subAgentOpenclawId,
+                model: sub.model,
+                text: delegatePromptParts.join('\n\n'),
+                signal: controller.signal,
+              });
+              addUsage(delegatedRaw?.usage ?? null);
+              delegatedOutputs.push({ key: sub.key, label: sub.label, text: delegatedText.trim() });
+              db.prepare(
+                "UPDATE run_steps SET status = 'succeeded', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+              ).run(
+                JSON.stringify({
+                  text: delegatedText,
+                  usage: delegatedRaw?.usage ?? null,
+                  model: sub.model ?? null,
+                  openclaw_agent_id: subAgentOpenclawId,
+                }),
+                subStepId
+              );
+            } catch (err: any) {
+              if (isAbortError(err)) throw err;
+              const errorText = String(err?.message ?? err);
+              delegatedOutputs.push({ key: sub.key, label: sub.label, text: '', error: errorText });
+              db.prepare(
+                "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
+              ).run(
+                JSON.stringify({
+                  error: errorText,
+                  model: sub.model ?? null,
+                  openclaw_agent_id: subAgentOpenclawId,
+                }),
+                subStepId
+              );
+            }
+          }
+        }
+      }
+
+      const inputSections: string[] = [];
+      if (systemPrompt) inputSections.push(`System profile:\n${systemPrompt}`);
+      if (reasoningPrefix) inputSections.push(reasoningPrefix);
+      inputSections.push(modePrompt);
+      inputSections.push(`Task title: ${task.title}\nTask description: ${task.description ?? ''}`);
+      if (effectiveSkills.length) inputSections.push(`Preferred skills overlay: ${effectiveSkills.join(', ')}`);
+      if (memoryPath) inputSections.push(`Memory path hint: ${memoryPath}`);
+      if (Object.keys(effectivePolicy).length) inputSections.push(`Policy context: ${JSON.stringify(effectivePolicy)}`);
+      if (delegatedOutputs.length) {
+        const delegationSummary = delegatedOutputs
+          .map((d) => {
+            if (d.error) return `### ${d.label}\nError: ${d.error}`;
+            return `### ${d.label}\n${d.text}`;
+          })
+          .join('\n\n');
+        inputSections.push(`Delegated worker outputs:\n${delegationSummary}`);
+      }
+      const inputText = inputSections.join('\n\n');
 
       const { text, raw } = await callOpenResponses({
-        sessionKey: session?.session_key ?? task.id,
+        sessionKey,
         agentOpenClawId,
         text: inputText,
         signal: controller.signal,
       });
+      addUsage(raw?.usage ?? null);
 
       outputText = text;
       parsed = tryParseJson(text);
 
       db.prepare(
         "UPDATE run_steps SET status = 'succeeded', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-      ).run(JSON.stringify({ text: outputText, parsed, usage: raw?.usage ?? null }), stepId);
+      ).run(
+        JSON.stringify({
+          text: outputText,
+          parsed,
+          usage: raw?.usage ?? null,
+          delegated_count: delegatedOutputs.length,
+          delegated: delegatedOutputs,
+          board_settings: {
+            preferred_agent_id: boardSettings.preferred_agent_id ?? null,
+            auto_delegate: Boolean(boardSettings.auto_delegate),
+            memory_path: memoryPath,
+            skills: effectiveSkills,
+          },
+          workspace_settings: {
+            preferred_agent_id: workspaceSettings.preferred_agent_id ?? null,
+            auto_delegate: Boolean(workspaceSettings.auto_delegate),
+          },
+        }),
+        stepId
+      );
 
-      const usage = raw?.usage ?? null;
-      if (usage && typeof usage === 'object') {
-        const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? null);
-        const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? null);
-        const totalTokens = Number(usage.total_tokens ?? null);
+      if (usageObserved) {
+        const computedTotal = usageTotalTokens || usageInputTokens + usageOutputTokens;
         db.prepare(
           'UPDATE agent_runs SET input_tokens = ?, output_tokens = ?, total_tokens = ? WHERE id = ?'
         ).run(
-          Number.isFinite(inputTokens) ? inputTokens : null,
-          Number.isFinite(outputTokens) ? outputTokens : null,
-          Number.isFinite(totalTokens) ? totalTokens : null,
+          usageInputTokens > 0 ? usageInputTokens : null,
+          usageOutputTokens > 0 ? usageOutputTokens : null,
+          computedTotal > 0 ? computedTotal : null,
           runId
         );
       }
@@ -853,16 +1992,16 @@ function main() {
     } catch (err: any) {
       if (isAbortError(err)) {
         db.prepare(
-          "UPDATE run_steps SET status = 'cancelled', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-        ).run(JSON.stringify({ error: 'cancelled' }), stepId);
+          "UPDATE run_steps SET status = 'cancelled', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE run_id = ? AND status = 'running'"
+        ).run(JSON.stringify({ error: 'cancelled' }), runId);
         db.prepare(
           "UPDATE agent_runs SET status = 'cancelled', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
         ).run(runId);
         return { runId, outputText: '', parsed: null, cancelled: true };
       }
       db.prepare(
-        "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
-      ).run(JSON.stringify({ error: String(err?.message ?? err) }), stepId);
+        "UPDATE run_steps SET status = 'failed', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE run_id = ? AND status = 'running'"
+      ).run(JSON.stringify({ error: String(err?.message ?? err) }), runId);
       db.prepare(
         "UPDATE agent_runs SET status = 'failed', finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
       ).run(runId);
@@ -1482,6 +2621,303 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, row, corsHeaders);
       }
 
+      if (req.method === 'GET' && url.pathname === '/openclaw/cron/status') {
+        try {
+          const status = openClawCronStatus();
+          return sendJson(res, 200, status, corsHeaders);
+        } catch (err: any) {
+          return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'GET' && url.pathname === '/openclaw/cron/jobs') {
+        const includeDisabled = url.searchParams.get('all') === '1' || url.searchParams.get('all') === 'true';
+        try {
+          const { raw, jobs } = openClawCronList({ includeDisabled });
+          return sendJson(res, 200, { jobs, raw }, corsHeaders);
+        } catch (err: any) {
+          return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+      }
+
+      const openclawCronRunsMatch = req.method === 'GET' ? url.pathname.match(/^\/openclaw\/cron\/jobs\/([^/]+)\/runs$/) : null;
+      if (openclawCronRunsMatch) {
+        const jobId = decodeURIComponent(openclawCronRunsMatch[1]);
+        const limit = Math.max(1, Number(url.searchParams.get('limit') ?? 50) || 50);
+        try {
+          const runs = openClawCronRuns(jobId, limit);
+          return sendJson(res, 200, runs, corsHeaders);
+        } catch (err: any) {
+          return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+      }
+
+      const openclawCronRunMatch = req.method === 'POST' ? url.pathname.match(/^\/openclaw\/cron\/jobs\/([^/]+)\/run$/) : null;
+      if (openclawCronRunMatch) {
+        const jobId = decodeURIComponent(openclawCronRunMatch[1]);
+        const body = await readJson(req);
+        const mode = normalizeString(body?.mode) === 'due' ? 'due' : 'force';
+        try {
+          const run = openClawCronRun(jobId, mode);
+          return sendJson(res, 200, run, corsHeaders);
+        } catch (err: any) {
+          return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+      }
+
+      const openclawCronDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/openclaw\/cron\/jobs\/([^/]+)$/) : null;
+      if (openclawCronDeleteMatch) {
+        const jobId = decodeURIComponent(openclawCronDeleteMatch[1]);
+        try {
+          const out = openClawCronRemove(jobId);
+          return sendJson(res, 200, out, corsHeaders);
+        } catch (err: any) {
+          return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+      }
+
+      const heartbeatGetMatch = req.method === 'GET' ? url.pathname.match(/^\/agents\/([^/]+)\/heartbeat-settings$/) : null;
+      if (heartbeatGetMatch) {
+        const agentId = decodeURIComponent(heartbeatGetMatch[1]);
+        const agent = rowOrNull<{ id: string; workspace_id: string | null }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!agent.workspace_id) return sendJson(res, 400, { error: 'Agent has no workspace' }, corsHeaders);
+        const settings = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+        return sendJson(res, 200, heartbeatSettingsToDto(settings), corsHeaders);
+      }
+
+      const heartbeatPutMatch = req.method === 'PUT' ? url.pathname.match(/^\/agents\/([^/]+)\/heartbeat-settings$/) : null;
+      if (heartbeatPutMatch) {
+        const agentId = decodeURIComponent(heartbeatPutMatch[1]);
+        const agent = rowOrNull<{ id: string; workspace_id: string | null }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!agent.workspace_id) return sendJson(res, 400, { error: 'Agent has no workspace' }, corsHeaders);
+        const body = await readJson(req);
+
+        const prev = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+        const enabled =
+          body?.enabled === undefined
+            ? Boolean(prev.enabled)
+            : body.enabled === false
+              ? false
+              : true;
+        const intervalMinutes =
+          body?.interval_minutes !== undefined || body?.intervalMinutes !== undefined
+            ? normalizeIntervalMinutes(body?.interval_minutes ?? body?.intervalMinutes, 15)
+            : normalizeIntervalMinutes(prev.interval_minutes, 15);
+        const offsetMinutes =
+          body?.offset_minutes !== undefined || body?.offsetMinutes !== undefined
+            ? normalizeOffsetMinutes(body?.offset_minutes ?? body?.offsetMinutes)
+            : normalizeOffsetMinutes(prev.offset_minutes);
+        const mode =
+          body?.mode !== undefined
+            ? normalizeHeartbeatMode(body.mode)
+            : normalizeHeartbeatMode(prev.mode);
+        const message =
+          body?.message !== undefined
+            ? normalizeString(body.message)
+            : normalizeString(prev.message);
+        const model =
+          body?.model === null
+            ? null
+            : body?.model !== undefined
+              ? normalizeString(body.model) || null
+              : normalizeString(prev.model) || null;
+
+        db.prepare(
+          `INSERT INTO agent_heartbeat_settings(
+             agent_id, workspace_id, enabled, interval_minutes, offset_minutes, mode, message, model
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(agent_id) DO UPDATE SET
+             workspace_id = excluded.workspace_id,
+             enabled = excluded.enabled,
+             interval_minutes = excluded.interval_minutes,
+             offset_minutes = excluded.offset_minutes,
+             mode = excluded.mode,
+             message = excluded.message,
+             model = excluded.model`
+        ).run(
+          agentId,
+          agent.workspace_id,
+          enabled ? 1 : 0,
+          intervalMinutes,
+          offsetMinutes,
+          mode,
+          message ||
+            'You are on heartbeat duty. Check new mentions, assigned tasks, and recent activity. If nothing actionable, reply HEARTBEAT_OK.',
+          model
+        );
+
+        const shouldSync = body?.sync === false ? false : true;
+        let syncError: string | null = null;
+        let syncedRaw: any = null;
+        if (shouldSync) {
+          try {
+            const synced = syncHeartbeatForAgent(agentId);
+            syncedRaw = synced.cron_raw ?? null;
+          } catch (err: any) {
+            syncError = String(err?.message ?? err);
+            db.prepare('UPDATE agent_heartbeat_settings SET last_error = ? WHERE agent_id = ?').run(syncError, agentId);
+          }
+        }
+
+        const settings = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+        sseBroadcast({ type: 'agents.heartbeat-settings.changed', payload: { agentId } });
+        return sendJson(
+          res,
+          syncError ? 502 : 200,
+          {
+            ...heartbeatSettingsToDto(settings),
+            sync_error: syncError,
+            sync_raw: syncedRaw,
+          },
+          corsHeaders
+        );
+      }
+
+      const heartbeatRunNowMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/heartbeat-run$/) : null;
+      if (heartbeatRunNowMatch) {
+        const agentId = decodeURIComponent(heartbeatRunNowMatch[1]);
+        const agent = rowOrNull<{ id: string; workspace_id: string | null }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!agent.workspace_id) return sendJson(res, 400, { error: 'Agent has no workspace' }, corsHeaders);
+        let settings = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+        let jobId = normalizeString(settings.cron_job_id);
+        if (!jobId) {
+          try {
+            syncHeartbeatForAgent(agentId);
+            settings = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+            jobId = normalizeString(settings.cron_job_id);
+          } catch (err: any) {
+            return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+          }
+        }
+        if (!jobId) return sendJson(res, 400, { error: 'No cron job linked to heartbeat settings' }, corsHeaders);
+        try {
+          const run = openClawCronRun(jobId, 'force');
+          db.prepare('UPDATE agent_heartbeat_settings SET last_run_at = ?, last_error = NULL WHERE agent_id = ?').run(nowIso(), agentId);
+          const refreshed = getResolvedAgentHeartbeatSettings({ agentId, workspaceId: agent.workspace_id });
+          return sendJson(res, 200, { run, settings: heartbeatSettingsToDto(refreshed) }, corsHeaders);
+        } catch (err: any) {
+          const msg = String(err?.message ?? err);
+          db.prepare('UPDATE agent_heartbeat_settings SET last_error = ? WHERE agent_id = ?').run(msg, agentId);
+          return sendJson(res, 502, { error: msg }, corsHeaders);
+        }
+      }
+
+      const standupGetMatch = req.method === 'GET' ? url.pathname.match(/^\/workspaces\/([^/]+)\/standup-settings$/) : null;
+      if (standupGetMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(standupGetMatch[1]), 'workspaceId');
+        const workspace = getWorkspaceMeta(workspaceId);
+        if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
+        const settings = getResolvedWorkspaceStandupSettings(workspaceId);
+        return sendJson(res, 200, standupSettingsToDto(settings), corsHeaders);
+      }
+
+      const standupPutMatch = req.method === 'PUT' ? url.pathname.match(/^\/workspaces\/([^/]+)\/standup-settings$/) : null;
+      if (standupPutMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(standupPutMatch[1]), 'workspaceId');
+        const workspace = getWorkspaceMeta(workspaceId);
+        if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
+        const body = await readJson(req);
+
+        const prev = getResolvedWorkspaceStandupSettings(workspaceId);
+        const enabled =
+          body?.enabled === undefined
+            ? Boolean(prev.enabled)
+            : body.enabled === false
+              ? false
+              : true;
+        const timeUtc =
+          body?.time_utc !== undefined || body?.timeUtc !== undefined
+            ? normalizeUtcTime(body?.time_utc ?? body?.timeUtc)
+            : normalizeUtcTime(prev.time_utc);
+        const prompt =
+          body?.prompt === null
+            ? null
+            : body?.prompt !== undefined
+              ? normalizeString(body.prompt) || null
+              : prev.prompt ?? null;
+        const model =
+          body?.model === null
+            ? null
+            : body?.model !== undefined
+              ? normalizeString(body.model) || null
+              : normalizeString(prev.model) || null;
+
+        db.prepare(
+          `INSERT INTO workspace_standup_settings(
+             workspace_id, enabled, time_utc, prompt, model
+           ) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(workspace_id) DO UPDATE SET
+             enabled = excluded.enabled,
+             time_utc = excluded.time_utc,
+             prompt = excluded.prompt,
+             model = excluded.model`
+        ).run(workspaceId, enabled ? 1 : 0, timeUtc, prompt, model);
+
+        const shouldSync = body?.sync === false ? false : true;
+        let syncError: string | null = null;
+        let syncedRaw: any = null;
+        if (shouldSync) {
+          try {
+            const synced = syncStandupForWorkspace(workspaceId);
+            syncedRaw = synced.cron_raw ?? null;
+          } catch (err: any) {
+            syncError = String(err?.message ?? err);
+            db.prepare('UPDATE workspace_standup_settings SET last_error = ? WHERE workspace_id = ?').run(syncError, workspaceId);
+          }
+        }
+
+        const settings = getResolvedWorkspaceStandupSettings(workspaceId);
+        sseBroadcast({ type: 'workspaces.standup-settings.changed', payload: { workspaceId } });
+        return sendJson(
+          res,
+          syncError ? 502 : 200,
+          {
+            ...standupSettingsToDto(settings),
+            sync_error: syncError,
+            sync_raw: syncedRaw,
+          },
+          corsHeaders
+        );
+      }
+
+      const standupRunNowMatch = req.method === 'POST' ? url.pathname.match(/^\/workspaces\/([^/]+)\/standup-run$/) : null;
+      if (standupRunNowMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(standupRunNowMatch[1]), 'workspaceId');
+        const workspace = getWorkspaceMeta(workspaceId);
+        if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
+        let settings = getResolvedWorkspaceStandupSettings(workspaceId);
+        let jobId = normalizeString(settings.cron_job_id);
+        if (!jobId) {
+          try {
+            syncStandupForWorkspace(workspaceId);
+            settings = getResolvedWorkspaceStandupSettings(workspaceId);
+            jobId = normalizeString(settings.cron_job_id);
+          } catch (err: any) {
+            return sendJson(res, 502, { error: String(err?.message ?? err) }, corsHeaders);
+          }
+        }
+        if (!jobId) return sendJson(res, 400, { error: 'No cron job linked to standup settings' }, corsHeaders);
+        try {
+          const run = openClawCronRun(jobId, 'force');
+          db.prepare('UPDATE workspace_standup_settings SET last_run_at = ?, last_error = NULL WHERE workspace_id = ?').run(nowIso(), workspaceId);
+          const refreshed = getResolvedWorkspaceStandupSettings(workspaceId);
+          return sendJson(res, 200, { run, settings: standupSettingsToDto(refreshed) }, corsHeaders);
+        } catch (err: any) {
+          const msg = String(err?.message ?? err);
+          db.prepare('UPDATE workspace_standup_settings SET last_error = ? WHERE workspace_id = ?').run(msg, workspaceId);
+          return sendJson(res, 502, { error: msg }, corsHeaders);
+        }
+      }
+
       if (req.method === 'GET' && url.pathname === '/automations') {
         const rows = db
           .prepare('SELECT id, name, description, created_at, updated_at FROM automations ORDER BY created_at DESC')
@@ -1849,9 +3285,15 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/marketplace/agents') {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const installedRows = db
-          .prepare('SELECT id, preset_key FROM agents WHERE preset_key IS NOT NULL')
-          .all() as any[];
+          .prepare('SELECT id, preset_key FROM agents WHERE workspace_id = ? AND preset_key IS NOT NULL')
+          .all(workspaceId) as any[];
         const installedByKey = new Map<string, string>();
         for (const r of installedRows) {
           if (typeof r?.preset_key === 'string' && typeof r?.id === 'string') installedByKey.set(r.preset_key, r.id);
@@ -1869,6 +3311,12 @@ const server = http.createServer(async (req, res) => {
         ? url.pathname.match(/^\/marketplace\/agents\/([^/]+)\/install$/)
         : null;
       if (marketplaceInstallMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const presetKey = decodeURIComponent(marketplaceInstallMatch[1]);
         const preset = getMarketplaceAgentPreset(presetKey);
         if (!preset) return sendJson(res, 404, { error: 'Preset not found' }, corsHeaders);
@@ -1877,7 +3325,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         const existing = rowOrNull<{ id: string }>(
-          db.prepare('SELECT id FROM agents WHERE preset_key = ? LIMIT 1').all(presetKey) as any
+          db.prepare('SELECT id FROM agents WHERE workspace_id = ? AND preset_key = ? LIMIT 1').all(workspaceId, presetKey) as any
         );
         if (existing?.id) return sendJson(res, 200, { id: existing.id }, corsHeaders);
 
@@ -1888,6 +3336,7 @@ const server = http.createServer(async (req, res) => {
 
         const presetDefaults = {
           preset_key: preset.preset_key,
+          workspace_id: workspaceId,
           display_name: preset.display_name,
           emoji: preset.emoji,
           description: preset.description,
@@ -1903,12 +3352,13 @@ const server = http.createServer(async (req, res) => {
 
         db.prepare(
           `INSERT INTO agents(
-            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
             description, category, tags_json, skills_json, prompt_overrides_json,
             preset_key, preset_defaults_json, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           id,
+          workspaceId,
           preset.display_name,
           preset.emoji,
           openclawAgentId,
@@ -1929,10 +3379,16 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/agents') {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const rows = db
           .prepare(
             `SELECT
-              a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+              a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
               a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
               a.preset_key, a.sort_order, a.created_at, a.updated_at,
               (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -1943,12 +3399,13 @@ const server = http.createServer(async (req, res) => {
               (SELECT COUNT(*)
                  FROM task_sessions ts
                  JOIN agent_runs ar ON ar.task_id = ts.task_id
-                WHERE ts.agent_id = a.id
+               WHERE ts.agent_id = a.id
                   AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
              FROM agents a
+             WHERE a.workspace_id = ?
              ORDER BY a.enabled DESC, a.sort_order ASC, a.display_name ASC`
           )
-          .all() as any[];
+          .all(workspaceId) as any[];
 
         return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
       }
@@ -1971,15 +3428,26 @@ const server = http.createServer(async (req, res) => {
         const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
         const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
         const sortOrder = Number.isFinite(Number(body?.sort_order)) ? Number(body.sort_order) : 0;
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId:
+            typeof body?.workspaceId === 'string'
+              ? body.workspaceId
+              : typeof body?.workspace_id === 'string'
+                ? body.workspace_id
+                : null,
+          boardId: typeof body?.boardId === 'string' ? body.boardId : null,
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
 
         db.prepare(
           `INSERT INTO agents(
-            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
             description, category, tags_json, skills_json, prompt_overrides_json,
             preset_key, preset_defaults_json, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
         ).run(
           id,
+          workspaceId,
           displayName,
           emoji,
           openclawAgentId,
@@ -1997,7 +3465,7 @@ const server = http.createServer(async (req, res) => {
           db
             .prepare(
               `SELECT
-                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2022,6 +3490,12 @@ const server = http.createServer(async (req, res) => {
 
       const agentPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
       if (agentPatchMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(agentPatchMatch[1]);
         const body = await readJson(req);
 
@@ -2101,15 +3575,15 @@ const server = http.createServer(async (req, res) => {
 
         if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
 
-        params.push(id);
-        const info = db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        params.push(id, workspaceId);
+        const info = db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`).run(...params);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
 
         const row = rowOrNull<any>(
           db
             .prepare(
               `SELECT
-                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2123,9 +3597,10 @@ const server = http.createServer(async (req, res) => {
                   WHERE ts.agent_id = a.id
                     AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
                FROM agents a
-               WHERE a.id = ?`
+               WHERE a.id = ?
+                 AND a.workspace_id = ?`
             )
-            .all(id) as any
+            .all(id, workspaceId) as any
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
@@ -2134,9 +3609,15 @@ const server = http.createServer(async (req, res) => {
 
       const agentResetMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/reset$/) : null;
       if (agentResetMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(agentResetMatch[1]);
         const row = rowOrNull<{ preset_key: string | null; preset_defaults_json: string | null }>(
-          db.prepare('SELECT preset_key, preset_defaults_json FROM agents WHERE id = ?').all(id) as any
+          db.prepare('SELECT preset_key, preset_defaults_json FROM agents WHERE id = ? AND workspace_id = ?').all(id, workspaceId) as any
         );
         if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         if (!row.preset_key || !row.preset_defaults_json) {
@@ -2167,7 +3648,8 @@ const server = http.createServer(async (req, res) => {
                  skills_json = ?,
                  prompt_overrides_json = ?,
                  sort_order = ?
-           WHERE id = ?`
+           WHERE id = ?
+             AND workspace_id = ?`
         ).run(
           normalizeString((defaults as any).display_name) || normalizeString((defaults as any).displayName) || 'Agent',
           (defaults as any).emoji ?? null,
@@ -2180,14 +3662,15 @@ const server = http.createServer(async (req, res) => {
           jsonStringifyArray(Array.isArray((defaults as any).skills) ? (defaults as any).skills : []),
           jsonStringifyPromptOverrides(parsePromptOverridesJson((defaults as any).prompt_overrides)),
           Number.isFinite(Number((defaults as any).sort_order)) ? Number((defaults as any).sort_order) : 0,
-          id
+          id,
+          workspaceId
         );
 
         const updated = rowOrNull<any>(
           db
             .prepare(
               `SELECT
-                a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+                a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2201,9 +3684,10 @@ const server = http.createServer(async (req, res) => {
                   WHERE ts.agent_id = a.id
                     AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
                FROM agents a
-               WHERE a.id = ?`
+               WHERE a.id = ?
+                 AND a.workspace_id = ?`
             )
-            .all(id) as any
+            .all(id, workspaceId) as any
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
@@ -2212,17 +3696,24 @@ const server = http.createServer(async (req, res) => {
 
       const agentDuplicateMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/duplicate$/) : null;
       if (agentDuplicateMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(agentDuplicateMatch[1]);
         const src = rowOrNull<any>(
           db
             .prepare(
               `SELECT
-                id, display_name, emoji, openclaw_agent_id, enabled, role,
+                id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
                 description, category, tags_json, skills_json, prompt_overrides_json, sort_order
                FROM agents
-               WHERE id = ?`
+               WHERE id = ?
+                 AND workspace_id = ?`
             )
-            .all(id) as any
+            .all(id, workspaceId) as any
         );
         if (!src) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
 
@@ -2231,12 +3722,13 @@ const server = http.createServer(async (req, res) => {
 
         db.prepare(
           `INSERT INTO agents(
-            id, display_name, emoji, openclaw_agent_id, enabled, role,
+            id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role,
             description, category, tags_json, skills_json, prompt_overrides_json,
             preset_key, preset_defaults_json, sort_order
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)`
         ).run(
           newId,
+          workspaceId,
           displayName,
           src.emoji ?? null,
           String(src.openclaw_agent_id ?? DEFAULT_OPENCLAW_AGENT_ID),
@@ -2256,16 +3748,22 @@ const server = http.createServer(async (req, res) => {
 
       const deleteAgentMatch = req.method === 'DELETE' ? url.pathname.match(/^\/agents\/([^/]+)$/) : null;
       if (deleteAgentMatch) {
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+
         const id = decodeURIComponent(deleteAgentMatch[1]);
         const row = rowOrNull<{ preset_key: string | null }>(
-          db.prepare('SELECT preset_key FROM agents WHERE id = ?').all(id) as any
+          db.prepare('SELECT preset_key FROM agents WHERE id = ? AND workspace_id = ?').all(id, workspaceId) as any
         );
         if (!row) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         if (row.preset_key) {
           return sendJson(res, 400, { error: 'Installed presets cannot be deleted (disable instead)' }, corsHeaders);
         }
 
-        const info = db.prepare('DELETE FROM agents WHERE id = ?').run(id);
+        const info = db.prepare('DELETE FROM agents WHERE id = ? AND workspace_id = ?').run(id, workspaceId);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         sseBroadcast({ type: 'agents.changed', payload: {} });
         return sendJson(res, 200, { ok: true }, corsHeaders);
@@ -2275,11 +3773,17 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'PUT' && url.pathname === '/agents') {
         const body = await readJson(req);
         if (!Array.isArray(body)) return sendJson(res, 400, { error: 'Expected JSON array' }, corsHeaders);
+        const workspaceId = resolveAgentWorkspaceId({
+          workspaceId: url.searchParams.get('workspaceId'),
+          boardId: url.searchParams.get('boardId'),
+        });
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
 
         const upsert = db.prepare(
-          `INSERT INTO agents(id, display_name, emoji, openclaw_agent_id, enabled, role)
-           VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO agents(id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
+             workspace_id = excluded.workspace_id,
              display_name = excluded.display_name,
              emoji = excluded.emoji,
              openclaw_agent_id = excluded.openclaw_agent_id,
@@ -2300,7 +3804,7 @@ const server = http.createServer(async (req, res) => {
             if (!displayName) throw new Error('agent.display_name is required');
             if (!openclawAgentId) throw new Error('agent.openclaw_agent_id is required');
 
-            upsert.run(id, displayName, emoji, openclawAgentId, enabled, role);
+            upsert.run(id, workspaceId, displayName, emoji, openclawAgentId, enabled, role);
           }
           db.exec('COMMIT');
         } catch (e) {
@@ -2311,7 +3815,7 @@ const server = http.createServer(async (req, res) => {
         const rows = db
           .prepare(
             `SELECT
-              a.id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
+              a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
               a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
               a.preset_key, a.sort_order, a.created_at, a.updated_at,
               (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
@@ -2322,12 +3826,13 @@ const server = http.createServer(async (req, res) => {
               (SELECT COUNT(*)
                  FROM task_sessions ts
                  JOIN agent_runs ar ON ar.task_id = ts.task_id
-                WHERE ts.agent_id = a.id
+              WHERE ts.agent_id = a.id
                   AND datetime(ar.started_at) >= datetime('now','-7 day')) as run_count_7d
              FROM agents a
+             WHERE a.workspace_id = ?
              ORDER BY a.enabled DESC, a.sort_order ASC, a.display_name ASC`
           )
-          .all() as any[];
+          .all(workspaceId) as any[];
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
         return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
@@ -2465,6 +3970,169 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
+      const boardAgentSettingsGet = req.method === 'GET' ? url.pathname.match(/^\/boards\/([^/]+)\/agent-settings$/) : null;
+      if (boardAgentSettingsGet) {
+        const boardId = requireUuid(safeDecodeURIComponent(boardAgentSettingsGet[1]), 'boardId');
+        const board = getBoardMeta(boardId);
+        if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        const row = getResolvedBoardAgentSettings(boardId);
+        return sendJson(
+          res,
+          200,
+          {
+            ...boardAgentSettingsRowToDto(row),
+            workspace_id: board.workspace_id,
+          },
+          corsHeaders
+        );
+      }
+
+      const boardAgentSettingsPut = req.method === 'PUT' ? url.pathname.match(/^\/boards\/([^/]+)\/agent-settings$/) : null;
+      if (boardAgentSettingsPut) {
+        const boardId = requireUuid(safeDecodeURIComponent(boardAgentSettingsPut[1]), 'boardId');
+        const board = getBoardMeta(boardId);
+        if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        const body = await readJson(req);
+
+        const preferredAgentId =
+          body?.preferred_agent_id === null || body?.preferredAgentId === null
+            ? null
+            : normalizeString(body?.preferred_agent_id ?? body?.preferredAgentId) || null;
+        if (preferredAgentId && !getAgentRowById(preferredAgentId, board.workspace_id)) {
+          return sendJson(res, 400, { error: 'preferred_agent_id must belong to the board workspace' }, corsHeaders);
+        }
+
+        const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
+        const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
+        const policy = parseJsonObject(body?.policy ?? body?.policy_json);
+        const memoryPath = body?.memory_path === null || body?.memoryPath === null
+          ? null
+          : normalizeString(body?.memory_path ?? body?.memoryPath) || null;
+        const autoDelegate = body?.auto_delegate === undefined && body?.autoDelegate === undefined
+          ? true
+          : body?.auto_delegate === false || body?.autoDelegate === false
+            ? false
+            : true;
+        const subAgents = parseSubAgentsJson(body?.sub_agents ?? body?.sub_agents_json);
+
+        for (const sub of subAgents) {
+          if (sub.agent_id && !getAgentRowById(sub.agent_id, board.workspace_id)) {
+            return sendJson(res, 400, { error: `sub-agent ${sub.key}: agent_id is not in this workspace` }, corsHeaders);
+          }
+        }
+
+        db.prepare(
+          `INSERT INTO board_agent_settings(
+             board_id, preferred_agent_id, skills_json, prompt_overrides_json, policy_json, memory_path, auto_delegate, sub_agents_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(board_id) DO UPDATE SET
+             preferred_agent_id = excluded.preferred_agent_id,
+             skills_json = excluded.skills_json,
+             prompt_overrides_json = excluded.prompt_overrides_json,
+             policy_json = excluded.policy_json,
+             memory_path = excluded.memory_path,
+             auto_delegate = excluded.auto_delegate,
+             sub_agents_json = excluded.sub_agents_json`
+        ).run(
+          boardId,
+          preferredAgentId,
+          jsonStringifyArray(skills),
+          jsonStringifyPromptOverrides(promptOverrides),
+          JSON.stringify(policy),
+          memoryPath,
+          autoDelegate ? 1 : 0,
+          jsonStringifySubAgents(subAgents)
+        );
+
+        const row = getBoardAgentSettingsRow(boardId);
+        sseBroadcast({ type: 'boards.agent-settings.changed', payload: { boardId } });
+        return sendJson(
+          res,
+          200,
+          {
+            ...(row ? boardAgentSettingsRowToDto(row) : boardAgentSettingsRowToDto(getResolvedBoardAgentSettings(boardId))),
+            workspace_id: board.workspace_id,
+          },
+          corsHeaders
+        );
+      }
+
+      const workspaceAgentSettingsGet = req.method === 'GET' ? url.pathname.match(/^\/workspaces\/([^/]+)\/agent-settings$/) : null;
+      if (workspaceAgentSettingsGet) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceAgentSettingsGet[1]), 'workspaceId');
+        const workspace = getWorkspaceMeta(workspaceId);
+        if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
+        const row = getResolvedWorkspaceAgentSettings(workspaceId);
+        return sendJson(res, 200, workspaceAgentSettingsRowToDto(row), corsHeaders);
+      }
+
+      const workspaceAgentSettingsPut = req.method === 'PUT' ? url.pathname.match(/^\/workspaces\/([^/]+)\/agent-settings$/) : null;
+      if (workspaceAgentSettingsPut) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceAgentSettingsPut[1]), 'workspaceId');
+        const workspace = getWorkspaceMeta(workspaceId);
+        if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
+        const body = await readJson(req);
+
+        const preferredAgentId =
+          body?.preferred_agent_id === null || body?.preferredAgentId === null
+            ? null
+            : normalizeString(body?.preferred_agent_id ?? body?.preferredAgentId) || null;
+        if (preferredAgentId && !getAgentRowById(preferredAgentId, workspaceId)) {
+          return sendJson(res, 400, { error: 'preferred_agent_id must belong to this workspace' }, corsHeaders);
+        }
+
+        const skills = Array.isArray(body?.skills) ? body.skills : parseStringArrayJson(body?.skills_json);
+        const promptOverrides = parsePromptOverridesJson(body?.prompt_overrides ?? body?.prompt_overrides_json);
+        const policy = parseJsonObject(body?.policy ?? body?.policy_json);
+        const memoryPath = body?.memory_path === null || body?.memoryPath === null
+          ? null
+          : normalizeString(body?.memory_path ?? body?.memoryPath) || null;
+        const autoDelegate = body?.auto_delegate === undefined && body?.autoDelegate === undefined
+          ? true
+          : body?.auto_delegate === false || body?.autoDelegate === false
+            ? false
+            : true;
+        const subAgents = parseSubAgentsJson(body?.sub_agents ?? body?.sub_agents_json);
+
+        for (const sub of subAgents) {
+          if (sub.agent_id && !getAgentRowById(sub.agent_id, workspaceId)) {
+            return sendJson(res, 400, { error: `sub-agent ${sub.key}: agent_id is not in this workspace` }, corsHeaders);
+          }
+        }
+
+        db.prepare(
+          `INSERT INTO workspace_agent_settings(
+             workspace_id, preferred_agent_id, skills_json, prompt_overrides_json, policy_json, memory_path, auto_delegate, sub_agents_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(workspace_id) DO UPDATE SET
+             preferred_agent_id = excluded.preferred_agent_id,
+             skills_json = excluded.skills_json,
+             prompt_overrides_json = excluded.prompt_overrides_json,
+             policy_json = excluded.policy_json,
+             memory_path = excluded.memory_path,
+             auto_delegate = excluded.auto_delegate,
+             sub_agents_json = excluded.sub_agents_json`
+        ).run(
+          workspaceId,
+          preferredAgentId,
+          jsonStringifyArray(skills),
+          jsonStringifyPromptOverrides(promptOverrides),
+          JSON.stringify(policy),
+          memoryPath,
+          autoDelegate ? 1 : 0,
+          jsonStringifySubAgents(subAgents)
+        );
+
+        const row = getWorkspaceAgentSettingsRow(workspaceId);
+        sseBroadcast({ type: 'workspaces.agent-settings.changed', payload: { workspaceId } });
+        return sendJson(
+          res,
+          200,
+          row ? workspaceAgentSettingsRowToDto(row) : workspaceAgentSettingsRowToDto(getResolvedWorkspaceAgentSettings(workspaceId)),
+          corsHeaders
+        );
+      }
+
       if (req.method === 'GET' && url.pathname === '/tasks') {
         let boardId = url.searchParams.get('boardId');
         if (!boardId) boardId = getDefaultBoardId(db);
@@ -2587,20 +4255,34 @@ const server = http.createServer(async (req, res) => {
       if (taskSessionPost) {
         const taskId = decodeURIComponent(taskSessionPost[1]);
         const body = await readJson(req);
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
-        const reasoningLevel = typeof body?.reasoningLevel === 'string' ? body.reasoningLevel : null;
+        const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
+        const hasReasoningLevel = body && Object.prototype.hasOwnProperty.call(body, 'reasoningLevel');
+        const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
+        const reasoningLevel = hasReasoningLevel ? (typeof body?.reasoningLevel === 'string' ? body.reasoningLevel : null) : undefined;
 
-        const task = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM tasks WHERE id = ?').all(taskId) as any);
+        const task = rowOrNull<{ id: string; board_id: string; workspace_id: string }>(
+          db
+            .prepare(
+              `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               WHERE t.id = ?`
+            )
+            .all(taskId) as any
+        );
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
 
-        if (agentId && !getAgentRowById(agentId)) {
+        if (agentId && !getAgentRowById(agentId, task.workspace_id)) {
           return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
         }
         if (reasoningLevel && !REASONING_LEVELS.has(reasoningLevel as ReasoningLevel)) {
           return sendJson(res, 400, { error: 'Invalid reasoningLevel' }, corsHeaders);
         }
 
-        ensureTaskSession(taskId, { agentId, reasoningLevel: (reasoningLevel as ReasoningLevel | null) ?? undefined });
+        const sessionOpts: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null } = {};
+        if (hasAgentId) sessionOpts.agentId = agentId ?? null;
+        if (hasReasoningLevel) sessionOpts.reasoningLevel = (reasoningLevel as ReasoningLevel | null) ?? null;
+        ensureTaskSession(task, Object.keys(sessionOpts).length ? sessionOpts : undefined);
         const row = rowOrNull<any>(
           db
             .prepare(
@@ -2625,11 +4307,15 @@ const server = http.createServer(async (req, res) => {
         if (!['plan', 'execute', 'report'].includes(mode)) {
           return sendJson(res, 400, { error: 'mode must be one of: plan, execute, report' }, corsHeaders);
         }
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
+        const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
         try {
           const result = await runTask({ taskId, mode: mode as any, agentId });
           return sendJson(res, 200, result, corsHeaders);
         } catch (err: any) {
+          if (String(err?.message ?? '') === 'Invalid agentId') {
+            return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
+          }
           return sendJson(res, 500, { error: String(err?.message ?? err) }, corsHeaders);
         }
       }
@@ -2768,15 +4454,51 @@ const server = http.createServer(async (req, res) => {
         const taskId = decodeURIComponent(chatPost[1]);
         const body = await readJson(req);
         const text = typeof body?.text === 'string' ? body.text.trim() : '';
-        const agentId = typeof body?.agentId === 'string' ? body.agentId : null;
+        const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
+        const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
         if (!text) return sendJson(res, 400, { error: 'text is required' }, corsHeaders);
 
         const task = getTaskMeta(taskId);
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        if (agentId && !getAgentRowById(agentId, task.workspace_id)) {
+          return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
+        }
 
-        const session = ensureTaskSession(taskId, agentId);
-        const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
+        const session = hasAgentId ? ensureTaskSession(task, { agentId: agentId ?? null }) : ensureTaskSession(task);
+        const workspaceSettings = getResolvedWorkspaceAgentSettings(task.workspace_id);
+        const boardSettings = getResolvedBoardAgentSettings(task.board_id);
+        const agentRow = resolvePreferredTaskAgent({
+          task,
+          sessionAgentId: session?.agent_id ?? null,
+          boardPreferredAgentId: boardSettings.preferred_agent_id ?? null,
+          workspacePreferredAgentId: workspaceSettings.preferred_agent_id ?? null,
+        });
         const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
+        const { systemPrompt, modePrompt } = resolvePromptForMode({
+          mode: 'chat',
+          agentPromptOverridesRaw: agentRow?.prompt_overrides_json ?? '{}',
+          workspacePromptOverridesRaw: workspaceSettings.prompt_overrides_json ?? '{}',
+          boardPromptOverridesRaw: boardSettings.prompt_overrides_json ?? '{}',
+        });
+        const workspaceSkills = parseStringArrayJson(workspaceSettings.skills_json);
+        const boardSkills = parseStringArrayJson(boardSettings.skills_json);
+        const agentSkills = parseStringArrayJson(agentRow?.skills_json ?? '[]');
+        const effectiveSkills = [...new Set([...agentSkills, ...workspaceSkills, ...boardSkills])];
+        const workspacePolicy = parseJsonObject(workspaceSettings.policy_json);
+        const boardPolicy = parseJsonObject(boardSettings.policy_json);
+        const effectivePolicy = { ...workspacePolicy, ...boardPolicy };
+        const memoryPath =
+          normalizeString(boardSettings.memory_path ?? '') || normalizeString(workspaceSettings.memory_path ?? '') || null;
+        const chatInputParts: string[] = [];
+        if (systemPrompt) chatInputParts.push(`System profile:\n${systemPrompt}`);
+        chatInputParts.push(modePrompt);
+        chatInputParts.push(`Task title: ${task.title}`);
+        chatInputParts.push(`Task description: ${task.description ?? ''}`);
+        if (effectiveSkills.length) chatInputParts.push(`Preferred skills overlay: ${effectiveSkills.join(', ')}`);
+        if (memoryPath) chatInputParts.push(`Memory path hint: ${memoryPath}`);
+        if (Object.keys(effectivePolicy).length) chatInputParts.push(`Policy context: ${JSON.stringify(effectivePolicy)}`);
+        chatInputParts.push(`User message: ${text}`);
+        const chatInputText = chatInputParts.join('\n\n');
 
         const userMsgId = randomUUID();
         db.prepare('INSERT INTO task_messages(id, task_id, role, content) VALUES (?, ?, ?, ?)').run(
@@ -2789,9 +4511,9 @@ const server = http.createServer(async (req, res) => {
         let reply = '';
         try {
           const result = await callOpenResponses({
-            sessionKey: session?.session_key ?? taskId,
+            sessionKey: session?.session_key ?? `project:${task.workspace_id}:board:${task.board_id}:task:${taskId}`,
             agentOpenClawId,
-            text,
+            text: chatInputText,
           });
           reply = result.text;
         } catch (err: any) {
@@ -3013,9 +4735,15 @@ const server = http.createServer(async (req, res) => {
       if (patchMatch) {
         const id = patchMatch[1];
         const body = await readJson(req);
-        const existing = rowOrNull<{ status: string; board_id: string; title: string; description: string | null }>(
+        const existing = rowOrNull<{ status: string; board_id: string; workspace_id: string; title: string; description: string | null }>(
           db
-            .prepare('SELECT status, board_id, title, description FROM tasks WHERE id = ?')
+            .prepare(
+              `SELECT t.status as status, t.board_id as board_id, b.workspace_id as workspace_id,
+                      t.title as title, t.description as description
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               WHERE t.id = ?`
+            )
             .all(id) as any
         );
         if (!existing) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
@@ -3080,7 +4808,7 @@ const server = http.createServer(async (req, res) => {
             const summary = await generateTaskSummary({
               taskTitle: task?.title ?? existing.title,
               taskDescription: task?.description ?? existing.description,
-              sessionKey: id,
+              sessionKey: `project:${existing.workspace_id}:board:${existing.board_id}:task:${id}`,
               agentOpenClawId: null,
             });
             appendBoardSummary({ boardId: task?.board_id ?? existing.board_id, title: task?.title ?? existing.title, summary });

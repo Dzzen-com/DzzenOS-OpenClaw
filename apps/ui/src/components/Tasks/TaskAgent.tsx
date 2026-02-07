@@ -10,16 +10,21 @@ import type { Agent, ReasoningLevel, TaskSession } from '../../api/types';
 
 export function TaskAgent({
   taskId,
+  boardId,
   lastRunStatus,
   onOpenAgents,
 }: {
   taskId: string;
+  boardId: string;
   lastRunStatus: string | null;
   onOpenAgents?: () => void;
 }) {
   const qc = useQueryClient();
 
-  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: listAgents });
+  const agentsQ = useQuery({
+    queryKey: ['agents', { boardId }],
+    queryFn: () => listAgents({ boardId }),
+  });
   const sessionQ = useQuery({
     queryKey: ['task-session', taskId],
     queryFn: () => getTaskSession(taskId),
@@ -73,7 +78,7 @@ export function TaskAgent({
               ))}
             </select>
             <div className="mt-2 text-xs text-muted-foreground">
-              Auto selects a default agent based on the task description. You can override before running.
+              Auto selects the default agent for this project. You can override before running.
             </div>
             {autoSelected ? (
               <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-border/70 bg-surface-1/60 px-2 py-1 text-[11px] text-muted-foreground">
