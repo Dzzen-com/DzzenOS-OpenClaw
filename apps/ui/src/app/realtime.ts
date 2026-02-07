@@ -30,9 +30,10 @@ export function startRealtime(opts: {
 
       // Keep it simple for v1, but prefer targeted invalidations.
       if (msg.type === 'tasks.changed') {
-        const boardId = msg.payload?.boardId as string | null | undefined;
+        const projectId = msg.payload?.projectId as string | null | undefined;
+        const sectionId = (msg.payload?.sectionId ?? msg.payload?.boardId) as string | null | undefined;
         const taskId = msg.payload?.taskId as string | null | undefined;
-        if (boardId) opts.qc.invalidateQueries({ queryKey: ['tasks', boardId] });
+        if (projectId || sectionId) opts.qc.invalidateQueries({ queryKey: ['tasks'] });
         else opts.qc.invalidateQueries({ queryKey: ['tasks'] });
         if (taskId) {
           opts.qc.invalidateQueries({ queryKey: ['execution-config', taskId] });
@@ -40,7 +41,12 @@ export function startRealtime(opts: {
         }
       }
 
-      if (msg.type === 'boards.changed') {
+      if (msg.type === 'projects.changed') {
+        opts.qc.invalidateQueries({ queryKey: ['projects'] });
+      }
+
+      if (msg.type === 'sections.changed' || msg.type === 'boards.changed') {
+        opts.qc.invalidateQueries({ queryKey: ['sections'] });
         opts.qc.invalidateQueries({ queryKey: ['boards'] });
       }
 
@@ -60,11 +66,12 @@ export function startRealtime(opts: {
       }
 
       if (msg.type === 'docs.changed') {
-        const boardId = msg.payload?.boardId as string | null | undefined;
+        const sectionId = (msg.payload?.sectionId ?? msg.payload?.boardId) as string | null | undefined;
         opts.qc.invalidateQueries({ queryKey: ['docs', 'overview'] });
-        if (boardId) {
-          opts.qc.invalidateQueries({ queryKey: ['docs', 'board', boardId] });
-          opts.qc.invalidateQueries({ queryKey: ['docs', 'changelog', boardId] });
+        if (sectionId) {
+          opts.qc.invalidateQueries({ queryKey: ['docs', 'section', sectionId] });
+          opts.qc.invalidateQueries({ queryKey: ['docs', 'board', sectionId] });
+          opts.qc.invalidateQueries({ queryKey: ['docs', 'changelog', sectionId] });
         }
       }
 

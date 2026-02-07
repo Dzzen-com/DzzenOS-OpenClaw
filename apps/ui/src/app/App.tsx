@@ -16,15 +16,37 @@ import { AgentsPage } from '../components/Agents/AgentsPage';
 import { SkillsPage } from '../components/Skills/SkillsPage';
 import { ModelsPage } from '../components/Models/ModelsPage';
 
-import type { Task } from '../api/types';
-import { createTask, listBoards, listTasks, patchTask, reorderTasks } from '../api/queries';
+import type { SectionViewMode, Task } from '../api/types';
+import {
+  createProject,
+  createSection,
+  createTask,
+  listProjects,
+  listSections,
+  listTasks,
+  patchTask,
+  reorderTasks,
+} from '../api/queries';
 import { startRealtime } from './realtime';
+
+function viewModeStorageKey(sectionId: string) {
+  return `dzzenos.section.view.${sectionId}`;
+}
+
+function readStoredViewMode(sectionId: string | null): SectionViewMode | null {
+  if (!sectionId) return null;
+  const raw = localStorage.getItem(viewModeStorageKey(sectionId));
+  if (raw === 'kanban' || raw === 'threads') return raw;
+  return null;
+}
 
 export function App() {
   const qc = useQueryClient();
 
   const [page, setPage] = useState<'dashboard' | 'kanban' | 'automations' | 'docs' | 'memory' | 'agents' | 'skills' | 'models'>('dashboard');
-  const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null);
+  const [sectionViewMode, setSectionViewMode] = useState<SectionViewMode>('kanban');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const mobileNav = useMobileNav();
 
@@ -35,59 +57,107 @@ export function App() {
     };
   }, [mobileNav.open]);
 
-  const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
+  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: listProjects });
   useEffect(() => {
-    if (selectedBoardId) return;
-    const first = boardsQ.data?.[0];
-    if (first) setSelectedBoardId(first.id);
-  }, [boardsQ.data, selectedBoardId]);
+    if (selectedProjectId) return;
+    const first = projectsQ.data?.[0];
+    if (first) setSelectedProjectId(first.id);
+  }, [projectsQ.data, selectedProjectId]);
+
+  const sectionsQ = useQuery({
+    queryKey: ['sections', selectedProjectId],
+    queryFn: () => {
+      if (!selectedProjectId) return Promise.resolve([] as any[]);
+      return listSections(selectedProjectId);
+    },
+    enabled: !!selectedProjectId,
+  });
+
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setSelectedSectionId(null);
+      return;
+    }
+    if (selectedSectionId && sectionsQ.data?.some((s) => s.id === selectedSectionId)) return;
+    const first = sectionsQ.data?.[0] ?? null;
+    setSelectedSectionId(first?.id ?? null);
+  }, [selectedProjectId, selectedSectionId, sectionsQ.data]);
+
+  useEffect(() => {
+    const section = sectionsQ.data?.find((s) => s.id === selectedSectionId) ?? null;
+    const stored = readStoredViewMode(selectedSectionId);
+    const next = stored ?? (section?.view_mode ?? 'kanban');
+    setSectionViewMode(next);
+  }, [selectedSectionId, sectionsQ.data]);
 
   const tasksQ = useQuery({
-    queryKey: ['tasks', selectedBoardId],
+    queryKey: ['tasks', selectedProjectId, selectedSectionId, sectionViewMode],
     queryFn: () => {
-      if (!selectedBoardId) return Promise.resolve([] as Task[]);
-      return listTasks(selectedBoardId);
+      if (!selectedProjectId) return Promise.resolve([] as Task[]);
+      return listTasks({
+        projectId: selectedProjectId,
+        sectionId: selectedSectionId ?? undefined,
+        viewMode: sectionViewMode,
+      });
     },
-    enabled: !!selectedBoardId,
+    enabled: !!selectedProjectId,
+  });
+
+  const createProjectM = useMutation({
+    mutationFn: async (name: string) => createProject({ name }),
+    onSuccess: async (p) => {
+      await qc.invalidateQueries({ queryKey: ['projects'] });
+      await qc.invalidateQueries({ queryKey: ['sections', p.id] });
+      setSelectedProjectId(p.id);
+      setPage('kanban');
+    },
+  });
+
+  const createSectionM = useMutation({
+    mutationFn: async (name: string) => {
+      if (!selectedProjectId) throw new Error('No project selected');
+      return createSection(selectedProjectId, { name });
+    },
+    onSuccess: async (section) => {
+      await qc.invalidateQueries({ queryKey: ['sections', section.project_id] });
+      setSelectedSectionId(section.id);
+      setSectionViewMode(section.view_mode ?? 'kanban');
+    },
   });
 
   const createM = useMutation({
-    mutationFn: async (vars: { boardId: string; title: string; status?: Task['status'] }) =>
-      createTask({ boardId: vars.boardId, title: vars.title, status: vars.status }),
+    mutationFn: async (vars: { projectId: string; sectionId?: string | null; title: string; status?: Task['status'] }) =>
+      createTask({ projectId: vars.projectId, sectionId: vars.sectionId ?? undefined, title: vars.title, status: vars.status }),
     onSuccess: async (t) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
       setSelectedTaskId(t.id);
     },
   });
 
   const moveM = useMutation({
     mutationFn: async (vars: { id: string; status: Task['status'] }) => patchTask(vars.id, { status: vars.status }),
-    onSuccess: async (t, vars) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
     onError: async () => {
-      if (selectedBoardId) {
-        await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
-      }
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
   const reorderM = useMutation({
-    mutationFn: async (vars: { boardId: string; orderedIds: string[] }) => reorderTasks(vars),
-    onSuccess: async (_, vars) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', vars.boardId] });
+    mutationFn: async (vars: { sectionId: string; orderedIds: string[] }) => reorderTasks({ boardId: vars.sectionId, orderedIds: vars.orderedIds }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
   const tasks = tasksQ.data ?? [];
   const selectedTask = useMemo(() => tasks.find((t) => t.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
 
-  // If board changes, clear the selected task.
   useEffect(() => {
     setSelectedTaskId(null);
-  }, [selectedBoardId]);
+  }, [selectedSectionId]);
 
-  // Real-time updates (SSE)
   useEffect(() => {
     const apiBase = (import.meta as any).env?.VITE_API_BASE as string | undefined;
     const base = typeof apiBase === 'string' && apiBase.trim() ? apiBase.trim() : 'http://127.0.0.1:8787';
@@ -130,11 +200,19 @@ export function App() {
         ) : null}
         {page === 'dashboard' ? (
           <Dashboard
-            onSelectTask={({ boardId, taskId }) => {
+            projectId={selectedProjectId}
+            onSelectProject={(id) => setSelectedProjectId(id)}
+            onSelectTask={({ projectId, sectionId, taskId }) => {
               setPage('kanban');
-              setSelectedBoardId(boardId);
+              setSelectedProjectId(projectId);
+              setSelectedSectionId(sectionId);
               setSelectedTaskId(null);
               queueMicrotask(() => setSelectedTaskId(taskId));
+            }}
+            onQuickCapture={async (title) => {
+              if (!selectedProjectId) return;
+              await createM.mutateAsync({ projectId: selectedProjectId, sectionId: selectedSectionId, title, status: 'ideas' });
+              setPage('kanban');
             }}
           />
         ) : page === 'automations' ? (
@@ -164,11 +242,27 @@ export function App() {
         ) : page === 'kanban' ? (
           <div className="mx-auto w-full max-w-6xl">
             <KanbanPage
-              boards={boardsQ.data ?? []}
-              boardsLoading={boardsQ.isLoading}
-              boardsError={boardsQ.isError ? boardsQ.error : null}
-              selectedBoardId={selectedBoardId}
-              onSelectBoard={(id) => setSelectedBoardId(id)}
+              projects={projectsQ.data ?? []}
+              projectsLoading={projectsQ.isLoading}
+              projectsError={projectsQ.isError ? projectsQ.error : null}
+              sections={sectionsQ.data ?? []}
+              sectionsLoading={sectionsQ.isLoading}
+              sectionsError={sectionsQ.isError ? sectionsQ.error : null}
+              selectedProjectId={selectedProjectId}
+              onSelectProject={(id) => setSelectedProjectId(id)}
+              selectedSectionId={selectedSectionId}
+              onSelectSection={(id) => setSelectedSectionId(id)}
+              viewMode={sectionViewMode}
+              onChangeViewMode={(mode) => {
+                setSectionViewMode(mode);
+                if (selectedSectionId) localStorage.setItem(viewModeStorageKey(selectedSectionId), mode);
+              }}
+              onCreateProject={async (name) => {
+                await createProjectM.mutateAsync(name);
+              }}
+              onCreateSection={async (name) => {
+                await createSectionM.mutateAsync(name);
+              }}
               tasks={tasks}
               tasksLoading={tasksQ.isLoading}
               tasksError={tasksQ.isError ? tasksQ.error : null}
@@ -177,16 +271,26 @@ export function App() {
               onMoveTask={(id, status) => moveM.mutate({ id, status })}
               moveDisabled={moveM.isPending || reorderM.isPending}
               onReorder={(status, orderedIds) => {
-                if (!selectedBoardId) return;
-                reorderM.mutate({ boardId: selectedBoardId, orderedIds });
+                if (!selectedSectionId) return;
+                reorderM.mutate({ sectionId: selectedSectionId, orderedIds });
               }}
               onQuickCreate={async (status, title) => {
-                if (!selectedBoardId) return;
-                await createM.mutateAsync({ boardId: selectedBoardId, title, status });
+                if (!selectedProjectId) return;
+                await createM.mutateAsync({
+                  projectId: selectedProjectId,
+                  sectionId: selectedSectionId,
+                  title,
+                  status,
+                });
               }}
               onCreateTask={async (title) => {
-                if (!selectedBoardId) return;
-                await createM.mutateAsync({ boardId: selectedBoardId, title, status: 'ideas' });
+                if (!selectedProjectId) return;
+                await createM.mutateAsync({
+                  projectId: selectedProjectId,
+                  sectionId: selectedSectionId,
+                  title,
+                  status: 'ideas',
+                });
               }}
               createTaskError={createM.isError ? createM.error : null}
               moveError={moveM.isError ? moveM.error : null}

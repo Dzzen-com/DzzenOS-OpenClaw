@@ -112,7 +112,7 @@ export function Sidebar({
           }}
           icon={<IconKanban />}
         >
-          Kanban
+          Projects
         </NavItem>
         <NavItem
           active={selectedPage === 'automations'}

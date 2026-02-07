@@ -1,8 +1,37 @@
-export type Board = {
+export type SectionViewMode = 'kanban' | 'threads';
+
+export type Project = {
   id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  section_count?: number;
+  task_count?: number;
+};
+
+export type Section = {
+  id: string;
+  project_id: string;
   workspace_id: string;
   name: string;
   description: string | null;
+  position: number;
+  view_mode: SectionViewMode;
+  section_kind: 'section' | 'inbox';
+  created_at: string;
+  updated_at: string;
+};
+
+// Legacy alias for gradual migration of components.
+export type Board = Section;
+
+export type ProjectStatus = {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  status_key: string;
+  label: string;
   position: number;
   created_at: string;
   updated_at: string;
@@ -14,12 +43,17 @@ export type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
 
 export type Task = {
   id: string;
+  project_id: string;
+  workspace_id: string;
+  section_id: string;
   board_id: string;
   title: string;
   description: string | null;
   status: TaskStatus;
   position: number;
   due_at: string | null;
+  is_inbox?: number | boolean | null;
+  view_mode?: SectionViewMode | null;
   agent_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -217,7 +251,9 @@ export type AgentRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export type AgentRun = {
   id: string;
+  project_id: string;
   workspace_id: string;
+  section_id: string | null;
   board_id: string | null;
   task_id: string | null;
   agent_name: string | null;
@@ -255,6 +291,9 @@ export type Approval = {
   created_at: string;
   updated_at: string;
   // Joined for dashboard linking.
+  project_id: string | null;
+  workspace_id: string | null;
+  section_id: string | null;
   task_id: string | null;
   board_id: string | null;
   task_title: string | null;
@@ -271,6 +310,8 @@ export type Automation = {
 
 export type TaskExecutionConfig = {
   task_id: string;
+  project_id: string;
+  section_id: string;
   board_id: string;
   managed_by: 'agent-profile';
   read_only: boolean;

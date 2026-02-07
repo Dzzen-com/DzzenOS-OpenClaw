@@ -4,7 +4,7 @@ type PageKey = 'dashboard' | 'kanban' | 'automations' | 'docs' | 'memory' | 'age
 
 const ITEMS: { key: PageKey; label: string }[] = [
   { key: 'dashboard', label: 'Dashboard' },
-  { key: 'kanban', label: 'Kanban' },
+  { key: 'kanban', label: 'Projects' },
   { key: 'automations', label: 'Flows' },
   { key: 'agents', label: 'Agents' },
   { key: 'models', label: 'Models' },

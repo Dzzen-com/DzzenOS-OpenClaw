@@ -215,6 +215,28 @@ function sleep(ms: number) {
 const TASK_STATUSES = new Set(['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived']);
 const CHECKLIST_STATES = new Set(['todo', 'doing', 'done']);
 const REASONING_LEVELS = new Set<ReasoningLevel>(['auto', 'off', 'low', 'medium', 'high']);
+const DEFAULT_PROJECT_STATUSES: Array<{ key: string; label: string; position: number }> = [
+  { key: 'ideas', label: 'Ideas', position: 0 },
+  { key: 'todo', label: 'To do', position: 1 },
+  { key: 'doing', label: 'In progress', position: 2 },
+  { key: 'review', label: 'Review', position: 3 },
+  { key: 'release', label: 'Release', position: 4 },
+  { key: 'done', label: 'Done', position: 5 },
+  { key: 'archived', label: 'Archived', position: 6 },
+];
+const DEFAULT_PROJECT_SECTIONS: Array<{
+  name: string;
+  description: string;
+  viewMode: 'kanban' | 'threads';
+  kind: 'inbox' | 'section';
+  position: number;
+}> = [
+  { name: 'Inbox', description: 'Project intake', viewMode: 'kanban', kind: 'inbox', position: 0 },
+  { name: 'Product', description: 'Product delivery and roadmap', viewMode: 'kanban', kind: 'section', position: 1 },
+  { name: 'Marketing', description: 'Growth, experiments and distribution', viewMode: 'threads', kind: 'section', position: 2 },
+  { name: 'Content', description: 'Content pipeline and assets', viewMode: 'threads', kind: 'section', position: 3 },
+  { name: 'Ops', description: 'Operations and admin tasks', viewMode: 'kanban', kind: 'section', position: 4 },
+];
 
 function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -308,18 +330,35 @@ function seedIfEmpty(db: DatabaseSync) {
   if (count > 0) return;
 
   const workspaceId = randomUUID();
-  const boardId = randomUUID();
 
   db.exec('BEGIN');
   try {
     db.prepare('INSERT INTO workspaces(id, name, description) VALUES (?, ?, ?)').run(
       workspaceId,
-      'Default Workspace',
+      'Default Project',
       'Seeded on first run'
     );
-    db.prepare(
-      'INSERT INTO boards(id, workspace_id, name, description, position) VALUES (?, ?, ?, ?, 0)'
-    ).run(boardId, workspaceId, 'Default Board', 'Seeded on first run');
+    const insSection = db.prepare(
+      'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    for (const section of DEFAULT_PROJECT_SECTIONS) {
+      insSection.run(
+        randomUUID(),
+        workspaceId,
+        section.name,
+        section.description,
+        section.position,
+        section.viewMode,
+        section.kind
+      );
+    }
+
+    const insStatus = db.prepare(
+      'INSERT INTO project_statuses(id, workspace_id, status_key, label, position) VALUES (?, ?, ?, ?, ?)'
+    );
+    for (const status of DEFAULT_PROJECT_STATUSES) {
+      insStatus.run(randomUUID(), workspaceId, status.key, status.label, status.position);
+    }
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -589,18 +628,65 @@ function agentRowToDto(r: any) {
   };
 }
 
-function getDefaultBoardId(db: DatabaseSync): string | null {
-  const row = rowOrNull<{ id: string }>(
-    db.prepare('SELECT id FROM boards ORDER BY position ASC, created_at ASC LIMIT 1').all() as any
-  );
-  return row?.id ?? null;
-}
-
-function getDefaultWorkspaceId(db: DatabaseSync): string | null {
+function getDefaultProjectId(db: DatabaseSync): string | null {
   const row = rowOrNull<{ id: string }>(
     db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any
   );
   return row?.id ?? null;
+}
+
+function getDefaultSectionId(db: DatabaseSync, projectId?: string | null): string | null {
+  if (projectId) {
+    const row = rowOrNull<{ id: string }>(
+      db
+        .prepare(
+          `SELECT id
+             FROM boards
+            WHERE workspace_id = ?
+            ORDER BY CASE WHEN section_kind = 'inbox' THEN 0 ELSE 1 END ASC, position ASC, created_at ASC
+            LIMIT 1`
+        )
+        .all(projectId) as any
+    );
+    return row?.id ?? null;
+  }
+
+  const row = rowOrNull<{ id: string }>(
+    db
+      .prepare(
+        `SELECT id
+           FROM boards
+          ORDER BY CASE WHEN section_kind = 'inbox' THEN 0 ELSE 1 END ASC, position ASC, created_at ASC
+          LIMIT 1`
+      )
+      .all() as any
+  );
+  return row?.id ?? null;
+}
+
+function getProjectInboxSectionId(db: DatabaseSync, projectId: string): string | null {
+  const row = rowOrNull<{ id: string }>(
+    db
+      .prepare(
+        `SELECT id
+           FROM boards
+          WHERE workspace_id = ?
+            AND (section_kind = 'inbox' OR lower(name) = 'inbox')
+          ORDER BY position ASC, created_at ASC
+          LIMIT 1`
+      )
+      .all(projectId) as any
+  );
+  return row?.id ?? null;
+}
+
+// Legacy aliases kept for internal migration compatibility.
+function getDefaultBoardId(db: DatabaseSync): string | null {
+  return getDefaultSectionId(db);
+}
+
+function getDefaultWorkspaceId(db: DatabaseSync): string | null {
+  return getDefaultProjectId(db);
 }
 
 function main() {
@@ -672,16 +758,29 @@ function main() {
     });
   }
 
+  function sectionDocPath(sectionId: string) {
+    return path.join(docsDir, 'sections', `${sectionId}.md`);
+  }
+
+  function sectionChangelogPath(sectionId: string) {
+    return path.join(docsDir, 'sections', sectionId, 'changelog.md');
+  }
+
+  function sectionMemoryPath(sectionId: string) {
+    return path.join(memoryDir, 'sections', `${sectionId}.md`);
+  }
+
+  // Legacy aliases for internal compatibility.
   function boardDocPath(boardId: string) {
-    return path.join(docsDir, 'boards', `${boardId}.md`);
+    return sectionDocPath(boardId);
   }
 
   function boardChangelogPath(boardId: string) {
-    return path.join(docsDir, 'boards', boardId, 'changelog.md');
+    return sectionChangelogPath(boardId);
   }
 
   function boardMemoryPath(boardId: string) {
-    return path.join(memoryDir, 'boards', `${boardId}.md`);
+    return sectionMemoryPath(boardId);
   }
 
   async function callOpenResponses(input: {
@@ -760,15 +859,19 @@ function main() {
     }
   }
 
-  function appendBoardSummary(params: { boardId: string; title: string; summary: string }) {
+  function appendSectionSummary(params: { sectionId: string; title: string; summary: string }) {
     const ts = new Date().toISOString();
     const entryHeader = `## ${params.title}\n\n`;
     const entryBody = `${params.summary}\n\n`;
     const changeEntry = `- ${ts} — ${params.title}\n${params.summary}\n\n`;
 
-    appendTextFile(boardDocPath(params.boardId), entryHeader + entryBody);
-    appendTextFile(boardChangelogPath(params.boardId), changeEntry);
-    appendTextFile(boardMemoryPath(params.boardId), changeEntry);
+    appendTextFile(sectionDocPath(params.sectionId), entryHeader + entryBody);
+    appendTextFile(sectionChangelogPath(params.sectionId), changeEntry);
+    appendTextFile(sectionMemoryPath(params.sectionId), changeEntry);
+  }
+
+  function appendBoardSummary(params: { boardId: string; title: string; summary: string }) {
+    appendSectionSummary({ sectionId: params.boardId, title: params.title, summary: params.summary });
   }
 
   const args = parseArgs(process.argv.slice(2));
@@ -808,14 +911,20 @@ function main() {
   function getTaskMeta(taskId: string) {
     return rowOrNull<{
       id: string;
+      section_id: string;
       board_id: string;
+      project_id: string;
       workspace_id: string;
       title: string;
       description: string | null;
       status: string;
     }>(
       db.prepare(
-        `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id,
+        `SELECT t.id as id,
+                t.board_id as section_id,
+                t.board_id as board_id,
+                COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
                 t.title as title, t.description as description, t.status as status
          FROM tasks t
          JOIN boards b ON b.id = t.board_id
@@ -1065,13 +1174,19 @@ function main() {
         replaceChecklistItems(task.id, checklist);
         sseBroadcast({ type: 'task.checklist.changed', payload: { taskId: task.id } });
       }
-      sseBroadcast({ type: 'tasks.changed', payload: { taskId: task.id, boardId: task.board_id } });
+      sseBroadcast({
+        type: 'tasks.changed',
+        payload: { taskId: task.id, sectionId: task.section_id, boardId: task.board_id, projectId: task.project_id, workspaceId: task.workspace_id },
+      });
     }
 
     if (opts.mode === 'execute') {
       if (parsed?.status === 'review') {
         db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('review', task.id);
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: task.id, boardId: task.board_id } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: { taskId: task.id, sectionId: task.section_id, boardId: task.board_id, projectId: task.project_id, workspaceId: task.workspace_id },
+        });
       }
     }
 
@@ -1704,6 +1819,7 @@ const server = http.createServer(async (req, res) => {
         const status = url.searchParams.get('status');
         const stuckMinutesRaw = url.searchParams.get('stuckMinutes');
         const stuckMinutes = stuckMinutesRaw == null ? null : Number(stuckMinutesRaw);
+        const projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
 
         const allowedStatus = new Set(['running', 'succeeded', 'failed', 'cancelled']);
         if (status && !allowedStatus.has(status)) {
@@ -1720,6 +1836,10 @@ const server = http.createServer(async (req, res) => {
           where.push('r.status = ?');
           params.push(status);
         }
+        if (projectId) {
+          where.push('r.workspace_id = ?');
+          params.push(projectId);
+        }
 
         // If stuckMinutes is provided, return only stuck running runs older than N minutes.
         if (stuckMinutes != null) {
@@ -1731,7 +1851,9 @@ const server = http.createServer(async (req, res) => {
         const sql = `
           SELECT
             r.id,
+            r.workspace_id as project_id,
             r.workspace_id,
+            r.board_id as section_id,
             r.board_id,
             r.task_id,
             r.agent_name,
@@ -1763,6 +1885,7 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && url.pathname === '/approvals') {
         const status = url.searchParams.get('status');
+        const projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
         const allowed = new Set(['pending', 'approved', 'rejected']);
         if (status && !allowed.has(status)) {
           return sendJson(res, 400, { error: 'status must be one of: pending, approved, rejected' }, corsHeaders);
@@ -1773,6 +1896,10 @@ const server = http.createServer(async (req, res) => {
         if (status) {
           where.push('a.status = ?');
           params.push(status);
+        }
+        if (projectId) {
+          where.push('r.workspace_id = ?');
+          params.push(projectId);
         }
 
         const approvals = db
@@ -1790,6 +1917,9 @@ const server = http.createServer(async (req, res) => {
                a.decision_reason,
                a.created_at,
                a.updated_at,
+               r.workspace_id as project_id,
+               r.workspace_id as workspace_id,
+               r.board_id as section_id,
                r.task_id as task_id,
                r.board_id as board_id,
                t.title as task_title
@@ -1837,10 +1967,20 @@ const server = http.createServer(async (req, res) => {
           )
           .run(nextStatus, decidedBy, reason, id);
 
-        const approvalMeta = rowOrNull<{ task_id: string | null; board_id: string | null }>(
+        const approvalMeta = rowOrNull<{
+          task_id: string | null;
+          board_id: string | null;
+          section_id: string | null;
+          project_id: string | null;
+          workspace_id: string | null;
+        }>(
           db
             .prepare(
-              `SELECT r.task_id as task_id, r.board_id as board_id
+              `SELECT r.task_id as task_id,
+                      r.board_id as section_id,
+                      r.board_id as board_id,
+                      r.workspace_id as project_id,
+                      r.workspace_id as workspace_id
                FROM approvals a
                JOIN agent_runs r ON r.id = a.run_id
                WHERE a.id = ?`
@@ -1850,7 +1990,15 @@ const server = http.createServer(async (req, res) => {
 
         sseBroadcast({
           type: 'approvals.changed',
-          payload: { approvalId: id, status: nextStatus, taskId: approvalMeta?.task_id ?? null, boardId: approvalMeta?.board_id ?? null },
+          payload: {
+            approvalId: id,
+            status: nextStatus,
+            taskId: approvalMeta?.task_id ?? null,
+            sectionId: approvalMeta?.section_id ?? null,
+            boardId: approvalMeta?.board_id ?? null,
+            projectId: approvalMeta?.project_id ?? null,
+            workspaceId: approvalMeta?.workspace_id ?? null,
+          },
         });
         if (info.changes === 0) {
           return sendJson(res, 409, { error: 'Approval already decided' }, corsHeaders);
@@ -1872,6 +2020,9 @@ const server = http.createServer(async (req, res) => {
                  a.decision_reason,
                  a.created_at,
                  a.updated_at,
+                 r.workspace_id as project_id,
+                 r.workspace_id as workspace_id,
+                 r.board_id as section_id,
                  r.task_id as task_id,
                  r.board_id as board_id,
                  t.title as task_title
@@ -2748,44 +2899,402 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
-      const boardDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
-      if (boardDocsGet) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardDocsGet[1]), 'boardId');
-        return sendJson(res, 200, { content: readTextFile(boardDocPath(boardId)) }, corsHeaders);
+      const sectionDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
+      if (sectionDocsGet) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsGet[1]), 'sectionId');
+        return sendJson(res, 200, { content: readTextFile(sectionDocPath(sectionId)) }, corsHeaders);
       }
 
-      const boardDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
-      if (boardDocsPut) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardDocsPut[1]), 'boardId');
+      const sectionDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
+      if (sectionDocsPut) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsPut[1]), 'sectionId');
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
-        writeTextFile(boardDocPath(boardId), content);
-        sseBroadcast({ type: 'docs.changed', payload: { boardId } });
+        writeTextFile(sectionDocPath(sectionId), content);
+        sseBroadcast({ type: 'docs.changed', payload: { sectionId, boardId: sectionId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
-      const boardChangelogGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/changelog$/) : null;
-      if (boardChangelogGet) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardChangelogGet[1]), 'boardId');
-        return sendJson(res, 200, { content: readTextFile(boardChangelogPath(boardId)) }, corsHeaders);
+      const sectionChangelogGet = req.method === 'GET'
+        ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)\/changelog$/)
+        : null;
+      if (sectionChangelogGet) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionChangelogGet[1]), 'sectionId');
+        return sendJson(res, 200, { content: readTextFile(sectionChangelogPath(sectionId)) }, corsHeaders);
       }
 
-      const boardSummaryPost = req.method === 'POST' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/summary$/) : null;
-      if (boardSummaryPost) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardSummaryPost[1]), 'boardId');
+      const sectionSummaryPost = req.method === 'POST'
+        ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)\/summary$/)
+        : null;
+      if (sectionSummaryPost) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionSummaryPost[1]), 'sectionId');
         const body = await readJson(req);
         const title = typeof body?.title === 'string' ? body.title.trim() : 'Untitled';
         const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
         if (!summary) return sendJson(res, 400, { error: 'summary is required' }, corsHeaders);
-        appendBoardSummary({ boardId, title, summary });
-        sseBroadcast({ type: 'docs.changed', payload: { boardId } });
+        appendSectionSummary({ sectionId, title, summary });
+        sseBroadcast({ type: 'docs.changed', payload: { sectionId, boardId: sectionId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
+      if (req.method === 'GET' && url.pathname === '/projects') {
+        const projects = db
+          .prepare(
+            `SELECT
+               w.id,
+               w.name,
+               w.description,
+               w.created_at,
+               w.updated_at,
+               (SELECT COUNT(*) FROM boards b WHERE b.workspace_id = w.id) as section_count,
+               (SELECT COUNT(*) FROM tasks t WHERE COALESCE(t.workspace_id, w.id) = w.id) as task_count
+             FROM workspaces w
+             ORDER BY w.created_at ASC`
+          )
+          .all();
+        return sendJson(res, 200, projects, corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/projects') {
+        const body = await readJson(req);
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        const description = typeof body?.description === 'string' ? body.description : null;
+        if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
+
+        const projectId = randomUUID();
+        db.exec('BEGIN');
+        try {
+          db.prepare('INSERT INTO workspaces(id, name, description) VALUES (?, ?, ?)').run(projectId, name, description);
+          const insSection = db.prepare(
+            'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          );
+          for (const section of DEFAULT_PROJECT_SECTIONS) {
+            insSection.run(
+              randomUUID(),
+              projectId,
+              section.name,
+              section.description,
+              section.position,
+              section.viewMode,
+              section.kind
+            );
+          }
+          const insStatus = db.prepare(
+            'INSERT INTO project_statuses(id, workspace_id, status_key, label, position) VALUES (?, ?, ?, ?, ?)'
+          );
+          for (const status of DEFAULT_PROJECT_STATUSES) {
+            insStatus.run(randomUUID(), projectId, status.key, status.label, status.position);
+          }
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        const project = rowOrNull<any>(
+          db.prepare('SELECT id, name, description, created_at, updated_at FROM workspaces WHERE id = ?').all(projectId) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
+        return sendJson(res, 201, project, corsHeaders);
+      }
+
+      const patchProjectMatch = req.method === 'PATCH' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
+      if (patchProjectMatch) {
+        const projectId = decodeURIComponent(patchProjectMatch[1]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.name !== undefined) {
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name) return sendJson(res, 400, { error: 'name must be a non-empty string' }, corsHeaders);
+          updates.push('name = ?');
+          params.push(name);
+        }
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+        if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update (name/description)' }, corsHeaders);
+
+        params.push(projectId);
+        const info = db.prepare(`UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
+
+        const project = rowOrNull<any>(
+          db.prepare('SELECT id, name, description, created_at, updated_at FROM workspaces WHERE id = ?').all(projectId) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        return sendJson(res, 200, project, corsHeaders);
+      }
+
+      const deleteProjectMatch = req.method === 'DELETE' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
+      if (deleteProjectMatch) {
+        const projectId = decodeURIComponent(deleteProjectMatch[1]);
+        const info = db.prepare('DELETE FROM workspaces WHERE id = ?').run(projectId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const listSectionsMatch = req.method === 'GET' ? url.pathname.match(/^\/projects\/([^/]+)\/sections$/) : null;
+      if (listSectionsMatch) {
+        const projectId = decodeURIComponent(listSectionsMatch[1]);
+        const sections = db
+          .prepare(
+            `SELECT
+               id,
+               workspace_id as project_id,
+               workspace_id,
+               name,
+               description,
+               position,
+               view_mode,
+               section_kind,
+               created_at,
+               updated_at
+             FROM boards
+             WHERE workspace_id = ?
+             ORDER BY position ASC, created_at ASC`
+          )
+          .all(projectId);
+        return sendJson(res, 200, sections, corsHeaders);
+      }
+
+      const createSectionMatch = req.method === 'POST' ? url.pathname.match(/^\/projects\/([^/]+)\/sections$/) : null;
+      if (createSectionMatch) {
+        const projectId = decodeURIComponent(createSectionMatch[1]);
+        const body = await readJson(req);
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        const description = typeof body?.description === 'string' ? body.description : null;
+        const viewMode = normalizeString(body?.viewMode ?? body?.view_mode) || 'kanban';
+        const sectionKind = normalizeString(body?.sectionKind ?? body?.section_kind) || 'section';
+
+        if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
+        if (viewMode !== 'kanban' && viewMode !== 'threads') {
+          return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+        }
+        if (sectionKind !== 'section' && sectionKind !== 'inbox') {
+          return sendJson(res, 400, { error: 'sectionKind must be section or inbox' }, corsHeaders);
+        }
+
+        const project = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM workspaces WHERE id = ?').all(projectId) as any);
+        if (!project) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
+
+        const sectionId = randomUUID();
+        db.prepare(
+          'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(
+          sectionId,
+          projectId,
+          name,
+          description,
+          Number.isFinite(Number(body?.position)) ? Number(body.position) : 0,
+          viewMode,
+          sectionKind
+        );
+
+        const section = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, name, description, position, view_mode, section_kind, created_at, updated_at
+                 FROM boards WHERE id = ?`
+            )
+            .all(sectionId) as any
+        );
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
+        return sendJson(res, 201, section, corsHeaders);
+      }
+
+      const patchSectionMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/projects\/([^/]+)\/sections\/([^/]+)$/)
+        : null;
+      if (patchSectionMatch) {
+        const projectId = decodeURIComponent(patchSectionMatch[1]);
+        const sectionId = decodeURIComponent(patchSectionMatch[2]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.name !== undefined) {
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name) return sendJson(res, 400, { error: 'name must be a non-empty string' }, corsHeaders);
+          updates.push('name = ?');
+          params.push(name);
+        }
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+        if (body?.position !== undefined) {
+          const position = Number(body.position);
+          if (!Number.isFinite(position)) return sendJson(res, 400, { error: 'position must be a number' }, corsHeaders);
+          updates.push('position = ?');
+          params.push(position);
+        }
+        if (body?.viewMode !== undefined || body?.view_mode !== undefined) {
+          const viewMode = normalizeString(body?.viewMode ?? body?.view_mode);
+          if (viewMode !== 'kanban' && viewMode !== 'threads') {
+            return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+          }
+          updates.push('view_mode = ?');
+          params.push(viewMode);
+        }
+        if (body?.sectionKind !== undefined || body?.section_kind !== undefined) {
+          const sectionKind = normalizeString(body?.sectionKind ?? body?.section_kind);
+          if (sectionKind !== 'section' && sectionKind !== 'inbox') {
+            return sendJson(res, 400, { error: 'sectionKind must be section or inbox' }, corsHeaders);
+          }
+          updates.push('section_kind = ?');
+          params.push(sectionKind);
+        }
+        if (!updates.length) {
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position/viewMode/sectionKind)' }, corsHeaders);
+        }
+
+        params.push(sectionId, projectId);
+        const info = db.prepare(`UPDATE boards SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+
+        const section = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, name, description, position, view_mode, section_kind, created_at, updated_at
+                 FROM boards WHERE id = ?`
+            )
+            .all(sectionId) as any
+        );
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
+        return sendJson(res, 200, section, corsHeaders);
+      }
+
+      const deleteSectionMatch = req.method === 'DELETE'
+        ? url.pathname.match(/^\/projects\/([^/]+)\/sections\/([^/]+)$/)
+        : null;
+      if (deleteSectionMatch) {
+        const projectId = decodeURIComponent(deleteSectionMatch[1]);
+        const sectionId = decodeURIComponent(deleteSectionMatch[2]);
+        const info = db.prepare('DELETE FROM boards WHERE id = ? AND workspace_id = ?').run(sectionId, projectId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const listProjectStatusesMatch = req.method === 'GET' ? url.pathname.match(/^\/projects\/([^/]+)\/statuses$/) : null;
+      if (listProjectStatusesMatch) {
+        const projectId = decodeURIComponent(listProjectStatusesMatch[1]);
+        const rows = db
+          .prepare(
+            `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
+               FROM project_statuses
+              WHERE workspace_id = ?
+              ORDER BY position ASC, created_at ASC`
+          )
+          .all(projectId);
+        return sendJson(res, 200, rows, corsHeaders);
+      }
+
+      const createProjectStatusMatch = req.method === 'POST' ? url.pathname.match(/^\/projects\/([^/]+)\/statuses$/) : null;
+      if (createProjectStatusMatch) {
+        const projectId = decodeURIComponent(createProjectStatusMatch[1]);
+        const body = await readJson(req);
+        const statusKey = normalizeString(body?.status_key ?? body?.key ?? body?.statusKey);
+        const label = normalizeString(body?.label);
+        if (!statusKey) return sendJson(res, 400, { error: 'status_key is required' }, corsHeaders);
+        if (!label) return sendJson(res, 400, { error: 'label is required' }, corsHeaders);
+
+        const id = randomUUID();
+        db.prepare(
+          'INSERT INTO project_statuses(id, workspace_id, status_key, label, position) VALUES (?, ?, ?, ?, ?)'
+        ).run(id, projectId, statusKey, label, Number.isFinite(Number(body?.position)) ? Number(body.position) : 0);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
+                 FROM project_statuses WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        return sendJson(res, 201, row, corsHeaders);
+      }
+
+      const patchProjectStatusMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/projects\/([^/]+)\/statuses\/([^/]+)$/)
+        : null;
+      if (patchProjectStatusMatch) {
+        const projectId = decodeURIComponent(patchProjectStatusMatch[1]);
+        const statusId = decodeURIComponent(patchProjectStatusMatch[2]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.status_key !== undefined || body?.key !== undefined || body?.statusKey !== undefined) {
+          const statusKey = normalizeString(body?.status_key ?? body?.key ?? body?.statusKey);
+          if (!statusKey) return sendJson(res, 400, { error: 'status_key must be non-empty' }, corsHeaders);
+          updates.push('status_key = ?');
+          params.push(statusKey);
+        }
+        if (body?.label !== undefined) {
+          const label = normalizeString(body?.label);
+          if (!label) return sendJson(res, 400, { error: 'label must be non-empty' }, corsHeaders);
+          updates.push('label = ?');
+          params.push(label);
+        }
+        if (body?.position !== undefined) {
+          const position = Number(body.position);
+          if (!Number.isFinite(position)) return sendJson(res, 400, { error: 'position must be a number' }, corsHeaders);
+          updates.push('position = ?');
+          params.push(position);
+        }
+        if (!updates.length) {
+          return sendJson(res, 400, { error: 'No valid fields to update (status_key/label/position)' }, corsHeaders);
+        }
+        params.push(statusId, projectId);
+        const info = db.prepare(`UPDATE project_statuses SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Project status not found' }, corsHeaders);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
+                 FROM project_statuses WHERE id = ?`
+            )
+            .all(statusId) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        return sendJson(res, 200, row, corsHeaders);
+      }
+
+      // Legacy board endpoints remain available as aliases to sections.
       if (req.method === 'GET' && url.pathname === '/boards') {
         const boards = db
           .prepare(
-            'SELECT id, workspace_id, name, description, position, created_at, updated_at FROM boards ORDER BY position ASC, created_at ASC'
+            `SELECT
+               id,
+               workspace_id,
+               workspace_id as project_id,
+               name,
+               description,
+               position,
+               view_mode,
+               section_kind,
+               created_at,
+               updated_at
+             FROM boards
+             ORDER BY position ASC, created_at ASC`
           )
           .all();
         return sendJson(res, 200, boards, corsHeaders);
@@ -2795,24 +3304,37 @@ const server = http.createServer(async (req, res) => {
         const body = await readJson(req);
         const name = typeof body?.name === 'string' ? body.name.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
-        let workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : null;
-        if (!workspaceId) workspaceId = getDefaultWorkspaceId(db);
-        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        let projectId =
+          (typeof body?.projectId === 'string' ? body.projectId : null) ??
+          (typeof body?.workspaceId === 'string' ? body.workspaceId : null);
+        if (!projectId) projectId = getDefaultProjectId(db);
+        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no project exists)' }, corsHeaders);
         if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
+
+        const viewMode = normalizeString(body?.viewMode ?? body?.view_mode) || 'kanban';
+        const sectionKind = normalizeString(body?.sectionKind ?? body?.section_kind) || 'section';
+        if (viewMode !== 'kanban' && viewMode !== 'threads') {
+          return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+        }
+        if (sectionKind !== 'section' && sectionKind !== 'inbox') {
+          return sendJson(res, 400, { error: 'sectionKind must be section or inbox' }, corsHeaders);
+        }
 
         const id = randomUUID();
         db.prepare(
-          'INSERT INTO boards(id, workspace_id, name, description, position) VALUES (?, ?, ?, ?, ?)'
-        ).run(id, workspaceId, name, description, body?.position ?? 0);
+          'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, projectId, name, description, body?.position ?? 0, viewMode, sectionKind);
 
-        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId } });
+        sseBroadcast({ type: 'sections.changed', payload: { sectionId: id, boardId: id, projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId: projectId } });
 
-        const board = rowOrNull<any>(
+        const section = rowOrNull<any>(
           db.prepare(
-            'SELECT id, workspace_id, name, description, position, created_at, updated_at FROM boards WHERE id = ?'
+            `SELECT id, workspace_id, workspace_id as project_id, name, description, position, view_mode, section_kind, created_at, updated_at
+               FROM boards WHERE id = ?`
           ).all(id) as any
         );
-        return sendJson(res, 201, board, corsHeaders);
+        return sendJson(res, 201, section, corsHeaders);
       }
 
       const patchBoardMatch = req.method === 'PATCH' ? url.pathname.match(/^\/boards\/([^/]+)$/) : null;
@@ -2840,49 +3362,88 @@ const server = http.createServer(async (req, res) => {
           updates.push('position = ?');
           params.push(position);
         }
+        if (body?.viewMode !== undefined || body?.view_mode !== undefined) {
+          const viewMode = normalizeString(body?.viewMode ?? body?.view_mode);
+          if (viewMode !== 'kanban' && viewMode !== 'threads') {
+            return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+          }
+          updates.push('view_mode = ?');
+          params.push(viewMode);
+        }
 
         if (!updates.length) {
-          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position)' }, corsHeaders);
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position/viewMode)' }, corsHeaders);
         }
 
         params.push(id);
         const info = db.prepare(`UPDATE boards SET ${updates.join(', ')} WHERE id = ?`).run(...params);
-        if (info.changes === 0) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
 
-        sseBroadcast({ type: 'boards.changed', payload: { boardId: id } });
+        const sectionMeta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(id) as any);
+        sseBroadcast({
+          type: 'sections.changed',
+          payload: { sectionId: id, boardId: id, projectId: sectionMeta?.workspace_id ?? null, workspaceId: sectionMeta?.workspace_id ?? null },
+        });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId: sectionMeta?.workspace_id ?? null } });
 
-        const board = rowOrNull<any>(
+        const section = rowOrNull<any>(
           db.prepare(
-            'SELECT id, workspace_id, name, description, position, created_at, updated_at FROM boards WHERE id = ?'
+            `SELECT id, workspace_id, workspace_id as project_id, name, description, position, view_mode, section_kind, created_at, updated_at
+               FROM boards WHERE id = ?`
           ).all(id) as any
         );
-        return sendJson(res, 200, board, corsHeaders);
+        return sendJson(res, 200, section, corsHeaders);
       }
 
       const deleteBoardMatch = req.method === 'DELETE' ? url.pathname.match(/^\/boards\/([^/]+)$/) : null;
       if (deleteBoardMatch) {
         const id = decodeURIComponent(deleteBoardMatch[1]);
+        const sectionMeta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(id) as any);
         const info = db.prepare('DELETE FROM boards WHERE id = ?').run(id);
-        if (info.changes === 0) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
-        sseBroadcast({ type: 'boards.changed', payload: { boardId: id } });
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        sseBroadcast({
+          type: 'sections.changed',
+          payload: { sectionId: id, boardId: id, projectId: sectionMeta?.workspace_id ?? null, workspaceId: sectionMeta?.workspace_id ?? null },
+        });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId: sectionMeta?.workspace_id ?? null } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/tasks') {
-        let boardId = url.searchParams.get('boardId');
-        if (!boardId) boardId = getDefaultBoardId(db);
-        if (!boardId) return sendJson(res, 400, { error: 'Missing boardId (and no default board exists)' }, corsHeaders);
+        const viewMode = normalizeString(url.searchParams.get('viewMode') ?? '');
+        const sectionId = normalizeString(url.searchParams.get('sectionId') ?? url.searchParams.get('boardId') ?? '') || null;
+        let projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
+
+        if (!projectId && sectionId) {
+          const sectionMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any
+          );
+          projectId = sectionMeta?.workspace_id ?? null;
+        }
+        if (!projectId) projectId = getDefaultProjectId(db);
+        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no default project exists)' }, corsHeaders);
+
+        const where: string[] = ['COALESCE(t.workspace_id, b.workspace_id) = ?'];
+        const params: any[] = [projectId];
+        if (sectionId) {
+          where.push('t.board_id = ?');
+          params.push(sectionId);
+        }
 
         const tasks = db
           .prepare(
             `SELECT
                t.id,
+               COALESCE(t.workspace_id, b.workspace_id) as project_id,
+               COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+               t.board_id as section_id,
                t.board_id,
                t.title,
                t.description,
                t.status,
                t.position,
                t.due_at,
+               t.is_inbox,
                t.created_at,
                t.updated_at,
                s.agent_id,
@@ -2893,8 +3454,10 @@ const server = http.createServer(async (req, res) => {
                r.started_at as run_started_at,
                r.updated_at as run_updated_at,
                r.finished_at as run_finished_at,
-               rs.kind as run_step_kind
+               rs.kind as run_step_kind,
+               ? as view_mode
              FROM tasks t
+             JOIN boards b ON b.id = t.board_id
              LEFT JOIN task_sessions s ON s.task_id = t.id
              LEFT JOIN agents a ON a.id = s.agent_id
              LEFT JOIN agent_runs r ON r.id = (
@@ -2903,25 +3466,26 @@ const server = http.createServer(async (req, res) => {
              LEFT JOIN run_steps rs ON rs.id = (
                SELECT id FROM run_steps WHERE run_id = r.id ORDER BY step_index DESC LIMIT 1
              )
-             WHERE t.board_id = ?
+             WHERE ${where.join(' AND ')}
              ORDER BY t.position ASC, t.created_at ASC`
           )
-          .all(boardId);
+          .all(viewMode === 'threads' ? 'threads' : 'kanban', ...params);
         return sendJson(res, 200, tasks, corsHeaders);
       }
 
       if (req.method === 'POST' && url.pathname === '/tasks/reorder') {
         const body = await readJson(req);
-        const boardId = typeof body?.boardId === 'string' ? body.boardId : null;
+        const sectionId = normalizeString(body?.sectionId ?? body?.boardId);
+        const projectId = normalizeString(body?.projectId ?? body?.workspaceId);
         const orderedIds = Array.isArray(body?.orderedIds) ? body.orderedIds.map((id: any) => String(id)) : [];
-        if (!boardId) return sendJson(res, 400, { error: 'boardId is required' }, corsHeaders);
+        if (!sectionId) return sendJson(res, 400, { error: 'sectionId is required' }, corsHeaders);
         if (orderedIds.length === 0) return sendJson(res, 400, { error: 'orderedIds must be a non-empty array' }, corsHeaders);
 
         db.exec('BEGIN');
         try {
           const upd = db.prepare('UPDATE tasks SET position = ? WHERE id = ? AND board_id = ?');
           orderedIds.forEach((id: string, idx: number) => {
-            upd.run(idx, id, boardId);
+            upd.run(idx, id, sectionId);
           });
           db.exec('COMMIT');
         } catch (e) {
@@ -2929,7 +3493,16 @@ const server = http.createServer(async (req, res) => {
           throw e;
         }
 
-        sseBroadcast({ type: 'tasks.changed', payload: { boardId } });
+        const meta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any);
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            sectionId,
+            boardId: sectionId,
+            projectId: projectId || (meta?.workspace_id ?? null),
+            workspaceId: projectId || (meta?.workspace_id ?? null),
+          },
+        });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -2938,30 +3511,65 @@ const server = http.createServer(async (req, res) => {
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
         const status = typeof body?.status === 'string' ? body.status : 'ideas';
-        let boardId = typeof body?.boardId === 'string' ? body.boardId : null;
-        if (!boardId) boardId = getDefaultBoardId(db);
-        if (!boardId) return sendJson(res, 400, { error: 'Missing boardId (and no default board exists)' }, corsHeaders);
+        const requestedSectionId = normalizeString(body?.sectionId ?? body?.boardId) || null;
+        let projectId = normalizeString(body?.projectId ?? body?.workspaceId) || null;
 
         if (!title) return sendJson(res, 400, { error: 'title is required' }, corsHeaders);
-        if (!TASK_STATUSES.has(status)) {
+
+        let sectionId = requestedSectionId;
+        if (!projectId && sectionId) {
+          const sectionMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any
+          );
+          projectId = sectionMeta?.workspace_id ?? null;
+        }
+        if (!projectId) projectId = getDefaultProjectId(db);
+        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no default project exists)' }, corsHeaders);
+        if (!sectionId) sectionId = getProjectInboxSectionId(db, projectId) ?? getDefaultSectionId(db, projectId);
+        if (!sectionId) return sendJson(res, 400, { error: 'Missing sectionId (and no default section exists)' }, corsHeaders);
+
+        const sectionRow = rowOrNull<{ id: string; workspace_id: string; section_kind: string }>(
+          db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(sectionId) as any
+        );
+        if (!sectionRow) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        if (sectionRow.workspace_id !== projectId) {
+          return sendJson(res, 400, { error: 'sectionId does not belong to projectId' }, corsHeaders);
+        }
+
+        const projectStatusCount = rowOrNull<{ c: number }>(
+          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ?').all(projectId) as any
+        )?.c ?? 0;
+        const hasStatus = rowOrNull<{ c: number }>(
+          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ? AND status_key = ?').all(projectId, status) as any
+        )?.c ?? 0;
+        if ((projectStatusCount > 0 && hasStatus === 0) || (projectStatusCount === 0 && !TASK_STATUSES.has(status))) {
           return sendJson(res, 400, { error: 'Invalid status' }, corsHeaders);
         }
 
         const id = randomUUID();
-        db.prepare('INSERT INTO tasks(id, board_id, title, description, status, position) VALUES (?, ?, ?, ?, ?, ?)').run(
+        db.prepare(
+          'INSERT INTO tasks(id, board_id, workspace_id, title, description, status, position, is_inbox) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(
           id,
-          boardId,
+          sectionId,
+          projectId,
           title,
           description,
           status,
-          Number.isFinite(Number(body?.position)) ? Number(body.position) : 0
+          Number.isFinite(Number(body?.position)) ? Number(body.position) : 0,
+          sectionRow.section_kind === 'inbox' ? 1 : 0
         );
 
-        sseBroadcast({ type: 'tasks.changed', payload: { boardId, taskId: id } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: { sectionId, boardId: sectionId, taskId: id, projectId, workspaceId: projectId },
+        });
 
         const task = rowOrNull<any>(
           db.prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
+            `SELECT id, board_id as section_id, board_id, workspace_id as project_id, workspace_id,
+                    title, description, status, position, due_at, is_inbox, created_at, updated_at
+               FROM tasks WHERE id = ?`
           ).all(id) as any
         );
         return sendJson(res, 201, task, corsHeaders);
@@ -3058,8 +3666,18 @@ const server = http.createServer(async (req, res) => {
         }
 
         db.prepare("UPDATE task_sessions SET status = 'idle' WHERE task_id = ?").run(taskId);
+        const taskMeta = getTaskMeta(taskId);
         sseBroadcast({ type: 'runs.changed', payload: { taskId, runId: session.last_run_id } });
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            taskId,
+            sectionId: taskMeta?.section_id ?? null,
+            boardId: taskMeta?.board_id ?? null,
+            projectId: taskMeta?.project_id ?? null,
+            workspaceId: taskMeta?.workspace_id ?? null,
+          },
+        });
         return sendJson(res, 200, { ok: true, stopped: Boolean(controller), runId: session.last_run_id }, corsHeaders);
       }
 
@@ -3177,7 +3795,7 @@ const server = http.createServer(async (req, res) => {
         const task = getTaskMeta(taskId);
         if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
 
-        const session = ensureTaskSession(taskId, agentId);
+        const session = ensureTaskSession(taskId, { agentId });
         const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
         const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
 
@@ -3220,9 +3838,14 @@ const server = http.createServer(async (req, res) => {
         const taskId = decodeURIComponent(requestApprovalMatch[1]);
         const body = await readJson(req);
 
-        const taskRow = rowOrNull<{ id: string; board_id: string; workspace_id: string; title: string }>(
+        const taskRow = rowOrNull<{ id: string; section_id: string; board_id: string; project_id: string; workspace_id: string; title: string }>(
           db.prepare(
-            `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id, t.title as title
+            `SELECT t.id as id,
+                    t.board_id as section_id,
+                    t.board_id as board_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                    t.title as title
              FROM tasks t
              JOIN boards b ON b.id = t.board_id
              WHERE t.id = ?`
@@ -3248,7 +3871,7 @@ const server = http.createServer(async (req, res) => {
             runId = randomUUID();
             db.prepare(
               'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, ?, ?, ?, ?)'
-            ).run(runId, taskRow.workspace_id, taskRow.board_id, taskRow.id, 'user', 'running');
+            ).run(runId, taskRow.project_id, taskRow.section_id, taskRow.id, 'user', 'running');
           }
 
           const approvalId = randomUUID();
@@ -3256,7 +3879,18 @@ const server = http.createServer(async (req, res) => {
             'INSERT INTO approvals(id, run_id, step_id, status, request_title, request_body) VALUES (?, ?, ?, ?, ?, ?)'
           ).run(approvalId, runId, stepId, 'pending', requestTitle, requestBody);
 
-          sseBroadcast({ type: 'approvals.changed', payload: { approvalId, status: 'pending', taskId: taskId, boardId: taskRow.board_id } });
+          sseBroadcast({
+            type: 'approvals.changed',
+            payload: {
+              approvalId,
+              status: 'pending',
+              taskId: taskId,
+              sectionId: taskRow.section_id,
+              boardId: taskRow.board_id,
+              projectId: taskRow.project_id,
+              workspaceId: taskRow.workspace_id,
+            },
+          });
 
           db.exec('COMMIT');
 
@@ -3276,6 +3910,9 @@ const server = http.createServer(async (req, res) => {
                    a.decision_reason,
                    a.created_at,
                    a.updated_at,
+                   r.workspace_id as project_id,
+                   r.workspace_id as workspace_id,
+                   r.board_id as section_id,
                    r.task_id as task_id,
                    r.board_id as board_id,
                    t.title as task_title
@@ -3297,9 +3934,13 @@ const server = http.createServer(async (req, res) => {
       if (simulateMatch) {
         const taskId = simulateMatch[1];
 
-        const taskRow = rowOrNull<{ id: string; board_id: string; workspace_id: string }>(
+        const taskRow = rowOrNull<{ id: string; section_id: string; board_id: string; project_id: string; workspace_id: string }>(
           db.prepare(
-            `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id
+            `SELECT t.id as id,
+                    t.board_id as section_id,
+                    t.board_id as board_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as workspace_id
              FROM tasks t
              JOIN boards b ON b.id = t.board_id
              WHERE t.id = ?`
@@ -3314,7 +3955,7 @@ const server = http.createServer(async (req, res) => {
         try {
           db.prepare(
             'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, ?, ?, ?, ?)'
-          ).run(runId, taskRow.workspace_id, taskRow.board_id, taskRow.id, 'simulator', 'running');
+          ).run(runId, taskRow.project_id, taskRow.section_id, taskRow.id, 'simulator', 'running');
 
           const ins = db.prepare(
             'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -3348,7 +3989,17 @@ const server = http.createServer(async (req, res) => {
           }
         })();
 
-        sseBroadcast({ type: 'runs.changed', payload: { runId, taskId } });
+        sseBroadcast({
+          type: 'runs.changed',
+          payload: {
+            runId,
+            taskId,
+            sectionId: taskRow.section_id,
+            boardId: taskRow.board_id,
+            projectId: taskRow.project_id,
+            workspaceId: taskRow.workspace_id,
+          },
+        });
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
@@ -3359,7 +4010,7 @@ const server = http.createServer(async (req, res) => {
 
         const runs = db
           .prepare(
-            `SELECT id, workspace_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
+            `SELECT id, workspace_id as project_id, workspace_id, board_id as section_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
                     input_tokens, output_tokens, total_tokens,
                     CASE
                       WHEN status = 'running' AND julianday(created_at) < julianday('now') - (? / 1440.0) THEN 1
@@ -3403,12 +4054,26 @@ const server = http.createServer(async (req, res) => {
       const deleteTaskMatch = req.method === 'DELETE' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
       if (deleteTaskMatch) {
         const id = decodeURIComponent(deleteTaskMatch[1]);
-        const meta = rowOrNull<{ board_id: string }>(
-          db.prepare('SELECT board_id FROM tasks WHERE id = ?').all(id) as any
+        const meta = rowOrNull<{ section_id: string; board_id: string; project_id: string; workspace_id: string }>(
+          db
+            .prepare(
+              `SELECT board_id as section_id, board_id, workspace_id as project_id, workspace_id
+                 FROM tasks WHERE id = ?`
+            )
+            .all(id) as any
         );
         const info = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id, boardId: meta?.board_id ?? null } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            taskId: id,
+            sectionId: meta?.section_id ?? null,
+            boardId: meta?.board_id ?? null,
+            projectId: meta?.project_id ?? null,
+            workspaceId: meta?.workspace_id ?? null,
+          },
+        });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -3416,15 +4081,37 @@ const server = http.createServer(async (req, res) => {
       if (patchMatch) {
         const id = patchMatch[1];
         const body = await readJson(req);
-        const existing = rowOrNull<{ status: string; board_id: string; title: string; description: string | null }>(
+        const existing = rowOrNull<{
+          status: string;
+          section_id: string;
+          board_id: string;
+          project_id: string;
+          workspace_id: string;
+          title: string;
+          description: string | null;
+        }>(
           db
-            .prepare('SELECT status, board_id, title, description FROM tasks WHERE id = ?')
+            .prepare(
+              `SELECT status,
+                      board_id as section_id,
+                      board_id,
+                      workspace_id as project_id,
+                      workspace_id,
+                      title,
+                      description
+                 FROM tasks
+                WHERE id = ?`
+            )
             .all(id) as any
         );
         if (!existing) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
 
         const updates: string[] = [];
         const params: any[] = [];
+        let nextSectionId = existing.section_id;
+        let nextProjectId = existing.project_id;
+        let nextWorkspaceId = existing.workspace_id;
+        let nextIsInbox: number | null = null;
 
         if (body?.title !== undefined) {
           const title = typeof body.title === 'string' ? body.title.trim() : '';
@@ -3442,11 +4129,34 @@ const server = http.createServer(async (req, res) => {
 
         if (body?.status !== undefined) {
           const status = typeof body.status === 'string' ? body.status : '';
-          if (!TASK_STATUSES.has(status)) {
+          const projectStatusCount = rowOrNull<{ c: number }>(
+            db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ?').all(nextProjectId) as any
+          )?.c ?? 0;
+          const hasStatus = rowOrNull<{ c: number }>(
+            db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ? AND status_key = ?').all(nextProjectId, status) as any
+          )?.c ?? 0;
+          if ((projectStatusCount > 0 && hasStatus === 0) || (projectStatusCount === 0 && !TASK_STATUSES.has(status))) {
             return sendJson(res, 400, { error: 'Invalid status' }, corsHeaders);
           }
           updates.push('status = ?');
           params.push(status);
+        }
+
+        if (body?.sectionId !== undefined || body?.boardId !== undefined) {
+          const sectionId = normalizeString(body?.sectionId ?? body?.boardId);
+          if (!sectionId) return sendJson(res, 400, { error: 'sectionId must be a non-empty string' }, corsHeaders);
+          const sectionRow = rowOrNull<{ id: string; workspace_id: string; section_kind: string }>(
+            db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(sectionId) as any
+          );
+          if (!sectionRow) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+          nextSectionId = sectionRow.id;
+          nextProjectId = sectionRow.workspace_id;
+          nextWorkspaceId = sectionRow.workspace_id;
+          nextIsInbox = sectionRow.section_kind === 'inbox' ? 1 : 0;
+          updates.push('board_id = ?');
+          params.push(nextSectionId);
+          updates.push('workspace_id = ?');
+          params.push(nextProjectId);
         }
 
         if (body?.position !== undefined) {
@@ -3456,8 +4166,13 @@ const server = http.createServer(async (req, res) => {
           params.push(position);
         }
 
+        if (nextIsInbox != null) {
+          updates.push('is_inbox = ?');
+          params.push(nextIsInbox);
+        }
+
         if (updates.length === 0) {
-          return sendJson(res, 400, { error: 'No valid fields to update (status/title/description/position)' }, corsHeaders);
+          return sendJson(res, 400, { error: 'No valid fields to update (status/title/description/sectionId/position)' }, corsHeaders);
         }
 
         params.push(id);
@@ -3466,11 +4181,22 @@ const server = http.createServer(async (req, res) => {
 
         const task = rowOrNull<any>(
           db.prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
+            `SELECT id, board_id as section_id, board_id, workspace_id as project_id, workspace_id,
+                    title, description, status, position, due_at, is_inbox, created_at, updated_at
+               FROM tasks WHERE id = ?`
           ).all(id) as any
         );
 
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id, boardId: task?.board_id ?? null } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            taskId: id,
+            sectionId: task?.section_id ?? null,
+            boardId: task?.board_id ?? null,
+            projectId: task?.project_id ?? null,
+            workspaceId: task?.workspace_id ?? null,
+          },
+        });
 
         if (body?.status === 'doing' && existing.status !== 'doing') {
           runTask({ taskId: id, mode: 'execute' }).catch((err) => {
@@ -3486,8 +4212,15 @@ const server = http.createServer(async (req, res) => {
               sessionKey: id,
               agentOpenClawId: null,
             });
-            appendBoardSummary({ boardId: task?.board_id ?? existing.board_id, title: task?.title ?? existing.title, summary });
-            sseBroadcast({ type: 'docs.changed', payload: { boardId: task?.board_id ?? existing.board_id } });
+            appendSectionSummary({
+              sectionId: task?.section_id ?? existing.section_id,
+              title: task?.title ?? existing.title,
+              summary,
+            });
+            sseBroadcast({
+              type: 'docs.changed',
+              payload: { sectionId: task?.section_id ?? existing.section_id, boardId: task?.board_id ?? existing.board_id },
+            });
           } catch (err) {
             console.error('[dzzenos-api] done summary failed', err);
           }
@@ -3496,7 +4229,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/') {
-        return sendText(res, 200, 'DzzenOS API: try GET /boards', corsHeaders);
+        return sendText(res, 200, 'DzzenOS API: try GET /projects', corsHeaders);
       }
 
       return sendJson(res, 404, { error: 'Not found' }, corsHeaders);
