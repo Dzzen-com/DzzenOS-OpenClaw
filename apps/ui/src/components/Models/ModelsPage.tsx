@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { OpenClawProvider, OpenClawProviderInput } from '../../api/types';
 import {
@@ -93,6 +94,7 @@ function ProviderDialog({
   busy: boolean;
   onSubmit: (payload: OpenClawProviderInput) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState<ProviderDraft>(initial);
   const [error, setError] = useState<string | null>(null);
 
@@ -107,8 +109,8 @@ function ProviderDialog({
       setError(null);
       const id = draft.id.trim();
       const kind = draft.kind.trim();
-      if (!id) throw new Error('Provider id is required');
-      if (!kind) throw new Error('Provider kind is required');
+      if (!id) throw new Error(t('Provider id is required'));
+      if (!kind) throw new Error(t('Provider kind is required'));
 
       const payload: OpenClawProviderInput = {
         id,
@@ -142,15 +144,15 @@ function ProviderDialog({
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/55 backdrop-blur-sm" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(680px,94vw)] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border/70 bg-surface-1 p-4 shadow-panel">
           <Dialog.Title className="text-base font-semibold text-foreground">
-            {mode === 'create' ? 'Connect provider' : 'Edit provider'}
+            {mode === 'create' ? t('Connect provider') : t('Edit')}
           </Dialog.Title>
           <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-            Configure provider connection details for OpenClaw models.
+            {t('Configure provider connection details for OpenClaw models.')}
           </Dialog.Description>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div>
-              <label className="mb-1 block text-xs text-muted-foreground">Provider id</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('Provider id')}</label>
               <Input
                 value={draft.id}
                 onChange={(e) => setDraft((d) => ({ ...d, id: e.target.value }))}
@@ -159,7 +161,7 @@ function ProviderDialog({
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-muted-foreground">Provider kind</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('Provider kind')}</label>
               <Input
                 value={draft.kind}
                 onChange={(e) => setDraft((d) => ({ ...d, kind: e.target.value }))}
@@ -167,15 +169,15 @@ function ProviderDialog({
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs text-muted-foreground">Auth mode</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('Auth mode')}</label>
               <select
                 value={draft.auth_mode}
                 onChange={(e) => setDraft((d) => ({ ...d, auth_mode: e.target.value as ProviderDraft['auth_mode'] }))}
                 className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
               >
-                <option value="api_key">API key</option>
+                <option value="api_key">{t('API key')}</option>
                 <option value="oauth">OAuth</option>
-                <option value="none">None</option>
+                <option value="none">{t('None')}</option>
               </select>
             </div>
             <div className="flex items-end">
@@ -186,11 +188,11 @@ function ProviderDialog({
                   onChange={(e) => setDraft((d) => ({ ...d, enabled: e.target.checked }))}
                   className="h-4 w-4 rounded border-border/70 bg-surface-1"
                 />
-                Enabled
+                {t('Enabled')}
               </label>
             </div>
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-muted-foreground">API base URL (optional)</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('API base URL (optional)')}</label>
               <Input
                 value={draft.api_base_url}
                 onChange={(e) => setDraft((d) => ({ ...d, api_base_url: e.target.value }))}
@@ -198,16 +200,16 @@ function ProviderDialog({
               />
             </div>
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-muted-foreground">API key (optional)</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('API key (optional)')}</label>
               <Input
                 value={draft.api_key}
                 onChange={(e) => setDraft((d) => ({ ...d, api_key: e.target.value }))}
-                placeholder={mode === 'edit' ? 'Leave empty to keep current key' : 'sk-...'}
+                placeholder={mode === 'edit' ? t('Leave empty to keep current key') : 'sk-...'}
                 type="password"
               />
             </div>
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-muted-foreground">OAuth JSON (optional)</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('OAuth JSON (optional)')}</label>
               <textarea
                 value={draft.oauth_json}
                 onChange={(e) => setDraft((d) => ({ ...d, oauth_json: e.target.value }))}
@@ -217,7 +219,7 @@ function ProviderDialog({
               />
             </div>
             <div className="sm:col-span-2">
-              <label className="mb-1 block text-xs text-muted-foreground">Options JSON (optional)</label>
+              <label className="mb-1 block text-xs text-muted-foreground">{t('Options JSON (optional)')}</label>
               <textarea
                 value={draft.options_json}
                 onChange={(e) => setDraft((d) => ({ ...d, options_json: e.target.value }))}
@@ -232,10 +234,10 @@ function ProviderDialog({
 
           <div className="mt-4 flex items-center justify-end gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
-              Cancel
+              {t('Cancel')}
             </Button>
             <Button onClick={submit} disabled={busy}>
-              {mode === 'create' ? 'Connect' : 'Save'}
+              {mode === 'create' ? t('Connect') : t('Save')}
             </Button>
           </div>
         </Dialog.Content>
@@ -245,6 +247,7 @@ function ProviderDialog({
 }
 
 export function ModelsPage() {
+  const { t } = useTranslation();
   const qc = useQueryClient();
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -313,20 +316,20 @@ export function ModelsPage() {
           if (cancelled) return;
           if (isFinalOAuthStatus(status.status)) {
             setOauthState(null);
-            setOauthInfo(status.message ?? `OAuth status: ${status.status}`);
+          setOauthInfo(status.message ?? `${t('OAuth status')}: ${status.status}`);
             await qc.invalidateQueries({ queryKey: ['models-overview'] });
             return;
           }
         } catch (err: any) {
           if (cancelled) return;
           setOauthState(null);
-          setOauthInfo(`OAuth polling failed: ${String(err?.message ?? err)}`);
+          setOauthInfo(`${t('OAuth polling failed')}: ${String(err?.message ?? err)}`);
           return;
         }
       }
       if (!cancelled) {
         setOauthState(null);
-        setOauthInfo('OAuth polling timed out. Try reconnecting.');
+        setOauthInfo(t('OAuth polling timed out. Try reconnecting.'));
       }
     };
 
@@ -393,17 +396,17 @@ export function ModelsPage() {
         window.open(started.auth_url, '_blank', 'noopener,noreferrer');
       }
       setOauthState({ providerId, attemptId: started.attempt_id ?? null });
-      setOauthInfo('OAuth flow started. Waiting for confirmation...');
+      setOauthInfo(t('OAuth flow started. Waiting for confirmation...'));
     } catch (err: any) {
-      setOauthInfo(`OAuth start failed: ${String(err?.message ?? err)}`);
+      setOauthInfo(`${t('OAuth start failed')}: ${String(err?.message ?? err)}`);
     }
   }
 
   return (
     <div className="flex w-full flex-col gap-4">
       <PageHeader
-        title="Models"
-        subtitle="Native OpenClaw model provider management without console."
+        title={t('Models')}
+        subtitle={t('Native OpenClaw model provider management without console.')}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button
@@ -411,14 +414,14 @@ export function ModelsPage() {
               onClick={() => scanM.mutate()}
               disabled={busy}
             >
-              Scan models
+              {t('Scan models')}
             </Button>
             <Button
               variant="secondary"
               onClick={() => applyM.mutate()}
               disabled={busy}
             >
-              Apply config
+              {t('Apply config')}
             </Button>
             <Button
               onClick={() => {
@@ -428,7 +431,7 @@ export function ModelsPage() {
               }}
               disabled={busy}
             >
-              Connect provider
+              {t('Connect provider')}
             </Button>
           </div>
         }
@@ -444,7 +447,7 @@ export function ModelsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Connected Providers</CardTitle>
-            <CardDescription>Detected from OpenClaw config/runtime.</CardDescription>
+            <CardDescription>{t('Detected from OpenClaw config/runtime.')}</CardDescription>
           </CardHeader>
           <CardContent>
             {overviewQ.isLoading ? (
@@ -454,7 +457,7 @@ export function ModelsPage() {
                 <Skeleton className="h-16 rounded-lg" />
               </div>
             ) : providers.length === 0 ? (
-              <EmptyState title="No providers connected" subtitle="Connect your first provider to enable models." />
+              <EmptyState title={t('No providers connected')} subtitle={t('Connect your first provider to enable models.')} />
             ) : (
               <div className="grid gap-3">
                 {providers.map((provider) => (
@@ -466,7 +469,7 @@ export function ModelsPage() {
                           <Badge variant="outline">{provider.kind}</Badge>
                           <Badge variant={providerAuthBadgeVariant(provider.auth_state)}>{provider.auth_state}</Badge>
                           <Badge variant={provider.enabled ? 'success' : 'outline'}>
-                            {provider.enabled ? 'enabled' : 'disabled'}
+                            {provider.enabled ? t('enabled') : t('disabled')}
                           </Badge>
                           <Badge variant="outline">{provider.auth_mode}</Badge>
                         </div>
@@ -482,7 +485,7 @@ export function ModelsPage() {
                           }}
                           disabled={busy}
                         >
-                          Edit
+                          {t('Edit')}
                         </Button>
                         <Button
                           variant="secondary"
@@ -490,7 +493,7 @@ export function ModelsPage() {
                           onClick={() => handleOAuthStart(provider.id)}
                           disabled={busy || provider.auth_mode !== 'oauth'}
                         >
-                          Reconnect OAuth
+                          {t('Reconnect OAuth')}
                         </Button>
                         <Button
                           variant="destructive"
@@ -501,12 +504,12 @@ export function ModelsPage() {
                           }}
                           disabled={busy}
                         >
-                          Disconnect
+                          {t('Disconnect')}
                         </Button>
                       </div>
                     </div>
                     {provider.last_error ? (
-                      <div className="mt-2 text-xs text-danger">Last error: {provider.last_error}</div>
+                      <div className="mt-2 text-xs text-danger">{t('Last error: {{error}}', { error: provider.last_error })}</div>
                     ) : null}
                   </div>
                 ))}
@@ -517,9 +520,11 @@ export function ModelsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Available Models</CardTitle>
+            <CardTitle>{t('Available Models')}</CardTitle>
             <CardDescription>
-              Runtime model catalog. Last sync: {overviewQ.data?.updated_at ? new Date(overviewQ.data.updated_at).toLocaleString() : '—'}
+              {t('Runtime model catalog. Last sync: {{time}}', {
+                time: overviewQ.data?.updated_at ? new Date(overviewQ.data.updated_at).toLocaleString() : '—',
+              })}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -527,14 +532,14 @@ export function ModelsPage() {
               <Input
                 value={modelQuery}
                 onChange={(e) => setModelQuery(e.target.value)}
-                placeholder="Search models..."
+                placeholder={t('Search models...')}
               />
               <select
                 className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
                 value={providerFilter}
                 onChange={(e) => setProviderFilter(e.target.value)}
               >
-                <option value="all">All providers</option>
+                <option value="all">{t('All providers')}</option>
                 {availableProviderIds.map((id) => (
                   <option key={id} value={id}>
                     {id}
@@ -546,7 +551,7 @@ export function ModelsPage() {
                 value={availabilityFilter}
                 onChange={(e) => setAvailabilityFilter(e.target.value as any)}
               >
-                <option value="all">All statuses</option>
+                <option value="all">{t('All statuses')}</option>
                 <option value="ready">ready</option>
                 <option value="degraded">degraded</option>
                 <option value="unavailable">unavailable</option>
@@ -561,15 +566,15 @@ export function ModelsPage() {
                 <Skeleton className="h-11 rounded-lg" />
               </div>
             ) : filteredModels.length === 0 ? (
-              <EmptyState title="No models found" subtitle="Run a scan or adjust filters." />
+              <EmptyState title={t('No models found')} subtitle={t('Run a scan or adjust filters.')} />
             ) : (
               <div className="overflow-x-auto rounded-lg border border-border/70">
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Model</TableHead>
-                      <TableHead>Provider</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead>{t('Model')}</TableHead>
+                      <TableHead>{t('Provider')}</TableHead>
+                      <TableHead>{t('Status')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>

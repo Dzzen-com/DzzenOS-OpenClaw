@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { MobileNavProvider } from './state/mobile-nav';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles.css';
+import './i18n';
 import { App } from './app/App';
 
 const qc = new QueryClient({

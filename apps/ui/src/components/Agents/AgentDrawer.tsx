@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 import type { Agent, InstalledSkill, PromptOverrides } from '../../api/types';
 import { createAgent, deleteAgent, duplicateAgent, listSkills, patchAgent, resetAgent } from '../../api/queries';
@@ -43,6 +44,7 @@ function ChipInput({
   onChange: (next: string[]) => void;
   placeholder?: string;
 }) {
+  const { t } = useTranslation();
   const [draft, setDraft] = useState('');
 
   return (
@@ -69,7 +71,7 @@ function ChipInput({
       <div className="mt-2 flex gap-2">
         <Input
           value={draft}
-          placeholder={placeholder ?? 'Add…'}
+          placeholder={placeholder ?? t('Add…')}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
@@ -89,10 +91,10 @@ function ChipInput({
           }}
           disabled={!draft.trim()}
         >
-          Add
+          {t('Add')}
         </Button>
       </div>
-      <div className="mt-2 text-xs text-muted-foreground">Tip: press Enter or separate multiple items with commas.</div>
+      <div className="mt-2 text-xs text-muted-foreground">{t('Tip: press Enter or separate multiple items with commas.')}</div>
     </div>
   );
 }
@@ -132,6 +134,7 @@ export function AgentDrawer({
   onOpenChange: (open: boolean) => void;
   agent: Agent | null;
 }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const isCreate = !agent;
   const [tab, setTab] = useState<TabKey>('overview');
@@ -291,7 +294,7 @@ export function AgentDrawer({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Dialog.Title className="truncate text-base font-semibold tracking-tight">
-                {isCreate ? 'New agent' : `${agent?.emoji ?? '🤖'} ${agent?.display_name ?? 'Agent'}`}
+                {isCreate ? t('New agent') : `${agent?.emoji ?? '🤖'} ${agent?.display_name ?? t('Agent')}`}
               </Dialog.Title>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 {agent?.preset_key ? (
@@ -300,7 +303,7 @@ export function AgentDrawer({
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
-                    Custom
+                    {t('Custom')}
                   </Badge>
                 )}
                 {agent && !agent.enabled ? (
@@ -311,7 +314,7 @@ export function AgentDrawer({
               </div>
             </div>
             <Dialog.Close asChild aria-label="Close">
-              <Button variant="ghost">Close</Button>
+              <Button variant="ghost">{t('Close')}</Button>
             </Dialog.Close>
           </div>
 
@@ -325,36 +328,36 @@ export function AgentDrawer({
             <Tabs defaultValue="overview" value={tab} onValueChange={(v) => setTab(v as TabKey)}>
               <TabsList className="w-full flex-wrap justify-start gap-1">
                 <TabsTrigger value="overview" className="text-[11px] sm:text-xs">
-                  Overview
+                  {t('Overview')}
                 </TabsTrigger>
                 <TabsTrigger value="prompts" className="text-[11px] sm:text-xs">
-                  Prompts
+                  {t('Prompts')}
                 </TabsTrigger>
                 <TabsTrigger value="skills" className="text-[11px] sm:text-xs">
-                  Skills
+                  {t('Skills')}
                 </TabsTrigger>
                 <TabsTrigger value="usage" className="text-[11px] sm:text-xs" disabled={isCreate}>
-                  Usage
+                  {t('Usage')}
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview">
                 <div className="grid gap-3">
-                  <Row label="Display name">
+                  <Row label={t('Display name')}>
                     <Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Agent name" />
                   </Row>
-                  <Row label="Description">
+                  <Row label={t('Description')}>
                     <Textarea value={description} onChange={setDescription} placeholder="What this agent is best at…" rows={4} />
                   </Row>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <Row label="Emoji">
+                    <Row label={t('Emoji')}>
                       <Input value={emoji} onChange={(e) => setEmoji(e.target.value)} placeholder="🤖" />
                     </Row>
-                    <Row label="Category">
+                    <Row label={t('Category')}>
                       <Input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="general" />
                     </Row>
                   </div>
-                  <Row label="OpenClaw agent id">
+                  <Row label={t('OpenClaw agent id')}>
                     <Input
                       value={openclawAgentId}
                       onChange={(e) => setOpenclawAgentId(e.target.value)}
@@ -362,21 +365,21 @@ export function AgentDrawer({
                     />
                   </Row>
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <Row label="Role (optional)">
+                    <Row label={t('Role (optional)')}>
                       <Input value={role} onChange={(e) => setRole(e.target.value)} placeholder="orchestrator" />
                     </Row>
-                    <Row label="Enabled">
+                    <Row label={t('Enabled')}>
                       <div className="flex items-center gap-2">
                         <input
                           type="checkbox"
                           checked={enabled}
                           onChange={(e) => setEnabled(e.target.checked)}
                         />
-                        <span className="text-sm text-muted-foreground">Active</span>
+                        <span className="text-sm text-muted-foreground">{t('Active')}</span>
                       </div>
                     </Row>
                   </div>
-                  <ChipInput label="Tags" value={tags} onChange={setTags} placeholder="e.g. content, social, research" />
+                  <ChipInput label={t('Tags')} value={tags} onChange={setTags} placeholder={t('Tags')} />
                 </div>
               </TabsContent>
 
@@ -384,31 +387,31 @@ export function AgentDrawer({
                 <div className="grid gap-4">
                   <PromptBlock
                     title="System"
-                    hint="High-level behavior and constraints for this agent."
+                    hint={t('High-level behavior and constraints for this agent.')}
                     value={prompts.system ?? ''}
                     onChange={(v) => setPrompts((p) => ({ ...p, system: v }))}
                   />
                   <PromptBlock
-                    title="Plan"
-                    hint="How the agent plans tasks."
+                    title={t('Plan')}
+                    hint={t('How the agent plans tasks.')}
                     value={prompts.plan ?? ''}
                     onChange={(v) => setPrompts((p) => ({ ...p, plan: v }))}
                   />
                   <PromptBlock
-                    title="Execute"
-                    hint="How the agent executes tasks."
+                    title={t('Execute')}
+                    hint={t('How the agent executes tasks.')}
                     value={prompts.execute ?? ''}
                     onChange={(v) => setPrompts((p) => ({ ...p, execute: v }))}
                   />
                   <PromptBlock
-                    title="Chat"
-                    hint="How the agent replies in task chat."
+                    title={t('Chat')}
+                    hint={t('How the agent replies in task chat.')}
                     value={prompts.chat ?? ''}
                     onChange={(v) => setPrompts((p) => ({ ...p, chat: v }))}
                   />
                   <PromptBlock
-                    title="Report"
-                    hint="How the agent summarizes outcomes."
+                    title={t('Reporting')}
+                    hint={t('How the agent summarizes outcomes.')}
                     value={prompts.report ?? ''}
                     onChange={(v) => setPrompts((p) => ({ ...p, report: v }))}
                   />
@@ -418,10 +421,10 @@ export function AgentDrawer({
               <TabsContent value="skills">
                 <div className="grid gap-4">
                   <div>
-                    <label className="text-xs text-muted-foreground">Selected skills</label>
+                    <label className="text-xs text-muted-foreground">{t('Selected skills')}</label>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {(skills ?? []).length === 0 ? (
-                        <div className="text-xs text-muted-foreground">No skills selected.</div>
+                        <div className="text-xs text-muted-foreground">{t('No skills selected.')}</div>
                       ) : (
                         (skills ?? []).map((slug) => {
                           const installed = installedBySlug.get(slug) ?? null;
@@ -438,7 +441,7 @@ export function AgentDrawer({
                               title={missing ? 'Not installed (missing)' : undefined}
                             >
                               <span className="font-mono">{slug}</span>
-                              {missing ? <span className="ml-1">Missing</span> : null}
+                              {missing ? <span className="ml-1">{t('Missing')}</span> : null}
                               <button
                                 type="button"
                                 className="rounded-full px-1 text-muted-foreground hover:text-foreground"
@@ -454,7 +457,7 @@ export function AgentDrawer({
                     </div>
                     {missingSelectedSkills.length > 0 ? (
                       <div className="mt-2 text-xs text-muted-foreground">
-                        Some selected skills are not installed. Install them in the Skills page or remove them here.
+                        {t('Some selected skills are not installed. Install them in the Skills page or remove them here.')}
                       </div>
                     ) : null}
                   </div>
@@ -463,17 +466,17 @@ export function AgentDrawer({
                     <div className="flex items-end justify-between gap-3">
                       <div>
                         <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                          Installed skills
+                          {t('Installed skills')}
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
-                          Pick from installed skills. Install more in the Skills page.
+                          {t('Pick from installed skills. Install more in the Skills page.')}
                         </div>
                       </div>
                       <div className="w-[220px]">
                         <Input
                           value={skillSearch}
                           onChange={(e) => setSkillSearch(e.target.value)}
-                          placeholder="Filter…"
+                          placeholder={t('Filter…')}
                         />
                       </div>
                     </div>
@@ -486,9 +489,9 @@ export function AgentDrawer({
 
                     <div className="mt-3 grid gap-2">
                       {skillsQ.isLoading ? (
-                        <div className="text-xs text-muted-foreground">Loading skills…</div>
+                        <div className="text-xs text-muted-foreground">{t('Loading skills…')}</div>
                       ) : filteredInstalledSkills.length === 0 ? (
-                        <div className="text-xs text-muted-foreground">No installed skills found.</div>
+                        <div className="text-xs text-muted-foreground">{t('No installed skills found.')}</div>
                       ) : (
                         filteredInstalledSkills.map((s) => {
                           const checked = (skills ?? []).includes(s.slug);
@@ -539,7 +542,7 @@ export function AgentDrawer({
                   </div>
 
                   <div className="text-xs text-muted-foreground">
-                    Skills are stored as skill ids in DzzenOS (overlay). Execution integration ships in a later version.
+                    {t('Skills are stored as skill ids in DzzenOS (overlay). Execution integration ships in a later version.')}
                   </div>
                 </div>
               </TabsContent>
@@ -549,17 +552,17 @@ export function AgentDrawer({
                   <div className="grid gap-3 text-sm">
                     <div className="rounded-xl border border-border/70 bg-surface-2/40 p-4">
                       <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                        Usage (read-only)
+                        {t('Usage (read-only)')}
                       </div>
                       <div className="mt-3 grid gap-2">
-                        <UsageRow label="Assigned tasks" value={String(agent.assigned_task_count ?? 0)} />
-                        <UsageRow label="Runs (7d)" value={String(agent.run_count_7d ?? 0)} />
-                        <UsageRow label="Last used" value={agent.last_used_at ? new Date(agent.last_used_at).toLocaleString() : '—'} />
+                        <UsageRow label={t('Assigned tasks')} value={String(agent.assigned_task_count ?? 0)} />
+                        <UsageRow label={t('Runs (7d)')} value={String(agent.run_count_7d ?? 0)} />
+                        <UsageRow label={t('Last used')} value={agent.last_used_at ? new Date(agent.last_used_at).toLocaleString() : '—'} />
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-sm text-muted-foreground">Save the agent to see usage stats.</div>
+                  <div className="text-sm text-muted-foreground">{t('Save the agent to see usage stats.')}</div>
                 )}
               </TabsContent>
             </Tabs>
@@ -575,7 +578,7 @@ export function AgentDrawer({
                     disabled={duplicateM.isPending}
                     title="Create a custom copy"
                   >
-                    {duplicateM.isPending ? 'Duplicating…' : 'Duplicate'}
+                    {duplicateM.isPending ? t('Duplicating…') : t('Duplicate')}
                   </Button>
                   {canReset ? (
                     <Button
@@ -584,7 +587,7 @@ export function AgentDrawer({
                       disabled={resetM.isPending}
                       title="Reset to preset defaults"
                     >
-                      {resetM.isPending ? 'Resetting…' : 'Reset'}
+                      {resetM.isPending ? t('Resetting…') : t('Reset')}
                     </Button>
                   ) : null}
                   {canDelete ? (
@@ -594,7 +597,7 @@ export function AgentDrawer({
                       disabled={deleteM.isPending}
                       title="Delete agent"
                     >
-                      {deleteM.isPending ? 'Deleting…' : 'Delete'}
+                      {deleteM.isPending ? t('Deleting…') : t('Delete')}
                     </Button>
                   ) : null}
                 </>
@@ -602,7 +605,7 @@ export function AgentDrawer({
             </div>
             <div className="flex items-center gap-2">
               <Button onClick={() => saveM.mutate()} disabled={saveM.isPending}>
-                {saveM.isPending ? 'Saving…' : 'Save'}
+                {saveM.isPending ? t('Saving…') : t('Save')}
               </Button>
             </div>
           </div>
