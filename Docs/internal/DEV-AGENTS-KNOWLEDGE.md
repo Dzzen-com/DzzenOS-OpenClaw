@@ -12,6 +12,58 @@ Use this when you need implementation details, architecture constraints, operati
 - DB migrations: `skills/dzzenos/db/migrations/`
 - Security tests: `packages/security-tests/`
 
+### UI V2 (PR #70) implementation map
+
+- App routing shell: `apps/ui/src/app/App.tsx`
+- Main sidebar (single column, icon+text): `apps/ui/src/components/Sidebar/Sidebar.tsx`
+- Shared top vertical submenu: `apps/ui/src/components/Layout/VerticalTopMenu.tsx`
+- Agents hub page: `apps/ui/src/components/Agents/AgentsHubPage.tsx`
+- Project home/pulse page: `apps/ui/src/components/Projects/ProjectHomePage.tsx`
+- Task standalone page: `apps/ui/src/components/Tasks/TaskPage.tsx`
+- Project archive page: `apps/ui/src/components/Projects/ProjectsArchivePage.tsx`
+- Project-scoped memory page: `apps/ui/src/components/Docs/MemoryPage.tsx`
+
+### Route model (UI V2)
+
+- `/dashboard` — global pulse across active projects
+- `/agents/*` — single agents page with vertical top menu
+- `/projects/:projectId` — project pulse
+- `/projects/:projectId/sections/:sectionId?mode=kanban|threads` — section work view
+- `/projects/:projectId/tasks/:taskId` — full task page
+- `/projects/:projectId/memory` — project-scoped memory hub
+- `/settings/archive` — archived projects page
+- `/docs` — docs page (no top vertical submenu)
+
+### Navigation data contract
+
+`GET /navigation/projects-tree?limitPerSection=5` now returns:
+
+- `projects[]` ordered by `position` (active only by default)
+- project counters including `needs_user`
+- `focus_lists`:
+  - `in_progress` (+ `in_progress_total`)
+  - `needs_user` (+ `needs_user_total`)
+- `needs_user` is defined as `review OR pending approvals`
+
+This payload is used directly by `Sidebar.tsx`.
+
+### Project lifecycle API (archive/order)
+
+- `GET /projects?archived=only|all` (`active` by default when query param absent)
+- `PATCH /projects/:id` supports:
+  - `isArchived` / `is_archived`
+  - `position`
+- `POST /projects/reorder` with `{ orderedIds: string[] }`
+
+### Agents orchestration API (OpenClaw-only)
+
+- `GET /agents/:id/subagents`
+- `PUT /agents/:id/subagents`
+- `PATCH /agents/:id/orchestration`
+- `GET /agents/:id/orchestration/preview`
+
+Run orchestration remains a single OpenClaw run stream with delegation snapshot artifacts.
+
 ## 2) Product and architecture specs (legacy + detailed)
 
 - Main product docs root: `Docs/openclaw-native/`

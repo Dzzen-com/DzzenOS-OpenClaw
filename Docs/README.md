@@ -14,6 +14,8 @@ This repository keeps all human documentation under `Docs/`.
 - API server source: `skills/dzzenos/api/server.ts`
 - UI contracts: `apps/ui/src/api/queries.ts`
 - DB migrations: `skills/dzzenos/db/migrations/`
+- UI V2 navigation shell: `apps/ui/src/app/App.tsx`
+- Sidebar + projects tree UI: `apps/ui/src/components/Sidebar/Sidebar.tsx`
 
 ## Operations and install
 

@@ -84,6 +84,7 @@ Entities included:
 - `workspaces`
 - `boards`
 - `tasks`
+- `project_statuses`
 - `task_sessions` (agent session per task)
 - `task_checklist_items`
 - `task_messages` (chat cache)
@@ -93,3 +94,32 @@ Entities included:
 - `artifacts` (metadata only)
 - `agents`
 - `automations`
+- `agent_subagents`
+- `agent_orchestration_policies`
+- `memory_docs`
+- `memory_index_jobs`
+- `memory_model_config`
+
+## Current project/workspace notes (UI V2)
+
+UI and API expose **Project/Section** terminology, while SQLite keeps legacy table names:
+
+- `projects` -> `workspaces`
+- `sections` -> `boards`
+
+Recent schema additions:
+
+- `workspaces.position` — manual order for sidebar/projects list
+- `workspaces.is_archived` — project archive flag
+- `workspaces.archived_at` — archive timestamp
+
+Task navigation/focus lists use:
+
+- `tasks.status = 'doing'` for in-progress queue
+- `tasks.status = 'review'` + pending approvals for needs-user queue
+
+Relevant migrations:
+
+- `0007_projects_sections_v1.sql` — project/section API layer + statuses
+- `0008_subagents_memory_hub.sql` — subagents orchestration + memory hub tables
+- `0009_projects_order_archive.sql` — project ordering + archive support
