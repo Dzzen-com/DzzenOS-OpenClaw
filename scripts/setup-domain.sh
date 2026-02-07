@@ -11,6 +11,7 @@ GATEWAY_PORT="${GATEWAY_PORT:-18789}"
 API_PORT="${API_PORT:-8787}"
 API_HOST="${API_HOST:-127.0.0.1}"
 REPO_DIR="${REPO_DIR:-$HOME/dzzenos-openclaw}"
+DZZENOS_DATA_DIR="${DZZENOS_DATA_DIR:-/var/lib/dzzenos-openclaw}"
 AUTH_FILE="${AUTH_FILE:-/etc/dzzenos/auth.json}"
 USERNAME="${USERNAME:-}"
 PASSWORD="${PASSWORD:-}"
@@ -68,6 +69,8 @@ fi
 # 1) init auth file
 mkdir -p /etc/dzzenos
 chmod 700 /etc/dzzenos
+mkdir -p "$DZZENOS_DATA_DIR"
+chmod 700 "$DZZENOS_DATA_DIR"
 AUTH_TTL_SECONDS="$AUTH_TTL_SECONDS" AUTH_PASSWORD_POLICY="$AUTH_PASSWORD_POLICY" \
   node --experimental-strip-types "$REPO_DIR/scripts/init-auth.mjs" \
   --file "$AUTH_FILE" --username "$USERNAME" --password "$PASSWORD" \
@@ -86,9 +89,12 @@ WorkingDirectory=$REPO_DIR
 Environment=PORT=$API_PORT
 Environment=HOST=$API_HOST
 Environment=DZZENOS_AUTH_FILE=$AUTH_FILE
+Environment=DZZENOS_DATA_DIR=$DZZENOS_DATA_DIR
 Environment=AUTH_TTL_SECONDS=$AUTH_TTL_SECONDS
 Environment=AUTH_COOKIE_SAMESITE=$AUTH_COOKIE_SAMESITE
-ExecStart=/usr/bin/node --experimental-strip-types $REPO_DIR/skills/dzzenos/api/server.ts --port $API_PORT --host $API_HOST --db $REPO_DIR/data/dzzenos.db
+Environment=DZZENOS_GATEWAY_URL=http://127.0.0.1:$GATEWAY_PORT
+Environment=DZZENOS_GATEWAY_TOKEN=$GATEWAY_TOKEN
+ExecStart=/usr/bin/node --experimental-strip-types $REPO_DIR/skills/dzzenos/api/server.ts --port $API_PORT --host $API_HOST
 Restart=on-failure
 RestartSec=2
 

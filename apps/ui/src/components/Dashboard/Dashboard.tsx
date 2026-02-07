@@ -1,7 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { approveApproval, listApprovals, listBoards, listRuns, listTasks, rejectApproval } from '../../api/queries';
+import {
+  approveApproval,
+  listApprovals,
+  listProjects,
+  listRuns,
+  listSections,
+  listTasks,
+  rejectApproval,
+} from '../../api/queries';
 import type { AgentRunListItem, Approval, Task, TaskStatus } from '../../api/types';
 import { statusLabel } from '../Tasks/status';
 
@@ -11,6 +19,7 @@ import { Button } from '../ui/Button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/Card';
 import { Skeleton } from '../ui/Skeleton';
 import { PageHeader } from '../Layout/PageHeader';
+import { Input } from '../ui/Input';
 
 function withinLastHours(iso: string, hours: number) {
   const t = Date.parse(iso);
@@ -19,41 +28,50 @@ function withinLastHours(iso: string, hours: number) {
 }
 
 export function Dashboard({
+  projectId,
+  onSelectProject,
   onSelectTask,
+  onQuickCapture,
 }: {
-  onSelectTask: (input: { boardId: string; taskId: string }) => void;
+  projectId: string | null;
+  onSelectProject: (projectId: string) => void;
+  onSelectTask: (input: { projectId: string; sectionId: string; taskId: string }) => void;
+  onQuickCapture: (title: string) => Promise<void> | void;
 }) {
-  const [boardId, setBoardId] = useState<string | null>(null);
+  const [capture, setCapture] = useState('');
 
-  const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
-  useEffect(() => {
-    if (boardId) return;
-    const first = boardsQ.data?.[0];
-    if (first) setBoardId(first.id);
-  }, [boardId, boardsQ.data]);
+  const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => listProjects({ archived: 'active' }) });
+  const sectionsQ = useQuery({
+    queryKey: ['sections', projectId, 'dashboard'],
+    queryFn: () => {
+      if (!projectId) return Promise.resolve([] as any[]);
+      return listSections(projectId);
+    },
+    enabled: !!projectId,
+  });
 
   const stuckQ = useQuery({
-    queryKey: ['runs', 'stuck'],
-    queryFn: () => listRuns({ status: 'running', stuckMinutes: 10 }),
+    queryKey: ['runs', 'stuck', projectId],
+    queryFn: () => listRuns({ status: 'running', stuckMinutes: 10, projectId: projectId ?? undefined }),
   });
 
   const failedQ = useQuery({
-    queryKey: ['runs', 'failed'],
-    queryFn: () => listRuns({ status: 'failed' }),
+    queryKey: ['runs', 'failed', projectId],
+    queryFn: () => listRuns({ status: 'failed', projectId: projectId ?? undefined }),
   });
 
   const approvalsQ = useQuery({
-    queryKey: ['approvals', 'pending'],
-    queryFn: () => listApprovals({ status: 'pending' }),
+    queryKey: ['approvals', 'pending', projectId],
+    queryFn: () => listApprovals({ status: 'pending', projectId: projectId ?? undefined }),
   });
 
-  const boardTasksQ = useQuery({
-    queryKey: ['tasks', boardId, 'dashboard'],
+  const projectTasksQ = useQuery({
+    queryKey: ['tasks', projectId, 'dashboard'],
     queryFn: () => {
-      if (!boardId) return Promise.resolve([] as Task[]);
-      return listTasks(boardId);
+      if (!projectId) return Promise.resolve([] as Task[]);
+      return listTasks({ projectId });
     },
-    enabled: !!boardId,
+    enabled: !!projectId,
   });
 
   const qc = useQueryClient();
@@ -77,7 +95,7 @@ export function Dashboard({
     return all.filter((r) => withinLastHours(r.created_at, 24));
   }, [failedQ.data]);
 
-  const boardTasks = boardTasksQ.data ?? [];
+  const projectTasks = projectTasksQ.data ?? [];
   const statusOrder: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
   const statusCounts = useMemo(() => {
     const out: Record<TaskStatus, number> = {
@@ -89,94 +107,81 @@ export function Dashboard({
       done: 0,
       archived: 0,
     };
-    for (const t of boardTasks) out[t.status] = (out[t.status] ?? 0) + 1;
+    for (const t of projectTasks) out[t.status] = (out[t.status] ?? 0) + 1;
     return out;
-  }, [boardTasks]);
+  }, [projectTasks]);
 
   const recentTasks = useMemo(() => {
-    return [...boardTasks]
+    return [...projectTasks]
       .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-      .slice(0, 6);
-  }, [boardTasks]);
+      .slice(0, 8);
+  }, [projectTasks]);
+
+  const sectionCount = sectionsQ.data?.length ?? 0;
 
   return (
     <div className="mx-auto w-full max-w-6xl">
       <PageHeader
-        title="Dashboard"
-        subtitle="Stuck runs, recent failures, and pending approvals."
+        title="Project Overview"
+        subtitle="KPI, approvals, run health, and fast capture inbox."
         actions={
-          <div className="min-w-[220px]">
-            <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Board</label>
+          <div className="flex min-w-[320px] flex-col gap-2">
+            <label className="block text-xs uppercase tracking-wide text-muted-foreground">Project</label>
             <select
               className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
-              value={boardId ?? ''}
-              onChange={(e) => setBoardId(e.target.value)}
-              disabled={!boardsQ.data?.length}
+              value={projectId ?? ''}
+              onChange={(e) => onSelectProject(e.target.value)}
+              disabled={!projectsQ.data?.length}
             >
-              {(boardsQ.data ?? []).length === 0 ? (
-                <option value="">No boards</option>
+              {(projectsQ.data ?? []).length === 0 ? (
+                <option value="">No projects</option>
               ) : (
-                (boardsQ.data ?? []).map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
+                (projectsQ.data ?? []).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
                   </option>
                 ))
               )}
             </select>
-            {boardsQ.isError ? (
-              <div className="mt-2 text-xs text-danger">Failed to load boards.</div>
-            ) : null}
+            <div className="flex gap-2">
+              <Input value={capture} onChange={(e) => setCapture(e.target.value)} placeholder="Quick capture to inbox…" />
+              <Button
+                onClick={async () => {
+                  const title = capture.trim();
+                  if (!title) return;
+                  await onQuickCapture(title);
+                  setCapture('');
+                }}
+                disabled={!capture.trim() || !projectId}
+              >
+                Capture
+              </Button>
+            </div>
           </div>
         }
       />
 
-      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Panel title="Board status" subtitle={boardId ? 'Counts by status' : 'Select a board'}>
-          {boardTasksQ.isLoading ? (
-            <div className="p-3">
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {Array.from({ length: 8 }).map((_, idx) => (
-                  <Skeleton key={idx} className="h-14 w-full" />
-                ))}
-              </div>
-            </div>
-          ) : boardTasksQ.isError ? (
-            <div className="p-3">
-              <InlineAlert>{String(boardTasksQ.error)}</InlineAlert>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4">
-              {statusOrder.map((s) => (
-                <StatPill key={s} label={statusLabel(s)} value={statusCounts[s]} />
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Recent tasks" subtitle={boardId ? 'Latest updates' : 'Select a board'}>
-          {boardTasksQ.isLoading ? (
-            <div className="p-3">
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 4 }).map((_, idx) => (
-                  <Skeleton key={idx} className="h-12 w-full" />
-                ))}
-              </div>
-            </div>
-          ) : (
-            <TaskList tasks={recentTasks} onClick={(t) => onSelectTask({ boardId: t.board_id, taskId: t.id })} />
-          )}
-        </Panel>
-      </div>
-
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Panel title="Sections" subtitle="Current project structure">
+          {sectionsQ.isLoading ? (
+            <div className="p-3"><Skeleton className="h-16 w-full" /></div>
+          ) : sectionsQ.isError ? (
+            <div className="p-3"><InlineAlert>{String(sectionsQ.error)}</InlineAlert></div>
+          ) : (
+            <div className="p-3 text-sm text-muted-foreground">
+              {sectionCount} sections configured.
+            </div>
+          )}
+        </Panel>
+
         <Panel title="Stuck runs" subtitle="running ≥ 10 minutes">
           <RunList
             q={stuckQ}
             runs={stuckQ.data ?? []}
             emptyLabel="No stuck runs."
             onClick={(r) => {
-              if (!r.task_id || !r.board_id) return;
-              onSelectTask({ boardId: r.board_id, taskId: r.task_id });
+              if (!r.task_id || !r.section_id || !projectId) return;
+              onSelectTask({ projectId, sectionId: r.section_id, taskId: r.task_id });
             }}
           />
         </Panel>
@@ -187,12 +192,58 @@ export function Dashboard({
             runs={failedLast24h}
             emptyLabel="No failed runs in the last 24h."
             onClick={(r) => {
-              if (!r.task_id || !r.board_id) return;
-              onSelectTask({ boardId: r.board_id, taskId: r.task_id });
+              if (!r.task_id || !r.section_id || !projectId) return;
+              onSelectTask({ projectId, sectionId: r.section_id, taskId: r.task_id });
             }}
           />
         </Panel>
+      </div>
 
+      <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Panel title="Project status" subtitle={projectId ? 'Counts by status' : 'Select a project'}>
+          {projectTasksQ.isLoading ? (
+            <div className="p-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {Array.from({ length: 8 }).map((_, idx) => (
+                  <Skeleton key={idx} className="h-14 w-full" />
+                ))}
+              </div>
+            </div>
+          ) : projectTasksQ.isError ? (
+            <div className="p-3">
+              <InlineAlert>{String(projectTasksQ.error)}</InlineAlert>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 p-2 sm:grid-cols-4">
+              {statusOrder.map((s) => (
+                <StatPill key={s} label={statusLabel(s)} value={statusCounts[s]} />
+              ))}
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Recent tasks" subtitle={projectId ? 'Latest updates' : 'Select a project'}>
+          {projectTasksQ.isLoading ? (
+            <div className="p-3">
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 4 }).map((_, idx) => (
+                  <Skeleton key={idx} className="h-12 w-full" />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <TaskList
+              tasks={recentTasks}
+              onClick={(t) => {
+                if (!projectId) return;
+                onSelectTask({ projectId, sectionId: t.section_id ?? t.board_id, taskId: t.id });
+              }}
+            />
+          )}
+        </Panel>
+      </div>
+
+      <div className="mt-6">
         <Panel title="Pending approvals" subtitle="need attention">
           <ApprovalList
             q={approvalsQ}
@@ -202,8 +253,8 @@ export function Dashboard({
             onApprove={(a) => approveM.mutate(a.id)}
             onReject={(a) => rejectM.mutate(a.id)}
             onClick={(a) => {
-              if (!a.task_id || !a.board_id) return;
-              onSelectTask({ boardId: a.board_id, taskId: a.task_id });
+              if (!a.task_id || !a.section_id || !projectId) return;
+              onSelectTask({ projectId, sectionId: a.section_id, taskId: a.task_id });
             }}
           />
         </Panel>
@@ -298,7 +349,7 @@ function RunList({
           key={r.id}
           title={r.task_title ?? r.task_id ?? r.id}
           subtitle={`${r.status} • run ${r.id.slice(0, 8)} • ${new Date(r.created_at).toLocaleString()}`}
-          disabled={!r.task_id || !r.board_id}
+          disabled={!r.task_id || !r.section_id}
           onClick={() => onClick(r)}
         />
       ))}
@@ -330,7 +381,7 @@ function ApprovalList({
   return (
     <div className="flex flex-col gap-2 p-2">
       {approvals.slice(0, 20).map((a) => {
-        const disabled = !a.task_id || !a.board_id;
+        const disabled = !a.task_id || !a.section_id;
         return (
           <div key={a.id} className="flex items-stretch gap-2">
             <RowButton

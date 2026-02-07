@@ -4,8 +4,10 @@ import { sendTaskChat, getTaskChat } from '../../api/queries';
 import { Button } from '../ui/Button';
 import { InlineAlert } from '../ui/InlineAlert';
 import type { TaskMessage } from '../../api/types';
+import { useTranslation } from 'react-i18next';
 
 export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: string }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [input, setInput] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -42,25 +44,25 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
   return (
     <div className="grid gap-3">
       <div className="rounded-xl border border-border/70 bg-surface-2/40 p-3">
-        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Chat</div>
+        <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('Chat')}</div>
         <div className="mt-2 max-h-[45vh] overflow-auto rounded-lg border border-border/70 bg-surface-1/60 p-3">
           {chatQ.isLoading ? (
-            <div className="text-sm text-muted-foreground">Loading…</div>
+            <div className="text-sm text-muted-foreground">{t('Loading…')}</div>
           ) : messages.length ? (
             <div className="grid gap-3">
               {messages.map((m) => (
                 <div key={m.id} className="grid gap-1">
                   <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                    {m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Assistant' : 'System'}
+                    {m.role === 'user' ? t('You') : m.role === 'assistant' ? t('Assistant') : t('System')}
                   </div>
                   <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{m.content}</div>
                 </div>
               ))}
-              {sendM.isPending ? <div className="text-sm text-muted-foreground">Thinking…</div> : null}
+              {sendM.isPending ? <div className="text-sm text-muted-foreground">{t('Thinking…')}</div> : null}
               <div ref={bottomRef} />
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">No messages yet. Ask something about this task.</div>
+            <div className="text-sm text-muted-foreground">{t('No messages yet. Ask something about this task.')}</div>
           )}
         </div>
       </div>
@@ -71,7 +73,7 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={`Ask the agent about "${taskTitle}"…`}
+          placeholder={t('Ask the agent about "{{title}}"…', { title: taskTitle })}
           rows={3}
           className="min-h-[72px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           onKeyDown={(e) => {
@@ -82,11 +84,11 @@ export function TaskChat({ taskId, taskTitle }: { taskId: string; taskTitle: str
           }}
         />
         <Button disabled={sendM.isPending || !input.trim()} onClick={send}>
-          Send
+          {t('Send')}
         </Button>
       </div>
 
-      <div className="text-xs text-muted-foreground">Ctrl/⌘ + Enter to send</div>
+      <div className="text-xs text-muted-foreground">{t('Ctrl/⌘ + Enter to send')}</div>
     </div>
   );
 }

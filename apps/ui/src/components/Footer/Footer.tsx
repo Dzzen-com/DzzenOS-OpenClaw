@@ -1,4 +1,5 @@
 import { StatusDot } from '../ui/StatusDot';
+import { useTranslation } from 'react-i18next';
 
 type ConnectionState = 'connected' | 'checking' | 'disconnected';
 
@@ -19,6 +20,7 @@ export function Footer({
   realtimeStatus: ConnectionState;
   onSelectDocs: () => void;
 }) {
+  const { t } = useTranslation();
   const apiLabel = apiBase.replace(/^https?:\/\//, '');
   return (
     <footer className="border-t border-border/60 bg-background/70 px-4 py-3 text-xs text-muted-foreground backdrop-blur sm:px-6 mb-16 sm:mb-0">
@@ -26,12 +28,12 @@ export function Footer({
         <div className="flex flex-wrap items-center gap-3">
           <span className="flex items-center gap-2">
             <StatusDot tone={toneFor(apiStatus)} />
-            <span>API: {apiStatus}</span>
+            <span>{t('API')}: {apiStatus}</span>
             <span className="hidden sm:inline text-foreground/70 compact-hide">({apiLabel})</span>
           </span>
           <span className="flex items-center gap-2">
             <StatusDot tone={toneFor(realtimeStatus)} />
-            <span>Realtime: {realtimeStatus}</span>
+            <span>{t('Realtime')}: {realtimeStatus}</span>
           </span>
         </div>
         <button
@@ -39,7 +41,7 @@ export function Footer({
           onClick={onSelectDocs}
           className="text-foreground/80 transition hover:text-foreground"
         >
-          Docs
+          {t('Docs')}
         </button>
       </div>
     </footer>

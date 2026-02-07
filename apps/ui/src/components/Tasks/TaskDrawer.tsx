@@ -1,6 +1,7 @@
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import type { Approval, AgentRun, Task, TaskStatus } from '../../api/types';
 import { listApprovals, listTaskRuns, patchTask, requestTaskApproval, stopTask } from '../../api/queries';
 import { runTask } from '../../api/queries';
@@ -34,6 +35,7 @@ export function TaskDrawer({
   onOpenChange: (open: boolean) => void;
   onOpenAgents?: () => void;
 }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('details');
   const [titleDraft, setTitleDraft] = useState('');
@@ -45,23 +47,23 @@ export function TaskDrawer({
 
   const patchM = useMutation({
     mutationFn: async (vars: { id: string; status: TaskStatus }) => patchTask(vars.id, { status: vars.status }),
-    onSuccess: async (t) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
   const updateM = useMutation({
     mutationFn: async (vars: { id: string; title?: string; description?: string | null }) =>
       patchTask(vars.id, { title: vars.title, description: vars.description }),
-    onSuccess: async (t) => {
-      await qc.invalidateQueries({ queryKey: ['tasks', t.board_id] });
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
   const planM = useMutation({
     mutationFn: async (id: string) => runTask(id, { mode: 'plan' }),
     onSuccess: async () => {
-      if (task?.board_id) await qc.invalidateQueries({ queryKey: ['tasks', task.board_id] });
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
       if (task?.id) await qc.invalidateQueries({ queryKey: ['checklist', task.id] });
     },
   });
@@ -105,7 +107,7 @@ export function TaskDrawer({
     mutationFn: async (id: string) => stopTask(id),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ['runs', task?.id] });
-      if (task?.board_id) await qc.invalidateQueries({ queryKey: ['tasks', task.board_id] });
+      await qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 
@@ -122,7 +124,7 @@ export function TaskDrawer({
     return runs.find((r) => r.status === 'running') ?? runs[0] ?? null;
   }, [runsQ.data]);
   const activeStage = getRunStage(activeRun) ?? task?.run_step_kind ?? null;
-  const activeStageLabel = stageLabel(activeStage);
+  const activeStageLabel = stageLabel(activeStage, t);
   const runStatus = activeRun?.status ?? task?.run_status ?? null;
   const runStartedAt = activeRun?.started_at ?? task?.run_started_at ?? null;
   const elapsed = runStatus === 'running' ? formatElapsed(runStartedAt) : null;
@@ -213,7 +215,7 @@ export function TaskDrawer({
           <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:gap-4">
             <div className="min-w-0">
               <Dialog.Title className="truncate text-base font-semibold tracking-tight">
-                {task ? `${shortId(task.id)} · ${task.title}` : 'Task'}
+                {task ? `${shortId(task.id)} · ${task.title}` : t('Task')}
               </Dialog.Title>
               <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                   <StatusDot
@@ -229,7 +231,7 @@ export function TaskDrawer({
                             : 'muted'
                   }
                 />
-                <span>Local task</span>
+                <span>{t('Local task')}</span>
                 {task ? (
                   <Badge variant="outline" className="h-5 rounded-md px-2 text-[10px] uppercase tracking-wide">
                     {statusLabel(task.status)}
@@ -243,10 +245,10 @@ export function TaskDrawer({
                 disabled={!task || planM.isPending}
                 onClick={() => task && planM.mutate(task.id)}
               >
-                {planM.isPending ? 'Planning…' : 'Plan'}
+                {planM.isPending ? t('Planning…') : t('Plan')}
               </Button>
               <Dialog.Close asChild aria-label="Close">
-                <Button variant="ghost">Close</Button>
+                <Button variant="ghost">{t('Close')}</Button>
               </Dialog.Close>
             </div>
           </div>
@@ -260,7 +262,7 @@ export function TaskDrawer({
           <div className="mt-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between gap-3">
-                <CardTitle>Agent status</CardTitle>
+                <CardTitle>{t('Agent status')}</CardTitle>
                 <div className="flex items-center gap-2">
                   {stopConfirm ? (
                     <>
@@ -270,7 +272,7 @@ export function TaskDrawer({
                         disabled={!task?.id || runStatus !== 'running' || stopM.isPending}
                         onClick={() => task?.id && stopM.mutate(task.id)}
                       >
-                        {stopM.isPending ? 'Stopping…' : 'Confirm stop'}
+                        {stopM.isPending ? t('Stopping…') : t('Confirm stop')}
                       </Button>
                       <Button
                         size="sm"
@@ -283,7 +285,7 @@ export function TaskDrawer({
                           }
                         }}
                       >
-                        Cancel
+                        {t('Cancel')}
                       </Button>
                     </>
                   ) : (
@@ -297,7 +299,7 @@ export function TaskDrawer({
                         stopTimer.current = setTimeout(() => setStopConfirm(false), 6000);
                       }}
                     >
-                      {stopM.isPending ? 'Stopping…' : 'Stop'}
+                      {stopM.isPending ? t('Stopping…') : t('Stop')}
                     </Button>
                   )}
                 </div>
@@ -306,7 +308,7 @@ export function TaskDrawer({
                 <div className="flex flex-col items-start gap-2 text-sm text-foreground sm:flex-row sm:items-center sm:gap-3">
                   <div className="flex items-center gap-2">
                     <StatusDot tone={runTone(runStatus)} pulse={runStatus === 'running'} />
-                    <span>{runStatusLabel(runStatus)}</span>
+                    <span>{runStatusLabel(runStatus, t)}</span>
                   </div>
                   {elapsed ? <span className="text-muted-foreground">• {elapsed}</span> : null}
                   {activeStageLabel ? (
@@ -342,14 +344,14 @@ export function TaskDrawer({
                   })}
                 </div>
                 <div className="mt-2 grid grid-cols-3 text-[11px] text-muted-foreground">
-                  <span>Plan</span>
-                  <span className="text-center">Execute</span>
-                  <span className="text-right">Report</span>
+                  <span>{t('Plan')}</span>
+                  <span className="text-center">{t('Execute')}</span>
+                  <span className="text-right">{t('Reporting')}</span>
                 </div>
 
                 <div className="mt-3 hidden rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2 sm:block">
                   <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Latest activity
+                    {t('Latest activity')}
                   </div>
                   {recentActivity.length ? (
                     <div className="mt-2 grid gap-1 text-xs text-foreground">
@@ -357,14 +359,14 @@ export function TaskDrawer({
                         <div key={step.id} className="flex items-center justify-between gap-3">
                           <span className="flex items-center gap-2 truncate">
                             <span className="text-muted-foreground">{stageIcon(step.kind)}</span>
-                            {stageLabel(step.kind) ?? step.kind}
+                            {stageLabel(step.kind, t) ?? step.kind}
                           </span>
                           <span className="text-muted-foreground">{step.status}</span>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <div className="mt-2 text-xs text-muted-foreground">No activity yet.</div>
+                    <div className="mt-2 text-xs text-muted-foreground">{t('No activity yet.')}</div>
                   )}
                 </div>
               </CardContent>
@@ -375,30 +377,30 @@ export function TaskDrawer({
             <Tabs defaultValue="details" value={tab} onValueChange={(v) => setTab(v as TabKey)}>
               <TabsList className="w-full flex-wrap justify-start gap-1">
                 <TabsTrigger value="details" className="text-[11px] sm:text-xs">
-                  Details
+                  {t('Details')}
                 </TabsTrigger>
                 <TabsTrigger value="runs" className="text-[11px] sm:text-xs">
-                  Runs
+                  {t('Runs')}
                 </TabsTrigger>
                 <TabsTrigger value="approvals" className="text-[11px] sm:text-xs">
-                  Approvals
+                  {t('Approvals')}
                 </TabsTrigger>
                 <TabsTrigger value="chat" className="text-[11px] sm:text-xs">
-                  Chat
+                  {t('Chat')}
                 </TabsTrigger>
               </TabsList>
 
               <TabsContent value="details">
                 <div className="grid gap-3">
-                  <Row label="Title">
+                  <Row label={t('Title')}>
                     <Input
                       value={titleDraft}
                       onChange={(e) => setTitleDraft(e.target.value)}
-                      placeholder="Task title"
+                      placeholder={t('Task')}
                     />
                   </Row>
 
-                  <Row label="Status">
+                  <Row label={t('Status')}>
                     <select
                       value={task?.status ?? 'todo'}
                       disabled={!task || patchM.isPending || updateM.isPending}
@@ -410,17 +412,17 @@ export function TaskDrawer({
                     >
                       {STATUS.map((s) => (
                         <option key={s} value={s}>
-                          {statusLabel(s)}
+                          {statusLabel(s, t)}
                         </option>
                       ))}
                     </select>
                   </Row>
 
-                  <Row label="Updated">
+                  <Row label={t('Updated')}>
                     <div className="text-sm text-foreground">{task ? formatUpdatedAt(task.updated_at) : '—'}</div>
                   </Row>
 
-                  <Row label="Created">
+                  <Row label={t('Created')}>
                     <div className="text-sm text-foreground">{task ? formatUpdatedAt(task.created_at) : '—'}</div>
                   </Row>
 
@@ -437,19 +439,19 @@ export function TaskDrawer({
 
                   <Card>
                     <CardHeader>
-                      <CardTitle>Description</CardTitle>
+                      <CardTitle>{t('Description')}</CardTitle>
                     </CardHeader>
                     <CardContent className="pt-0 text-sm text-muted-foreground">
                       <textarea
                         value={descDraft}
                         onChange={(e) => setDescDraft(e.target.value)}
-                        placeholder="Describe the task…"
+                        placeholder={t('Describe the task…')}
                         rows={4}
                         className="w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       />
                       <div className="mt-3 flex items-center justify-between">
                         <div className="text-xs text-muted-foreground">
-                          Editable by humans or agents (when API is wired).
+                          {t('Editable by humans or agents (when API is wired).')}
                         </div>
                         <Button
                           size="sm"
@@ -464,7 +466,7 @@ export function TaskDrawer({
                             });
                           }}
                         >
-                          Save
+                          {t('Save')}
                         </Button>
                       </div>
                     </CardContent>
@@ -504,7 +506,7 @@ export function TaskDrawer({
 
               <TabsContent value="chat">
                 {task?.id ? <TaskChat taskId={task.id} taskTitle={task.title} /> : null}
-                {!task?.id ? <div className="text-sm text-muted-foreground">Open a task to chat.</div> : null}
+                {!task?.id ? <div className="text-sm text-muted-foreground">{t('Open a task to chat.')}</div> : null}
               </TabsContent>
             </Tabs>
           </div>
@@ -529,18 +531,19 @@ function RunsPanel({
   simulatePending: boolean;
   onSimulate: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3">
-        <CardTitle>Runs</CardTitle>
+        <CardTitle>{t('Runs')}</CardTitle>
         <Button size="sm" variant="secondary" disabled={!taskId || simulatePending} onClick={onSimulate}>
-          Run now
+          {t('Run now')}
         </Button>
       </CardHeader>
       <CardContent className="pt-0">
 
       {isLoading ? (
-        <div className="mt-3 text-sm text-muted-foreground">Loading…</div>
+        <div className="mt-3 text-sm text-muted-foreground">{t('Loading…')}</div>
       ) : error ? (
         <div className="mt-3">
           <InlineAlert>{String(error)}</InlineAlert>
@@ -554,18 +557,18 @@ function RunsPanel({
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 truncate">
-                  {r.agent_name ?? 'Agent run'} • <span className="text-muted-foreground">{r.status}</span>
+                  {r.agent_name ?? t('Agent run')} • <span className="text-muted-foreground">{r.status}</span>
                 </div>
                 <div className="shrink-0 text-xs text-muted-foreground">{r.id.slice(0, 8)}</div>
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {new Date(r.created_at).toLocaleString()} • {r.steps?.length ?? 0} steps
+                {new Date(r.created_at).toLocaleString()} • {r.steps?.length ?? 0} {t('steps')}
               </div>
             </div>
           ))}
         </div>
       ) : (
-        <div className="mt-3 text-sm text-muted-foreground">No runs for this task.</div>
+        <div className="mt-3 text-sm text-muted-foreground">{t('No runs for this task.')}</div>
       )}
       </CardContent>
     </Card>
@@ -587,18 +590,19 @@ function ApprovalsPanel({
   requestPending: boolean;
   onRequest: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3">
-        <CardTitle>Approvals</CardTitle>
+        <CardTitle>{t('Approvals')}</CardTitle>
         <Button size="sm" variant="secondary" disabled={!taskId || requestPending} onClick={onRequest}>
-          Request approval (stub)
+          {t('Request approval (stub)')}
         </Button>
       </CardHeader>
       <CardContent className="pt-0">
 
       {isLoading ? (
-        <div className="mt-3 text-sm text-muted-foreground">Loading…</div>
+        <div className="mt-3 text-sm text-muted-foreground">{t('Loading…')}</div>
       ) : error ? (
         <div className="mt-3">
           <InlineAlert>{String(error)}</InlineAlert>
@@ -611,7 +615,7 @@ function ApprovalsPanel({
               className="flex items-center justify-between gap-3 rounded-lg border border-border/70 bg-surface-1/60 px-3 py-2"
             >
               <div className="min-w-0">
-                <div className="truncate text-sm text-foreground">{a.request_title ?? `Approval ${a.id.slice(0, 8)}`}</div>
+                <div className="truncate text-sm text-foreground">{a.request_title ?? t('Approval {{id}}', { id: a.id.slice(0, 8) })}</div>
                 <div className="mt-0.5 truncate text-xs text-muted-foreground">
                   {a.status} • {new Date(a.requested_at).toLocaleString()}
                 </div>
@@ -621,7 +625,7 @@ function ApprovalsPanel({
           ))}
         </div>
       ) : (
-        <div className="mt-3 text-sm text-muted-foreground">No approvals for this task.</div>
+        <div className="mt-3 text-sm text-muted-foreground">{t('No approvals for this task.')}</div>
       )}
       </CardContent>
     </Card>
@@ -637,11 +641,12 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function stageLabel(kind?: string | null) {
+function stageLabel(kind?: string | null, t?: (key: string) => string) {
+  const tr = t ?? ((key: string) => key);
   if (!kind) return null;
-  if (kind === 'plan') return 'Planning';
-  if (kind === 'execute') return 'Executing';
-  if (kind === 'report') return 'Reporting';
+  if (kind === 'plan') return tr('Planning');
+  if (kind === 'execute') return tr('Executing');
+  if (kind === 'report') return tr('Reporting');
   return kind;
 }
 
@@ -670,12 +675,13 @@ function runTone(status?: string | null) {
   return 'muted';
 }
 
-function runStatusLabel(status?: string | null) {
-  if (status === 'running') return 'Running';
-  if (status === 'failed') return 'Failed';
-  if (status === 'succeeded') return 'Completed';
-  if (status === 'cancelled') return 'Paused';
-  return 'Idle';
+function runStatusLabel(status?: string | null, t?: (key: string) => string) {
+  const tr = t ?? ((key: string) => key);
+  if (status === 'running') return tr('Running');
+  if (status === 'failed') return tr('Failed');
+  if (status === 'succeeded') return tr('Completed');
+  if (status === 'cancelled') return tr('Paused');
+  return tr('Idle');
 }
 
 function stageIcon(kind?: string | null) {

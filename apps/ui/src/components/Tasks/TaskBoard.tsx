@@ -92,6 +92,7 @@ export function TaskBoard({
   selectionMode,
   selectedIds,
   onToggleSelect,
+  variant = 'kanban',
 }: {
   tasks: Task[];
   selectedTaskId: string | null;
@@ -103,6 +104,7 @@ export function TaskBoard({
   selectionMode?: boolean;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
+  variant?: 'kanban' | 'threads';
 }) {
   const columnIds = useMemo(() => COLUMNS.map((c) => c.status), []);
 
@@ -253,13 +255,14 @@ export function TaskBoard({
               selectionMode={selectionMode}
               selectedIds={selectedIds}
               onToggleSelect={onToggleSelect}
+              variant={variant}
             />
           );
         })}
       </div>
 
       <DragOverlay>
-        {activeTask ? <TaskCard task={activeTask} selected={false} dragging /> : null}
+        {activeTask ? <TaskCard task={activeTask} selected={false} dragging variant={variant} /> : null}
       </DragOverlay>
     </DndContext>
   );
@@ -277,6 +280,7 @@ function TaskColumn({
   selectionMode,
   selectedIds,
   onToggleSelect,
+  variant,
 }: {
   col: ColumnMeta;
   ids: string[];
@@ -289,6 +293,7 @@ function TaskColumn({
   selectionMode?: boolean;
   selectedIds?: Set<string>;
   onToggleSelect?: (id: string) => void;
+  variant?: 'kanban' | 'threads';
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: col.status, disabled: !!moveDisabled || !!selectionMode });
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -446,6 +451,7 @@ function TaskColumn({
                         dataIndex={shouldVirtualize ? range.start + idx : undefined}
                         selectionMode={selectionMode}
                         onToggleSelect={onToggleSelect}
+                        variant={variant}
                       />
                     ))
                   )}
@@ -505,6 +511,7 @@ function SortableTaskCard({
   dataIndex,
   selectionMode,
   onToggleSelect,
+  variant,
 }: {
   task: Task;
   selected: boolean;
@@ -515,6 +522,7 @@ function SortableTaskCard({
   dataIndex?: number;
   selectionMode?: boolean;
   onToggleSelect?: (id: string) => void;
+  variant?: 'kanban' | 'threads';
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
@@ -545,6 +553,7 @@ function SortableTaskCard({
         onSelect(task.id);
       }}
       selectionMode={selectionMode}
+      variant={variant}
       {...attributes}
       {...listeners}
     />
@@ -558,12 +567,13 @@ const TaskCard = React.forwardRef<
     selected: boolean;
     bulkSelected?: boolean;
     selectionMode?: boolean;
+    variant?: 'kanban' | 'threads';
     dragging?: boolean;
     style?: React.CSSProperties;
     onClick?: () => void;
     onMeasure?: (id: string, h: number) => void;
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
->(function TaskCard({ task, selected, bulkSelected, selectionMode, dragging, style, onClick, onMeasure, ...props }, ref) {
+>(function TaskCard({ task, selected, bulkSelected, selectionMode, variant = 'kanban', dragging, style, onClick, onMeasure, ...props }, ref) {
   const localRef = React.useRef<HTMLButtonElement | null>(null);
   const setRefs = (node: HTMLButtonElement | null) => {
     localRef.current = node;
@@ -600,6 +610,7 @@ const TaskCard = React.forwardRef<
 
   const agentLabel = task.agent_display_name?.trim() || 'Unassigned';
   const stage = task.run_status === 'running' ? stageLabel(task.run_step_kind) : null;
+  const asThreads = variant === 'threads';
 
   return (
     <button
@@ -614,6 +625,7 @@ const TaskCard = React.forwardRef<
         (selected || bulkSelected) && 'ring-1 ring-primary/60',
         task.status === 'archived' && 'opacity-70',
         dragging && 'opacity-60',
+        asThreads && 'border-l-4 border-l-info/60 bg-surface-1/80',
       )}
       {...props}
     >
@@ -635,8 +647,8 @@ const TaskCard = React.forwardRef<
         </Badge>
       </div>
 
-      <div className="mt-2 max-h-10 overflow-hidden text-[11px] leading-relaxed text-muted-foreground sm:text-xs">
-        {task.description?.trim() ? task.description : 'No description'}
+      <div className={cn('mt-2 overflow-hidden text-[11px] leading-relaxed text-muted-foreground sm:text-xs', asThreads ? 'max-h-12' : 'max-h-10')}>
+        {task.description?.trim() ? task.description : (asThreads ? 'No updates yet.' : 'No description')}
       </div>
 
       <div className="mt-2.5 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]">
@@ -647,15 +659,23 @@ const TaskCard = React.forwardRef<
         <span>Updated {formatUpdatedAt(task.updated_at)}</span>
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]">
+      <div className={cn('mt-2 flex items-center justify-between text-[10px] text-muted-foreground sm:text-[11px]', asThreads && 'pt-1')}>
         <div className="flex items-center gap-2">
           <StatusDot tone={runTone(task.run_status)} pulse={task.run_status === 'running'} />
-          <span className={cn('truncate', task.run_status === 'running' && 'animate-pulse')}>{agentLabel}</span>
+          <span className={cn('truncate max-w-[120px]', task.run_status === 'running' && 'animate-pulse')}>{agentLabel}</span>
           <span>•</span>
           <span>{runLabel(task.run_status, task.run_started_at)}</span>
         </div>
-        {stage ? <span className="text-muted-foreground/80">Stage: {stage}</span> : null}
+        {stage ? <span className="text-muted-foreground/80">{asThreads ? stage : `Stage: ${stage}`}</span> : null}
       </div>
+
+      {asThreads ? (
+        <div className="mt-2 flex items-center gap-2 text-[10px] text-muted-foreground sm:text-[11px]">
+          <span className="rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5">Reply</span>
+          <span className="rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5">Run</span>
+          <span className="rounded-md border border-border/70 bg-surface-2/60 px-1.5 py-0.5">Open</span>
+        </div>
+      ) : null}
     </button>
   );
 });

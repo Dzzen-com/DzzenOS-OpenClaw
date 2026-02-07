@@ -18,7 +18,7 @@
  *
  * Usage:
  *   node --experimental-strip-types skills/dzzenos/api/server.ts
- *   node --experimental-strip-types skills/dzzenos/api/server.ts --port 8787 --db ./data/dzzenos.db
+ *   node --experimental-strip-types skills/dzzenos/api/server.ts --port 8787 --db /absolute/path/dzzenos.db
  */
 
 import http from 'node:http';
@@ -36,6 +36,12 @@ type SseClient = {
 
 import { migrate } from '../db/migrate.ts';
 import {
+  getDefaultWorkspaceDir,
+  getLegacyRepoDbPath,
+  getLegacyRepoWorkspaceDir,
+  resolveDbPath,
+} from '../db/paths.ts';
+import {
   defaultAuthFile,
   loadAuthConfig,
   parseCookies,
@@ -49,6 +55,14 @@ import {
   getMarketplaceSkillPreset,
   type SkillCapabilities,
 } from './marketplace/skills.ts';
+import {
+  OpenClawGatewayError,
+  createOpenClawGatewayClient,
+  normalizeModelsOverview,
+  redactSecrets,
+  sanitizeProviderUpsertInput,
+  type ProviderUpsertInput,
+} from './openclaw-gateway.ts';
 
 type Options = {
   port: number;
@@ -350,9 +364,47 @@ function pickCronNextRunAt(raw: any): string | null {
 const TASK_STATUSES = new Set(['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived']);
 const CHECKLIST_STATES = new Set(['todo', 'doing', 'done']);
 const REASONING_LEVELS = new Set<ReasoningLevel>(['auto', 'off', 'low', 'medium', 'high']);
+const DEFAULT_PROJECT_STATUSES: Array<{ key: string; label: string; position: number }> = [
+  { key: 'ideas', label: 'Ideas', position: 0 },
+  { key: 'todo', label: 'To do', position: 1 },
+  { key: 'doing', label: 'In progress', position: 2 },
+  { key: 'review', label: 'Review', position: 3 },
+  { key: 'release', label: 'Release', position: 4 },
+  { key: 'done', label: 'Done', position: 5 },
+  { key: 'archived', label: 'Archived', position: 6 },
+];
+const DEFAULT_PROJECT_SECTIONS: Array<{
+  name: string;
+  description: string;
+  viewMode: 'kanban' | 'threads';
+  kind: 'inbox' | 'section';
+  position: number;
+}> = [
+  { name: 'Inbox', description: 'Project intake', viewMode: 'kanban', kind: 'inbox', position: 0 },
+  { name: 'Product', description: 'Product delivery and roadmap', viewMode: 'kanban', kind: 'section', position: 1 },
+  { name: 'Marketing', description: 'Growth, experiments and distribution', viewMode: 'threads', kind: 'section', position: 2 },
+  { name: 'Content', description: 'Content pipeline and assets', viewMode: 'threads', kind: 'section', position: 3 },
+  { name: 'Ops', description: 'Operations and admin tasks', viewMode: 'kanban', kind: 'section', position: 4 },
+];
 
 function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function moveLegacyWorkspaceIfNeeded(workspaceDir: string, legacyWorkspaceDir: string) {
+  if (workspaceDir === legacyWorkspaceDir) return;
+  if (fs.existsSync(workspaceDir)) return;
+  if (!fs.existsSync(legacyWorkspaceDir)) return;
+
+  ensureDir(path.dirname(workspaceDir));
+  try {
+    fs.renameSync(legacyWorkspaceDir, workspaceDir);
+  } catch (err: any) {
+    if (err?.code !== 'EXDEV') throw err;
+    fs.cpSync(legacyWorkspaceDir, workspaceDir, { recursive: true });
+    fs.rmSync(legacyWorkspaceDir, { recursive: true, force: true });
+  }
+  console.log(`[dzzenos-api] moved legacy workspace dir from ${legacyWorkspaceDir} to ${workspaceDir}`);
 }
 
 function readTextFile(filePath: string): string {
@@ -427,18 +479,35 @@ function seedIfEmpty(db: DatabaseSync) {
   if (count > 0) return;
 
   const workspaceId = randomUUID();
-  const boardId = randomUUID();
 
   db.exec('BEGIN');
   try {
     db.prepare('INSERT INTO workspaces(id, name, description) VALUES (?, ?, ?)').run(
       workspaceId,
-      'Default Workspace',
+      'Default Project',
       'Seeded on first run'
     );
-    db.prepare(
-      'INSERT INTO boards(id, workspace_id, name, description, position) VALUES (?, ?, ?, ?, 0)'
-    ).run(boardId, workspaceId, 'Default Board', 'Seeded on first run');
+    const insSection = db.prepare(
+      'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    );
+    for (const section of DEFAULT_PROJECT_SECTIONS) {
+      insSection.run(
+        randomUUID(),
+        workspaceId,
+        section.name,
+        section.description,
+        section.position,
+        section.viewMode,
+        section.kind
+      );
+    }
+
+    const insStatus = db.prepare(
+      'INSERT INTO project_statuses(id, workspace_id, status_key, label, position) VALUES (?, ?, ?, ?, ?)'
+    );
+    for (const status of DEFAULT_PROJECT_STATUSES) {
+      insStatus.run(randomUUID(), workspaceId, status.key, status.label, status.position);
+    }
     db.exec('COMMIT');
   } catch (e) {
     db.exec('ROLLBACK');
@@ -467,6 +536,123 @@ function requireUuid(value: string, label: string): string {
     throw new HttpError(400, `${label} must be a UUID`);
   }
   return v;
+}
+
+function asObject(value: any): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function getRequestAuthorizationHeader(req: http.IncomingMessage): string {
+  const raw = req.headers.authorization;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function isGatewayFallbackError(err: unknown): boolean {
+  if (!(err instanceof OpenClawGatewayError)) return false;
+  if (err.status === 400 || err.status === 404 || err.status === 405 || err.status === 501) return true;
+  const msg = String(err.message ?? '').toLowerCase();
+  return msg.includes('method not found') || msg.includes('unsupported') || msg.includes('not implemented');
+}
+
+function gatewayErrorToHttp(err: unknown): { status: number; message: string } {
+  if (err instanceof OpenClawGatewayError) {
+    const status = Number.isFinite(err.status) ? Math.min(599, Math.max(400, err.status)) : 502;
+    return { status, message: err.message || 'OpenClaw gateway error' };
+  }
+  return { status: 502, message: String((err as any)?.message ?? err ?? 'OpenClaw gateway error') };
+}
+
+type ProvidersContainer =
+  | { path: 'providers'; providers: Record<string, unknown> }
+  | { path: 'model_providers'; providers: Record<string, unknown> }
+  | { path: 'models.providers'; providers: Record<string, unknown> };
+
+function resolveProvidersContainer(config: Record<string, unknown>): ProvidersContainer {
+  const rootProviders = asObject(config.providers);
+  if (rootProviders) return { path: 'providers', providers: { ...rootProviders } };
+
+  const modelProviders = asObject((config as any).model_providers);
+  if (modelProviders) return { path: 'model_providers', providers: { ...modelProviders } };
+
+  const models = asObject((config as any).models);
+  const nestedProviders = asObject(models?.providers);
+  if (nestedProviders) return { path: 'models.providers', providers: { ...nestedProviders } };
+
+  return { path: 'providers', providers: {} };
+}
+
+function buildProvidersPatch(container: ProvidersContainer, providers: Record<string, unknown>): Record<string, unknown> {
+  if (container.path === 'providers') return { providers };
+  if (container.path === 'model_providers') return { model_providers: providers };
+  return { models: { providers } };
+}
+
+function buildProviderConfigEntry(input: ProviderUpsertInput, previousRaw: unknown): Record<string, unknown> {
+  const previous = asObject(previousRaw) ?? {};
+  const next: Record<string, unknown> = { ...previous };
+
+  next.enabled = input.enabled;
+  next.auth_mode = input.auth_mode;
+
+  // Preserve existing schema conventions where possible.
+  if ('type' in next || !('kind' in next)) next.type = input.kind;
+  if ('kind' in next || !('type' in next)) next.kind = input.kind;
+
+  if (input.api_base_url) {
+    if ('base_url' in next || !('api_base_url' in next)) next.base_url = input.api_base_url;
+    next.api_base_url = input.api_base_url;
+  }
+
+  if (input.auth_mode === 'api_key' && input.api_key) {
+    const authObj = asObject((next as any).auth);
+    if (authObj) {
+      next.auth = { ...authObj, mode: 'api_key', api_key: input.api_key };
+    } else {
+      next.api_key = input.api_key;
+    }
+  }
+
+  if (input.auth_mode === 'oauth') {
+    const authObj = asObject((next as any).auth) ?? {};
+    next.auth = { ...authObj, mode: 'oauth' };
+    if (input.oauth) {
+      const existingOAuth = asObject((next as any).oauth) ?? {};
+      next.oauth = { ...existingOAuth, ...input.oauth };
+    }
+  }
+
+  if (input.options) {
+    const existingOptions = asObject((next as any).options) ?? {};
+    next.options = { ...existingOptions, ...input.options };
+  }
+
+  return next;
+}
+
+async function upsertProviderViaConfig(gateway: any, input: ProviderUpsertInput): Promise<void> {
+  const config = await gateway.configGet();
+  const container = resolveProvidersContainer(config);
+  const nextProviders: Record<string, unknown> = { ...container.providers };
+  nextProviders[input.id] = buildProviderConfigEntry(input, nextProviders[input.id]);
+
+  const patch = buildProvidersPatch(container, nextProviders);
+  await gateway.configPatch(patch);
+  await gateway.configApply();
+}
+
+async function deleteProviderViaConfig(gateway: any, providerId: string): Promise<boolean> {
+  const config = await gateway.configGet();
+  const container = resolveProvidersContainer(config);
+  if (!(providerId in container.providers)) return false;
+
+  const nextProviders: Record<string, unknown> = { ...container.providers };
+  delete nextProviders[providerId];
+  const patch = buildProvidersPatch(container, nextProviders);
+
+  await gateway.configPatch(patch);
+  await gateway.configApply();
+  return true;
 }
 
 function parseStringArrayJson(raw: any): string[] {
@@ -580,6 +766,22 @@ function jsonStringifySubAgents(value: BoardAgentSubAgent[]): string {
   return JSON.stringify(out);
 }
 
+function parseJsonRecord(raw: any, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // noop
+  }
+  return fallback;
+}
+
 function parseCapabilitiesJson(raw: any): SkillCapabilities {
   const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
 
@@ -690,16 +892,46 @@ function workspaceAgentSettingsRowToDto(r: any) {
   };
 }
 
-function getDefaultBoardId(db: DatabaseSync): string | null {
+function getDefaultProjectId(db: DatabaseSync): string | null {
   const row = rowOrNull<{ id: string }>(
-    db.prepare('SELECT id FROM boards ORDER BY position ASC, created_at ASC LIMIT 1').all() as any
+    db
+      .prepare(
+        `SELECT id
+           FROM workspaces
+          WHERE COALESCE(is_archived, 0) = 0
+          ORDER BY position ASC, created_at ASC
+          LIMIT 1`
+      )
+      .all() as any
   );
   return row?.id ?? null;
 }
 
-function getDefaultWorkspaceId(db: DatabaseSync): string | null {
+function getDefaultSectionId(db: DatabaseSync, projectId?: string | null): string | null {
+  if (projectId) {
+    const row = rowOrNull<{ id: string }>(
+      db
+        .prepare(
+          `SELECT id
+             FROM boards
+            WHERE workspace_id = ?
+            ORDER BY CASE WHEN section_kind = 'inbox' THEN 0 ELSE 1 END ASC, position ASC, created_at ASC
+            LIMIT 1`
+        )
+        .all(projectId) as any
+    );
+    return row?.id ?? null;
+  }
+
   const row = rowOrNull<{ id: string }>(
-    db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any
+    db
+      .prepare(
+        `SELECT id
+           FROM boards
+          ORDER BY CASE WHEN section_kind = 'inbox' THEN 0 ELSE 1 END ASC, position ASC, created_at ASC
+          LIMIT 1`
+      )
+      .all() as any
   );
   return row?.id ?? null;
 }
@@ -709,6 +941,31 @@ function getWorkspaceIdByBoardId(db: DatabaseSync, boardId: string): string | nu
     db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
   );
   return row?.workspace_id ?? null;
+}
+
+function getProjectInboxSectionId(db: DatabaseSync, projectId: string): string | null {
+  const row = rowOrNull<{ id: string }>(
+    db
+      .prepare(
+        `SELECT id
+           FROM boards
+          WHERE workspace_id = ?
+            AND (section_kind = 'inbox' OR lower(name) = 'inbox')
+          ORDER BY position ASC, created_at ASC
+          LIMIT 1`
+      )
+      .all(projectId) as any
+  );
+  return row?.id ?? null;
+}
+
+// Legacy aliases kept for internal migration compatibility.
+function getDefaultBoardId(db: DatabaseSync): string | null {
+  return getDefaultSectionId(db);
+}
+
+function getDefaultWorkspaceId(db: DatabaseSync): string | null {
+  return getDefaultProjectId(db);
 }
 
 function main() {
@@ -742,9 +999,10 @@ function main() {
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
   const repoRoot = path.resolve(__dirname, '../../..');
-  const workspaceDir = path.resolve(
-    process.env.DZZENOS_WORKSPACE_DIR ?? path.join(repoRoot, 'data/workspace')
-  );
+  const workspaceDir = path.resolve(process.env.DZZENOS_WORKSPACE_DIR ?? getDefaultWorkspaceDir());
+  if (!process.env.DZZENOS_WORKSPACE_DIR) {
+    moveLegacyWorkspaceIfNeeded(workspaceDir, getLegacyRepoWorkspaceDir(repoRoot));
+  }
 
   const docsDir = path.join(workspaceDir, 'docs');
   const memoryDir = path.join(workspaceDir, 'memory');
@@ -756,6 +1014,17 @@ function main() {
     process.env.OPENRESPONSES_TOKEN ?? process.env.DZZENOS_OPENRESPONSES_TOKEN ?? '';
   const openResponsesModel =
     process.env.OPENRESPONSES_MODEL ?? process.env.DZZENOS_OPENRESPONSES_MODEL ?? 'openclaw:main';
+  const gatewayBaseUrl =
+    process.env.DZZENOS_GATEWAY_URL ??
+    process.env.OPENCLAW_GATEWAY_URL ??
+    `http://127.0.0.1:${process.env.GATEWAY_PORT ?? 18789}`;
+  const gatewayToken =
+    process.env.DZZENOS_GATEWAY_TOKEN ??
+    process.env.OPENCLAW_GATEWAY_TOKEN ??
+    process.env.GATEWAY_TOKEN ??
+    '';
+  const gatewayTimeoutMsRaw = Number(process.env.DZZENOS_GATEWAY_TIMEOUT_MS ?? '');
+  const gatewayTimeoutMs = Number.isFinite(gatewayTimeoutMsRaw) && gatewayTimeoutMsRaw > 0 ? gatewayTimeoutMsRaw : 15_000;
   const defaultAgentId = process.env.DZZENOS_DEFAULT_AGENT_ID ?? '';
   const taskAbortControllers = new Map<string, AbortController>();
   const openClawBin = normalizeString(process.env.DZZENOS_OPENCLAW_BIN) || 'openclaw';
@@ -947,16 +1216,47 @@ function main() {
     return runOpenClawCliJson(args);
   }
 
+  function makeGatewayClient(req: http.IncomingMessage) {
+    return createOpenClawGatewayClient({
+      baseUrl: gatewayBaseUrl,
+      token: gatewayToken || undefined,
+      authorizationHeader: gatewayToken ? undefined : getRequestAuthorizationHeader(req),
+      timeoutMs: gatewayTimeoutMs,
+    });
+  }
+
+  function sectionDocPath(sectionId: string) {
+    return path.join(docsDir, 'sections', `${sectionId}.md`);
+  }
+
+  function sectionChangelogPath(sectionId: string) {
+    return path.join(docsDir, 'sections', sectionId, 'changelog.md');
+  }
+
+  function sectionMemoryPath(sectionId: string) {
+    return path.join(memoryDir, 'sections', `${sectionId}.md`);
+  }
+
+  function scopeMemoryPath(scope: string, scopeId: string) {
+    if (scope === 'overview') return path.join(memoryDir, 'overview.md');
+    if (scope === 'project') return path.join(memoryDir, 'projects', `${scopeId}.md`);
+    if (scope === 'section') return path.join(memoryDir, 'sections', `${scopeId}.md`);
+    if (scope === 'agent') return path.join(memoryDir, 'agents', `${scopeId}.md`);
+    if (scope === 'task') return path.join(memoryDir, 'tasks', `${scopeId}.md`);
+    return path.join(memoryDir, `${scope}-${scopeId}.md`);
+  }
+
+  // Legacy aliases for internal compatibility.
   function boardDocPath(boardId: string) {
-    return path.join(docsDir, 'boards', `${boardId}.md`);
+    return sectionDocPath(boardId);
   }
 
   function boardChangelogPath(boardId: string) {
-    return path.join(docsDir, 'boards', boardId, 'changelog.md');
+    return sectionChangelogPath(boardId);
   }
 
   function boardMemoryPath(boardId: string) {
-    return path.join(memoryDir, 'boards', `${boardId}.md`);
+    return sectionMemoryPath(boardId);
   }
 
   async function callOpenResponses(input: {
@@ -1036,15 +1336,15 @@ function main() {
     }
   }
 
-  function appendBoardSummary(params: { boardId: string; title: string; summary: string }) {
+  function appendSectionSummary(params: { sectionId: string; title: string; summary: string }) {
     const ts = new Date().toISOString();
     const entryHeader = `## ${params.title}\n\n`;
     const entryBody = `${params.summary}\n\n`;
     const changeEntry = `- ${ts} — ${params.title}\n${params.summary}\n\n`;
 
-    appendTextFile(boardDocPath(params.boardId), entryHeader + entryBody);
-    appendTextFile(boardChangelogPath(params.boardId), changeEntry);
-    appendTextFile(boardMemoryPath(params.boardId), changeEntry);
+    appendTextFile(sectionDocPath(params.sectionId), entryHeader + entryBody);
+    appendTextFile(sectionChangelogPath(params.sectionId), changeEntry);
+    appendTextFile(sectionMemoryPath(params.sectionId), changeEntry);
   }
 
   const args = parseArgs(process.argv.slice(2));
@@ -1052,7 +1352,8 @@ function main() {
   const migrationsDir = path.resolve(
     args.migrationsDir ?? path.join(repoRoot, 'skills/dzzenos/db/migrations')
   );
-  const dbPath = path.resolve(args.dbPath ?? path.join(repoRoot, 'data/dzzenos.db'));
+  const resolvedDb = resolveDbPath(args.dbPath);
+  const dbPath = resolvedDb.dbPath;
 
   const port = Number(args.port ?? process.env.PORT ?? 8787);
   const host = String(args.host ?? process.env.HOST ?? '127.0.0.1');
@@ -1068,7 +1369,11 @@ function main() {
     process.env.DZZENOS_ALLOWED_ORIGINS ?? process.env.DZZENOS_CORS_ORIGINS
   );
 
-  migrate({ dbPath, migrationsDir });
+  migrate({
+    dbPath,
+    migrationsDir,
+    legacyDbPath: resolvedDb.source === 'default' ? getLegacyRepoDbPath(repoRoot) : undefined,
+  });
 
   const db = new DatabaseSync(dbPath);
   db.exec('PRAGMA foreign_keys = ON;');
@@ -1079,14 +1384,20 @@ function main() {
   function getTaskMeta(taskId: string) {
     return rowOrNull<{
       id: string;
+      section_id: string;
       board_id: string;
+      project_id: string;
       workspace_id: string;
       title: string;
       description: string | null;
       status: string;
     }>(
       db.prepare(
-        `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id,
+        `SELECT t.id as id,
+                t.board_id as section_id,
+                t.board_id as board_id,
+                COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
                 t.title as title, t.description as description, t.status as status
          FROM tasks t
          JOIN boards b ON b.id = t.board_id
@@ -1267,6 +1578,148 @@ function main() {
       return byBoard;
     }
     return getDefaultWorkspaceId(db);
+  }
+
+  function getAgentSubagents(parentAgentId: string) {
+    const rows = db
+      .prepare(
+        `SELECT
+           s.id,
+           s.parent_agent_id,
+           s.child_agent_id,
+           s.role,
+           s.trigger_rules_json,
+           s.max_calls,
+           s.sort_order,
+           s.created_at,
+           s.updated_at,
+           a.display_name as child_display_name,
+           a.openclaw_agent_id as child_openclaw_agent_id
+         FROM agent_subagents s
+         JOIN agents a ON a.id = s.child_agent_id
+        WHERE s.parent_agent_id = ?
+        ORDER BY s.sort_order ASC, s.created_at ASC`
+      )
+      .all(parentAgentId) as any[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      parent_agent_id: String(r.parent_agent_id),
+      child_agent_id: String(r.child_agent_id),
+      role: typeof r.role === 'string' ? r.role : '',
+      trigger_rules_json: parseJsonRecord(r.trigger_rules_json),
+      max_calls: Number.isFinite(Number(r.max_calls)) ? Number(r.max_calls) : 3,
+      order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
+      sort_order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
+      created_at: String(r.created_at ?? ''),
+      updated_at: String(r.updated_at ?? ''),
+      child_display_name: String(r.child_display_name ?? ''),
+      child_openclaw_agent_id: String(r.child_openclaw_agent_id ?? ''),
+    }));
+  }
+
+  function getOrchestrationPolicy(agentId: string) {
+    db.prepare(
+      `INSERT OR IGNORE INTO agent_orchestration_policies(
+        agent_id, mode, delegation_budget_json, escalation_rules_json
+      ) VALUES (?, 'openclaw', '{"max_total_calls":8,"max_parallel":2}', '{}')`
+    ).run(agentId);
+
+    const row = rowOrNull<any>(
+      db
+        .prepare(
+          `SELECT agent_id, mode, delegation_budget_json, escalation_rules_json, created_at, updated_at
+             FROM agent_orchestration_policies
+            WHERE agent_id = ?`
+        )
+        .all(agentId) as any
+    );
+    if (!row) return null;
+    return {
+      agent_id: String(row.agent_id),
+      mode: String(row.mode ?? 'openclaw'),
+      delegation_budget_json: parseJsonRecord(row.delegation_budget_json),
+      escalation_rules_json: parseJsonRecord(row.escalation_rules_json),
+      created_at: String(row.created_at ?? ''),
+      updated_at: String(row.updated_at ?? ''),
+    };
+  }
+
+  function createArtifact(runId: string, stepId: string, kind: string, uri: string, meta?: Record<string, unknown>) {
+    db.prepare(
+      `INSERT INTO artifacts(id, run_id, step_id, kind, uri, mime_type, meta_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      runId,
+      stepId,
+      kind,
+      uri,
+      'application/json',
+      meta ? JSON.stringify(meta) : null
+    );
+  }
+
+  function memoryScopeFallback(scope: string, scopeId: string) {
+    if (scope === 'overview') return readTextFile(overviewDocPath);
+    if (scope === 'section') {
+      const fromDb = readTextFile(sectionMemoryPath(scopeId));
+      if (fromDb.trim()) return fromDb;
+      return readTextFile(sectionDocPath(scopeId));
+    }
+    return readTextFile(scopeMemoryPath(scope, scopeId));
+  }
+
+  function getMemoryDoc(scope: string, scopeId: string) {
+    const row = rowOrNull<any>(
+      db
+        .prepare(
+          `SELECT id, scope, scope_id, content, updated_by, created_at, updated_at
+             FROM memory_docs
+            WHERE scope = ? AND scope_id = ?`
+        )
+        .all(scope, scopeId) as any
+    );
+    if (row) {
+      return {
+        id: String(row.id),
+        scope: String(row.scope),
+        scope_id: String(row.scope_id),
+        content: String(row.content ?? ''),
+        updated_by: row.updated_by == null ? null : String(row.updated_by),
+        created_at: String(row.created_at ?? ''),
+        updated_at: String(row.updated_at ?? ''),
+      };
+    }
+    const content = memoryScopeFallback(scope, scopeId);
+    return {
+      id: null,
+      scope,
+      scope_id: scopeId,
+      content,
+      updated_by: null,
+      created_at: null,
+      updated_at: null,
+    };
+  }
+
+  function upsertMemoryDoc(scope: string, scopeId: string, content: string, updatedBy: string | null) {
+    db.prepare(
+      `INSERT INTO memory_docs(id, scope, scope_id, content, updated_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(scope, scope_id)
+       DO UPDATE SET
+         content = excluded.content,
+         updated_by = excluded.updated_by`
+    ).run(randomUUID(), scope, scopeId, content, updatedBy);
+
+    if (scope === 'overview') {
+      writeTextFile(overviewDocPath, content);
+    } else if (scope === 'section') {
+      writeTextFile(sectionMemoryPath(scopeId), content);
+      writeTextFile(sectionDocPath(scopeId), content);
+    } else {
+      writeTextFile(scopeMemoryPath(scope, scopeId), content);
+    }
   }
 
   function ensureTaskSession(
@@ -1781,6 +2234,31 @@ function main() {
     const effectivePolicy = { ...workspacePolicy, ...boardPolicy };
     const memoryPath =
       normalizeString(boardSettings.memory_path ?? '') || normalizeString(workspaceSettings.memory_path ?? '') || null;
+    const subagents = agentRow?.id ? getAgentSubagents(agentRow.id) : [];
+    const orchestrationPolicy = agentRow?.id ? getOrchestrationPolicy(agentRow.id) : null;
+    const orchestrationSnapshot = {
+      mode: 'openclaw',
+      parent_agent_id: agentRow?.id ?? null,
+      parent_agent_name: agentDisplayName,
+      policy: orchestrationPolicy,
+      subagents: subagents.map((s) => ({
+        id: s.id,
+        child_agent_id: s.child_agent_id,
+        role: s.role,
+        trigger_rules_json: s.trigger_rules_json,
+        max_calls: s.max_calls,
+      })),
+      board_settings: {
+        preferred_agent_id: boardSettings.preferred_agent_id ?? null,
+        auto_delegate: Boolean(boardSettings.auto_delegate),
+        memory_path: memoryPath,
+        skills: effectiveSkills,
+      },
+      workspace_settings: {
+        preferred_agent_id: workspaceSettings.preferred_agent_id ?? null,
+        auto_delegate: Boolean(workspaceSettings.auto_delegate),
+      },
+    };
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
 
@@ -1797,7 +2275,7 @@ function main() {
       ).run(runId, task.workspace_id, task.board_id, task.id, agentDisplayName, 'running');
       db.prepare(
         'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(stepId, runId, 0, opts.mode, 'running', JSON.stringify({ mode: opts.mode }), null);
+      ).run(stepId, runId, 0, opts.mode, 'running', JSON.stringify({ mode: opts.mode, orchestration: orchestrationSnapshot }), null);
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');
@@ -1921,10 +2399,26 @@ function main() {
         }
       }
 
+      const orchestrationPrompt =
+        subagents.length > 0
+          ? [
+              'Delegation policy: OpenClaw-only orchestration. Use subagents when relevant.',
+              `Budget: ${JSON.stringify(orchestrationPolicy?.delegation_budget_json ?? { max_total_calls: 8, max_parallel: 2 })}`,
+              `Escalation: ${JSON.stringify(orchestrationPolicy?.escalation_rules_json ?? {})}`,
+              'Available subagents:',
+              ...subagents.map(
+                (s, idx) =>
+                  `${idx + 1}. ${s.child_display_name || s.child_agent_id} (${s.child_openclaw_agent_id}) role="${s.role}" max_calls=${s.max_calls} trigger_rules=${JSON.stringify(s.trigger_rules_json)}`
+              ),
+              'If delegation details are not observable in runtime output, continue safely and return final result.',
+            ].join('\n')
+          : 'No subagents configured. Execute directly as the main agent.';
+
       const inputSections: string[] = [];
       if (systemPrompt) inputSections.push(`System profile:\n${systemPrompt}`);
       if (reasoningPrefix) inputSections.push(reasoningPrefix);
       inputSections.push(modePrompt);
+      inputSections.push(orchestrationPrompt);
       inputSections.push(`Task title: ${task.title}\nTask description: ${task.description ?? ''}`);
       if (effectiveSkills.length) inputSections.push(`Preferred skills overlay: ${effectiveSkills.join(', ')}`);
       if (memoryPath) inputSections.push(`Memory path hint: ${memoryPath}`);
@@ -1970,9 +2464,20 @@ function main() {
             preferred_agent_id: workspaceSettings.preferred_agent_id ?? null,
             auto_delegate: Boolean(workspaceSettings.auto_delegate),
           },
+          orchestration: orchestrationSnapshot,
         }),
         stepId
       );
+      createArtifact(runId, stepId, 'orchestration.snapshot', `memory://runs/${runId}/orchestration-snapshot.json`, orchestrationSnapshot);
+      const delegation = parseJsonRecord(
+        parsed?.delegation_decisions,
+        parseJsonRecord(parsed?.delegation, {})
+      );
+      createArtifact(runId, stepId, 'orchestration.decisions', `memory://runs/${runId}/delegation-decisions.json`, {
+        delegation_decisions: delegation,
+        delegation_observable: Object.keys(delegation).length > 0,
+        note: Object.keys(delegation).length > 0 ? null : 'delegation not observable',
+      });
 
       if (usageObserved) {
         const computedTotal = usageTotalTokens || usageInputTokens + usageOutputTokens;
@@ -2031,13 +2536,19 @@ function main() {
         replaceChecklistItems(task.id, checklist);
         sseBroadcast({ type: 'task.checklist.changed', payload: { taskId: task.id } });
       }
-      sseBroadcast({ type: 'tasks.changed', payload: { taskId: task.id, boardId: task.board_id } });
+      sseBroadcast({
+        type: 'tasks.changed',
+        payload: { taskId: task.id, sectionId: task.section_id, boardId: task.board_id, projectId: task.project_id, workspaceId: task.workspace_id },
+      });
     }
 
     if (opts.mode === 'execute') {
       if (parsed?.status === 'review') {
         db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run('review', task.id);
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: task.id, boardId: task.board_id } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: { taskId: task.id, sectionId: task.section_id, boardId: task.board_id, projectId: task.project_id, workspaceId: task.workspace_id },
+        });
       }
     }
 
@@ -2129,7 +2640,7 @@ const server = http.createServer(async (req, res) => {
   const origin = (req.headers.origin as string | undefined) ?? '';
   const corsHeaders: Record<string, string> = {
     'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type,authorization',
   };
     if (origin && isAllowedOrigin(origin, req.headers.host as string | undefined, allowedOrigins)) {
       corsHeaders['access-control-allow-origin'] = origin;
@@ -2435,11 +2946,242 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      // --- OpenClaw models / providers bridge ---
+      if (req.method === 'GET' && url.pathname === '/openclaw/models/overview') {
+        const gateway = makeGatewayClient(req);
+        try {
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            const config = await gateway.configGet();
+            overview = normalizeModelsOverview(redactSecrets(config));
+          }
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/openclaw/models/providers') {
+        const body = await readJson(req);
+        let input: ProviderUpsertInput;
+        try {
+          input = sanitizeProviderUpsertInput(body);
+        } catch (err: any) {
+          return sendJson(res, 400, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+
+        const gateway = makeGatewayClient(req);
+        try {
+          try {
+            await gateway.providerCreate(input);
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            await upsertProviderViaConfig(gateway, input);
+          }
+
+          try {
+            await gateway.configApply();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+          }
+
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 201, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelProviderPatchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)$/) : null;
+      if (modelProviderPatchMatch) {
+        const providerId = safeDecodeURIComponent(modelProviderPatchMatch[1]);
+        const body = await readJson(req);
+        const gateway = makeGatewayClient(req);
+
+        const candidate = { ...(asObject(body) ?? {}), id: providerId } as any;
+        try {
+          if (!normalizeString(candidate.kind) || !normalizeString(candidate.auth_mode) || candidate.enabled === undefined) {
+            let existing: any = null;
+            try {
+              const overview = await gateway.modelsOverview();
+              existing = overview.providers.find((p: any) => p.id === providerId) ?? null;
+            } catch (err) {
+              if (!isGatewayFallbackError(err)) throw err;
+              const overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+              existing = overview.providers.find((p: any) => p.id === providerId) ?? null;
+            }
+
+            if (!existing) return sendJson(res, 404, { error: 'Provider not found' }, corsHeaders);
+            if (!normalizeString(candidate.kind)) candidate.kind = existing.kind;
+            if (!normalizeString(candidate.auth_mode)) candidate.auth_mode = existing.auth_mode;
+            if (candidate.enabled === undefined) candidate.enabled = existing.enabled;
+          }
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+
+        let input: ProviderUpsertInput;
+        try {
+          input = sanitizeProviderUpsertInput(candidate);
+        } catch (err: any) {
+          return sendJson(res, 400, { error: String(err?.message ?? err) }, corsHeaders);
+        }
+
+        try {
+          try {
+            await gateway.providerUpdate(providerId, input);
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            await upsertProviderViaConfig(gateway, input);
+          }
+
+          try {
+            await gateway.configApply();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+          }
+
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelProviderDeleteMatch = req.method === 'DELETE' ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)$/) : null;
+      if (modelProviderDeleteMatch) {
+        const providerId = safeDecodeURIComponent(modelProviderDeleteMatch[1]);
+        const gateway = makeGatewayClient(req);
+
+        try {
+          try {
+            await gateway.providerDelete(providerId);
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            const removed = await deleteProviderViaConfig(gateway, providerId);
+            if (!removed) return sendJson(res, 404, { error: 'Provider not found' }, corsHeaders);
+          }
+
+          try {
+            await gateway.configApply();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+          }
+
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, { ok: true, overview }, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/openclaw/models/scan') {
+        const gateway = makeGatewayClient(req);
+        try {
+          let overview;
+          try {
+            overview = await gateway.modelsScan();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            await gateway.configApply();
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      if (req.method === 'POST' && url.pathname === '/openclaw/models/apply') {
+        const gateway = makeGatewayClient(req);
+        try {
+          await gateway.configApply();
+          let overview;
+          try {
+            overview = await gateway.modelsOverview();
+          } catch (err) {
+            if (!isGatewayFallbackError(err)) throw err;
+            overview = normalizeModelsOverview(redactSecrets(await gateway.configGet()));
+          }
+          sseBroadcast({ type: 'models.changed', payload: {} });
+          return sendJson(res, 200, overview, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelOauthStartMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)\/oauth\/start$/)
+        : null;
+      if (modelOauthStartMatch) {
+        const providerId = safeDecodeURIComponent(modelOauthStartMatch[1]);
+        const gateway = makeGatewayClient(req);
+        try {
+          const payload = await gateway.oauthStart(providerId);
+          return sendJson(res, 200, payload, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
+      const modelOauthStatusMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/openclaw\/models\/providers\/([^/]+)\/oauth\/status$/)
+        : null;
+      if (modelOauthStatusMatch) {
+        const providerId = safeDecodeURIComponent(modelOauthStatusMatch[1]);
+        const attemptId = normalizeString(url.searchParams.get('attemptId') ?? '');
+        const gateway = makeGatewayClient(req);
+        try {
+          const payload = await gateway.oauthStatus(providerId, attemptId || null);
+          return sendJson(res, 200, payload, corsHeaders);
+        } catch (err) {
+          const mapped = gatewayErrorToHttp(err);
+          return sendJson(res, mapped.status, { error: mapped.message }, corsHeaders);
+        }
+      }
+
       // --- API ---
       if (req.method === 'GET' && url.pathname === '/runs') {
         const status = url.searchParams.get('status');
         const stuckMinutesRaw = url.searchParams.get('stuckMinutes');
         const stuckMinutes = stuckMinutesRaw == null ? null : Number(stuckMinutesRaw);
+        const projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
 
         const allowedStatus = new Set(['running', 'succeeded', 'failed', 'cancelled']);
         if (status && !allowedStatus.has(status)) {
@@ -2456,6 +3198,10 @@ const server = http.createServer(async (req, res) => {
           where.push('r.status = ?');
           params.push(status);
         }
+        if (projectId) {
+          where.push('r.workspace_id = ?');
+          params.push(projectId);
+        }
 
         // If stuckMinutes is provided, return only stuck running runs older than N minutes.
         if (stuckMinutes != null) {
@@ -2467,7 +3213,9 @@ const server = http.createServer(async (req, res) => {
         const sql = `
           SELECT
             r.id,
+            r.workspace_id as project_id,
             r.workspace_id,
+            r.board_id as section_id,
             r.board_id,
             r.task_id,
             r.agent_name,
@@ -2499,6 +3247,7 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && url.pathname === '/approvals') {
         const status = url.searchParams.get('status');
+        const projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
         const allowed = new Set(['pending', 'approved', 'rejected']);
         if (status && !allowed.has(status)) {
           return sendJson(res, 400, { error: 'status must be one of: pending, approved, rejected' }, corsHeaders);
@@ -2509,6 +3258,10 @@ const server = http.createServer(async (req, res) => {
         if (status) {
           where.push('a.status = ?');
           params.push(status);
+        }
+        if (projectId) {
+          where.push('r.workspace_id = ?');
+          params.push(projectId);
         }
 
         const approvals = db
@@ -2526,6 +3279,9 @@ const server = http.createServer(async (req, res) => {
                a.decision_reason,
                a.created_at,
                a.updated_at,
+               r.workspace_id as project_id,
+               r.workspace_id as workspace_id,
+               r.board_id as section_id,
                r.task_id as task_id,
                r.board_id as board_id,
                t.title as task_title
@@ -2573,10 +3329,20 @@ const server = http.createServer(async (req, res) => {
           )
           .run(nextStatus, decidedBy, reason, id);
 
-        const approvalMeta = rowOrNull<{ task_id: string | null; board_id: string | null }>(
+        const approvalMeta = rowOrNull<{
+          task_id: string | null;
+          board_id: string | null;
+          section_id: string | null;
+          project_id: string | null;
+          workspace_id: string | null;
+        }>(
           db
             .prepare(
-              `SELECT r.task_id as task_id, r.board_id as board_id
+              `SELECT r.task_id as task_id,
+                      r.board_id as section_id,
+                      r.board_id as board_id,
+                      r.workspace_id as project_id,
+                      r.workspace_id as workspace_id
                FROM approvals a
                JOIN agent_runs r ON r.id = a.run_id
                WHERE a.id = ?`
@@ -2586,7 +3352,15 @@ const server = http.createServer(async (req, res) => {
 
         sseBroadcast({
           type: 'approvals.changed',
-          payload: { approvalId: id, status: nextStatus, taskId: approvalMeta?.task_id ?? null, boardId: approvalMeta?.board_id ?? null },
+          payload: {
+            approvalId: id,
+            status: nextStatus,
+            taskId: approvalMeta?.task_id ?? null,
+            sectionId: approvalMeta?.section_id ?? null,
+            boardId: approvalMeta?.board_id ?? null,
+            projectId: approvalMeta?.project_id ?? null,
+            workspaceId: approvalMeta?.workspace_id ?? null,
+          },
         });
         if (info.changes === 0) {
           return sendJson(res, 409, { error: 'Approval already decided' }, corsHeaders);
@@ -2608,6 +3382,9 @@ const server = http.createServer(async (req, res) => {
                  a.decision_reason,
                  a.created_at,
                  a.updated_at,
+                 r.workspace_id as project_id,
+                 r.workspace_id as workspace_id,
+                 r.board_id as section_id,
                  r.task_id as task_id,
                  r.board_id as board_id,
                  t.title as task_title
@@ -3024,7 +3801,7 @@ const server = http.createServer(async (req, res) => {
         const a = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM automations WHERE id = ?').all(id) as any);
         if (!a) return sendJson(res, 404, { error: 'Automation not found' }, corsHeaders);
 
-        const workspaceId = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1').all() as any)?.id;
+        const workspaceId = getDefaultProjectId(db);
         if (!workspaceId) return sendJson(res, 400, { error: 'No workspace exists' }, corsHeaders);
 
         const runId = randomUUID();
@@ -3607,6 +4384,115 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, row ? agentRowToDto(row) : { id }, corsHeaders);
       }
 
+      const listSubagentsMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/subagents$/)
+        : null;
+      if (listSubagentsMatch) {
+        const agentId = decodeURIComponent(listSubagentsMatch[1]);
+        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        return sendJson(res, 200, getAgentSubagents(agentId), corsHeaders);
+      }
+
+      const replaceSubagentsMatch = req.method === 'PUT'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/subagents$/)
+        : null;
+      if (replaceSubagentsMatch) {
+        const agentId = decodeURIComponent(replaceSubagentsMatch[1]);
+        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        const body = await readJson(req);
+        const items = Array.isArray(body) ? body : Array.isArray(body?.items) ? body.items : null;
+        if (!items) return sendJson(res, 400, { error: 'Expected array payload' }, corsHeaders);
+
+        db.exec('BEGIN');
+        try {
+          db.prepare('DELETE FROM agent_subagents WHERE parent_agent_id = ?').run(agentId);
+          const ins = db.prepare(
+            `INSERT INTO agent_subagents(
+              id, parent_agent_id, child_agent_id, role, trigger_rules_json, max_calls, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+          );
+          for (let idx = 0; idx < items.length; idx += 1) {
+            const row = items[idx];
+            const childAgentId = normalizeString(row?.child_agent_id ?? row?.childAgentId);
+            if (!childAgentId) throw new HttpError(400, `child_agent_id is required at index ${idx}`);
+            if (childAgentId === agentId) throw new HttpError(400, `child_agent_id cannot equal parent agent at index ${idx}`);
+            const child = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(childAgentId) as any);
+            if (!child) throw new HttpError(400, `child agent not found at index ${idx}`);
+            const role = normalizeString(row?.role) || '';
+            const triggerRules = parseJsonRecord(row?.trigger_rules_json ?? row?.triggerRules ?? {}, {});
+            const maxCallsRaw = Number(row?.max_calls ?? row?.maxCalls ?? 3);
+            const maxCalls = Number.isFinite(maxCallsRaw) ? Math.max(1, Math.min(50, Math.floor(maxCallsRaw))) : 3;
+            const sortOrderRaw = Number(row?.sort_order ?? row?.order ?? idx);
+            const sortOrder = Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : idx;
+            ins.run(randomUUID(), agentId, childAgentId, role, JSON.stringify(triggerRules), maxCalls, sortOrder);
+          }
+          db.exec('COMMIT');
+        } catch (err) {
+          db.exec('ROLLBACK');
+          throw err;
+        }
+        sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        return sendJson(res, 200, { ok: true, items: getAgentSubagents(agentId) }, corsHeaders);
+      }
+
+      const patchOrchestrationMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/orchestration$/)
+        : null;
+      if (patchOrchestrationMatch) {
+        const agentId = decodeURIComponent(patchOrchestrationMatch[1]);
+        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        const body = await readJson(req);
+        const mode = normalizeString(body?.mode || 'openclaw') || 'openclaw';
+        if (mode !== 'openclaw') return sendJson(res, 400, { error: 'mode must be openclaw' }, corsHeaders);
+        const delegationBudget = parseJsonRecord(body?.delegation_budget_json ?? body?.delegationBudget ?? {}, {});
+        const escalationRules = parseJsonRecord(body?.escalation_rules_json ?? body?.escalationRules ?? {}, {});
+
+        db.prepare(
+          `INSERT INTO agent_orchestration_policies(
+            agent_id, mode, delegation_budget_json, escalation_rules_json
+          ) VALUES (?, ?, ?, ?)
+          ON CONFLICT(agent_id)
+          DO UPDATE SET
+            mode = excluded.mode,
+            delegation_budget_json = excluded.delegation_budget_json,
+            escalation_rules_json = excluded.escalation_rules_json`
+        ).run(agentId, mode, JSON.stringify(delegationBudget), JSON.stringify(escalationRules));
+
+        sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        return sendJson(res, 200, getOrchestrationPolicy(agentId), corsHeaders);
+      }
+
+      const orchestrationPreviewMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/orchestration\/preview$/)
+        : null;
+      if (orchestrationPreviewMatch) {
+        const agentId = decodeURIComponent(orchestrationPreviewMatch[1]);
+        const agent = rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+          db
+            .prepare('SELECT id, display_name, openclaw_agent_id FROM agents WHERE id = ?')
+            .all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        const subagents = getAgentSubagents(agentId);
+        const policy = getOrchestrationPolicy(agentId);
+        const preview = [
+          `Parent agent: ${agent.display_name} (${agent.openclaw_agent_id})`,
+          `Mode: ${policy?.mode ?? 'openclaw'}`,
+          `Delegation budget: ${JSON.stringify(policy?.delegation_budget_json ?? { max_total_calls: 8, max_parallel: 2 })}`,
+          `Escalation rules: ${JSON.stringify(policy?.escalation_rules_json ?? {})}`,
+          'Subagents:',
+          ...(subagents.length
+            ? subagents.map((s, idx) =>
+                `${idx + 1}. ${s.child_display_name || s.child_agent_id} (${s.child_openclaw_agent_id}) role="${s.role}" max_calls=${s.max_calls} trigger_rules=${JSON.stringify(s.trigger_rules_json)}`
+              )
+            : ['(none)']),
+        ].join('\n');
+        return sendJson(res, 200, { agent_id: agentId, mode: 'openclaw', policy, subagents, preview }, corsHeaders);
+      }
+
       const agentResetMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/reset$/) : null;
       if (agentResetMatch) {
         const workspaceId = resolveAgentWorkspaceId({
@@ -3839,55 +4725,880 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/docs/overview') {
-        return sendJson(res, 200, { content: readTextFile(overviewDocPath) }, corsHeaders);
+        const doc = getMemoryDoc('overview', '');
+        return sendJson(res, 200, { content: doc.content }, corsHeaders);
       }
 
       if (req.method === 'PUT' && url.pathname === '/docs/overview') {
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
-        writeTextFile(overviewDocPath, content);
+        upsertMemoryDoc('overview', '', content, 'docs-overview');
         sseBroadcast({ type: 'docs.changed', payload: { scope: 'overview' } });
+        sseBroadcast({ type: 'memory.changed', payload: { scope: 'overview', scopeId: '' } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
-      const boardDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
-      if (boardDocsGet) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardDocsGet[1]), 'boardId');
-        return sendJson(res, 200, { content: readTextFile(boardDocPath(boardId)) }, corsHeaders);
+      const sectionDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
+      if (sectionDocsGet) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsGet[1]), 'sectionId');
+        const doc = getMemoryDoc('section', sectionId);
+        return sendJson(res, 200, { content: doc.content }, corsHeaders);
       }
 
-      const boardDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/boards\/([^/]+)$/) : null;
-      if (boardDocsPut) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardDocsPut[1]), 'boardId');
+      const sectionDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
+      if (sectionDocsPut) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsPut[1]), 'sectionId');
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
-        writeTextFile(boardDocPath(boardId), content);
-        sseBroadcast({ type: 'docs.changed', payload: { boardId } });
+        upsertMemoryDoc('section', sectionId, content, 'docs-section');
+        sseBroadcast({ type: 'docs.changed', payload: { sectionId, boardId: sectionId } });
+        sseBroadcast({ type: 'memory.changed', payload: { scope: 'section', scopeId: sectionId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
-      const boardChangelogGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/changelog$/) : null;
-      if (boardChangelogGet) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardChangelogGet[1]), 'boardId');
-        return sendJson(res, 200, { content: readTextFile(boardChangelogPath(boardId)) }, corsHeaders);
+      const sectionChangelogGet = req.method === 'GET'
+        ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)\/changelog$/)
+        : null;
+      if (sectionChangelogGet) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionChangelogGet[1]), 'sectionId');
+        return sendJson(res, 200, { content: readTextFile(sectionChangelogPath(sectionId)) }, corsHeaders);
       }
 
-      const boardSummaryPost = req.method === 'POST' ? url.pathname.match(/^\/docs\/boards\/([^/]+)\/summary$/) : null;
-      if (boardSummaryPost) {
-        const boardId = requireUuid(safeDecodeURIComponent(boardSummaryPost[1]), 'boardId');
+      const sectionSummaryPost = req.method === 'POST'
+        ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)\/summary$/)
+        : null;
+      if (sectionSummaryPost) {
+        const sectionId = requireUuid(safeDecodeURIComponent(sectionSummaryPost[1]), 'sectionId');
         const body = await readJson(req);
         const title = typeof body?.title === 'string' ? body.title.trim() : 'Untitled';
         const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
         if (!summary) return sendJson(res, 400, { error: 'summary is required' }, corsHeaders);
-        appendBoardSummary({ boardId, title, summary });
-        sseBroadcast({ type: 'docs.changed', payload: { boardId } });
+        appendSectionSummary({ sectionId, title, summary });
+        upsertMemoryDoc('section', sectionId, readTextFile(sectionMemoryPath(sectionId)), 'summary-bot');
+        sseBroadcast({ type: 'docs.changed', payload: { sectionId, boardId: sectionId } });
+        sseBroadcast({ type: 'memory.changed', payload: { scope: 'section', scopeId: sectionId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
+      if (req.method === 'GET' && url.pathname === '/memory/scopes') {
+        const projects = db
+          .prepare(
+            `SELECT
+               id,
+               name,
+               description,
+               position,
+               COALESCE(is_archived, 0) as is_archived,
+               archived_at,
+               created_at,
+               updated_at
+             FROM workspaces
+             ORDER BY COALESCE(is_archived, 0) ASC, position ASC, created_at ASC`
+          )
+          .all();
+        const sections = db
+          .prepare(
+            `SELECT id, workspace_id as project_id, name, description, position, section_kind, view_mode, created_at, updated_at
+               FROM boards
+              ORDER BY workspace_id ASC, position ASC, created_at ASC`
+          )
+          .all();
+        const agents = db
+          .prepare(
+            `SELECT id, display_name, openclaw_agent_id, enabled, category, created_at, updated_at
+               FROM agents
+              ORDER BY enabled DESC, sort_order ASC, display_name ASC`
+          )
+          .all();
+        const tasks = db
+          .prepare(
+            `SELECT id, board_id as section_id, workspace_id as project_id, title, status, created_at, updated_at
+               FROM tasks
+              ORDER BY updated_at DESC
+              LIMIT 500`
+          )
+          .all();
+        return sendJson(res, 200, { projects, sections, agents, tasks }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/docs') {
+        const scope = normalizeString(url.searchParams.get('scope'));
+        if (!new Set(['overview', 'project', 'section', 'agent', 'task']).has(scope)) {
+          return sendJson(res, 400, { error: 'scope must be one of overview|project|section|agent|task' }, corsHeaders);
+        }
+        const scopeId = scope === 'overview' ? '' : normalizeString(url.searchParams.get('id'));
+        if (scope !== 'overview' && !scopeId) return sendJson(res, 400, { error: 'id is required for this scope' }, corsHeaders);
+        return sendJson(res, 200, getMemoryDoc(scope, scopeId), corsHeaders);
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/memory/docs') {
+        const body = await readJson(req);
+        const scope = normalizeString(body?.scope ?? url.searchParams.get('scope'));
+        if (!new Set(['overview', 'project', 'section', 'agent', 'task']).has(scope)) {
+          return sendJson(res, 400, { error: 'scope must be one of overview|project|section|agent|task' }, corsHeaders);
+        }
+        const scopeId =
+          scope === 'overview'
+            ? ''
+            : normalizeString(body?.id ?? body?.scopeId ?? url.searchParams.get('id'));
+        if (scope !== 'overview' && !scopeId) return sendJson(res, 400, { error: 'id is required for this scope' }, corsHeaders);
+        const content = typeof body?.content === 'string' ? body.content : '';
+        const updatedBy = normalizeString(body?.updatedBy) || 'ui';
+        upsertMemoryDoc(scope, scopeId, content, updatedBy);
+        sseBroadcast({ type: 'memory.changed', payload: { scope, scopeId } });
+        if (scope === 'overview') sseBroadcast({ type: 'docs.changed', payload: { scope: 'overview' } });
+        if (scope === 'section') sseBroadcast({ type: 'docs.changed', payload: { sectionId: scopeId, boardId: scopeId } });
+        return sendJson(res, 200, { ok: true, doc: getMemoryDoc(scope, scopeId) }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/index/status') {
+        const lastJob = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, status, started_at, finished_at, stats_json, error_text, created_at, updated_at
+                 FROM memory_index_jobs
+                ORDER BY created_at DESC
+                LIMIT 1`
+            )
+            .all() as any
+        );
+        return sendJson(
+          res,
+          200,
+          {
+            status: lastJob?.status ?? 'idle',
+            last_job: lastJob
+              ? {
+                  ...lastJob,
+                  stats_json: parseJsonRecord(lastJob.stats_json),
+                }
+              : null,
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'POST' && url.pathname === '/memory/index/rebuild') {
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        db.prepare(
+          `INSERT INTO memory_index_jobs(id, status, started_at, stats_json)
+           VALUES (?, 'running', ?, ?)`
+        ).run(id, now, JSON.stringify({ scanned_docs: 0, indexed_chunks: 0 }));
+        db.prepare(
+          `UPDATE memory_index_jobs
+              SET status = 'succeeded',
+                  finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                  stats_json = ?
+            WHERE id = ?`
+        ).run(JSON.stringify({ scanned_docs: 0, indexed_chunks: 0, mode: 'stub' }), id);
+        sseBroadcast({ type: 'memory.changed', payload: { indexJobId: id } });
+        const job = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, status, started_at, finished_at, stats_json, error_text, created_at, updated_at
+                 FROM memory_index_jobs
+                WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        return sendJson(
+          res,
+          200,
+          {
+            ok: true,
+            job: job
+              ? {
+                  ...job,
+                  stats_json: parseJsonRecord(job.stats_json),
+                }
+              : null,
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/models') {
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, provider_id, model_id, embedding_model_id, updated_at
+                 FROM memory_model_config
+                WHERE id = 1`
+            )
+            .all() as any
+        );
+        return sendJson(
+          res,
+          200,
+          {
+            id: 1,
+            provider_id: row?.provider_id ?? null,
+            model_id: row?.model_id ?? null,
+            embedding_model_id: row?.embedding_model_id ?? null,
+            updated_at: row?.updated_at ?? null,
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/memory/models') {
+        const body = await readJson(req);
+        const providerId = normalizeString(body?.provider_id ?? body?.providerId) || null;
+        const modelId = normalizeString(body?.model_id ?? body?.modelId) || null;
+        const embeddingModelId = normalizeString(body?.embedding_model_id ?? body?.embeddingModelId) || null;
+        db.prepare(
+          `INSERT INTO memory_model_config(id, provider_id, model_id, embedding_model_id)
+           VALUES (1, ?, ?, ?)
+           ON CONFLICT(id)
+           DO UPDATE SET
+             provider_id = excluded.provider_id,
+             model_id = excluded.model_id,
+             embedding_model_id = excluded.embedding_model_id`
+        ).run(providerId, modelId, embeddingModelId);
+        sseBroadcast({ type: 'memory.changed', payload: { models: true } });
+        return sendJson(
+          res,
+          200,
+          {
+            ok: true,
+            config: rowOrNull<any>(
+              db
+                .prepare(
+                  `SELECT id, provider_id, model_id, embedding_model_id, updated_at
+                     FROM memory_model_config
+                    WHERE id = 1`
+                )
+                .all() as any
+            ),
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'GET' && url.pathname === '/navigation/projects-tree') {
+        const projectIdFilter = normalizeString(url.searchParams.get('projectId') ?? '');
+        const includeArchived = normalizeString(url.searchParams.get('includeArchived')) === '1';
+        const limitRaw = Number(url.searchParams.get('limitPerSection') ?? '');
+        const limitPerSection = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(20, Math.max(1, Math.floor(limitRaw))) : 5;
+        const where: string[] = [];
+        const params: any[] = [];
+        if (projectIdFilter) {
+          where.push('w.id = ?');
+          params.push(projectIdFilter);
+        }
+        if (!includeArchived) {
+          where.push('COALESCE(w.is_archived, 0) = 0');
+        }
+        const projectRows = db
+          .prepare(
+            `SELECT
+               w.id,
+               w.name,
+               w.description,
+               w.position,
+               COALESCE(w.is_archived, 0) as is_archived,
+               w.archived_at,
+               w.created_at,
+               w.updated_at
+             FROM workspaces w
+             ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY COALESCE(w.is_archived, 0) ASC, w.position ASC, w.created_at ASC`
+          )
+          .all(...params) as any[];
+
+        const projects = projectRows.map((p) => {
+          const counters = rowOrNull<any>(
+            db
+              .prepare(
+                `SELECT
+                   COUNT(*) as total,
+                   SUM(CASE WHEN t.status = 'doing' THEN 1 ELSE 0 END) as doing,
+                   SUM(CASE WHEN t.status = 'review' THEN 1 ELSE 0 END) as review
+                 FROM tasks t
+                 JOIN boards b ON b.id = t.board_id
+                 WHERE COALESCE(t.workspace_id, b.workspace_id) = ?`
+              )
+              .all(p.id) as any
+          );
+          const needsUserCounter = rowOrNull<any>(
+            db
+              .prepare(
+                `SELECT COUNT(DISTINCT t.id) as c
+                   FROM tasks t
+                   JOIN boards b ON b.id = t.board_id
+                  WHERE COALESCE(t.workspace_id, b.workspace_id) = ?
+                    AND (
+                      t.status = 'review'
+                      OR EXISTS (
+                        SELECT 1
+                          FROM approvals ap
+                          JOIN agent_runs ar ON ar.id = ap.run_id
+                         WHERE ap.status = 'pending'
+                           AND ar.task_id = t.id
+                      )
+                    )`
+              )
+              .all(p.id) as any
+          );
+          const sectionRows = db
+            .prepare(
+              `SELECT id, workspace_id as project_id, name, description, position, view_mode, section_kind, created_at, updated_at
+                 FROM boards
+                WHERE workspace_id = ?
+                ORDER BY position ASC, created_at ASC`
+            )
+            .all(p.id) as any[];
+          const sections = sectionRows.map((s) => {
+            const sectionCounters = rowOrNull<any>(
+              db
+                .prepare(
+                  `SELECT
+                     COUNT(*) as total,
+                     SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END) as doing,
+                     SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END) as review
+                   FROM tasks
+                   WHERE board_id = ?`
+                )
+                .all(s.id) as any
+            );
+            const tasks = db
+              .prepare(
+                `SELECT id, board_id as section_id, board_id, workspace_id as project_id, workspace_id, title, status, updated_at
+                   FROM tasks
+                  WHERE board_id = ? AND status IN ('doing', 'review')
+                  ORDER BY updated_at DESC
+                  LIMIT ?`
+              )
+              .all(s.id, limitPerSection);
+            return {
+              ...s,
+              counters: {
+                total: Number(sectionCounters?.total ?? 0),
+                doing: Number(sectionCounters?.doing ?? 0),
+                review: Number(sectionCounters?.review ?? 0),
+              },
+              tasks,
+            };
+          });
+          const inProgressTasks = db
+            .prepare(
+              `SELECT
+                 t.id,
+                 t.board_id as section_id,
+                 t.board_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                 t.title,
+                 t.status,
+                 t.updated_at,
+                 0 as pending_approval
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE COALESCE(t.workspace_id, b.workspace_id) = ?
+                AND t.status = 'doing'
+              ORDER BY t.updated_at DESC
+              LIMIT ?`
+            )
+            .all(p.id, limitPerSection);
+          const needsUserTasks = db
+            .prepare(
+              `SELECT DISTINCT
+                 t.id,
+                 t.board_id as section_id,
+                 t.board_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                 t.title,
+                 t.status,
+                 t.updated_at,
+                 CASE
+                   WHEN EXISTS (
+                     SELECT 1
+                       FROM approvals ap
+                       JOIN agent_runs ar ON ar.id = ap.run_id
+                      WHERE ap.status = 'pending'
+                        AND ar.task_id = t.id
+                   ) THEN 1
+                   ELSE 0
+                 END as pending_approval
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE COALESCE(t.workspace_id, b.workspace_id) = ?
+                AND (
+                  t.status = 'review'
+                  OR EXISTS (
+                    SELECT 1
+                      FROM approvals ap
+                      JOIN agent_runs ar ON ar.id = ap.run_id
+                     WHERE ap.status = 'pending'
+                       AND ar.task_id = t.id
+                  )
+                )
+              ORDER BY pending_approval DESC, t.updated_at DESC
+              LIMIT ?`
+            )
+            .all(p.id, limitPerSection);
+          return {
+            ...p,
+            counters: {
+              total: Number(counters?.total ?? 0),
+              doing: Number(counters?.doing ?? 0),
+              review: Number(counters?.review ?? 0),
+              needs_user: Number(needsUserCounter?.c ?? 0),
+            },
+            sections,
+            focus_lists: {
+              in_progress_total: Number(counters?.doing ?? 0),
+              needs_user_total: Number(needsUserCounter?.c ?? 0),
+              in_progress: inProgressTasks,
+              needs_user: needsUserTasks,
+            },
+          };
+        });
+
+        return sendJson(res, 200, { projects, limit_per_section: limitPerSection }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/projects') {
+        const archivedMode = normalizeString(url.searchParams.get('archived'));
+        const where =
+          archivedMode === 'only'
+            ? 'WHERE COALESCE(w.is_archived, 0) = 1'
+            : archivedMode === 'all'
+              ? ''
+              : 'WHERE COALESCE(w.is_archived, 0) = 0';
+        const projects = db
+          .prepare(
+            `SELECT
+               w.id,
+               w.name,
+               w.description,
+               w.position,
+               COALESCE(w.is_archived, 0) as is_archived,
+               w.archived_at,
+               w.created_at,
+               w.updated_at,
+               (SELECT COUNT(*) FROM boards b WHERE b.workspace_id = w.id) as section_count,
+               (SELECT COUNT(*) FROM tasks t WHERE COALESCE(t.workspace_id, w.id) = w.id) as task_count
+             FROM workspaces w
+             ${where}
+             ORDER BY COALESCE(w.is_archived, 0) ASC, w.position ASC, w.created_at ASC`
+          )
+          .all();
+        return sendJson(res, 200, projects, corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/projects') {
+        const body = await readJson(req);
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        const description = typeof body?.description === 'string' ? body.description : null;
+        if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
+
+        const projectId = randomUUID();
+        const nextPosition = Number(
+          rowOrNull<{ v: number }>(
+            db.prepare('SELECT COALESCE(MAX(position), -1) as v FROM workspaces WHERE COALESCE(is_archived, 0) = 0').all() as any
+          )?.v ?? -1
+        ) + 1;
+        db.exec('BEGIN');
+        try {
+          db
+            .prepare('INSERT INTO workspaces(id, name, description, position, is_archived, archived_at) VALUES (?, ?, ?, ?, 0, NULL)')
+            .run(projectId, name, description, nextPosition);
+          const insSection = db.prepare(
+            'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          );
+          for (const section of DEFAULT_PROJECT_SECTIONS) {
+            insSection.run(
+              randomUUID(),
+              projectId,
+              section.name,
+              section.description,
+              section.position,
+              section.viewMode,
+              section.kind
+            );
+          }
+          const insStatus = db.prepare(
+            'INSERT INTO project_statuses(id, workspace_id, status_key, label, position) VALUES (?, ?, ?, ?, ?)'
+          );
+          for (const status of DEFAULT_PROJECT_STATUSES) {
+            insStatus.run(randomUUID(), projectId, status.key, status.label, status.position);
+          }
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        const project = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, name, description, position, COALESCE(is_archived, 0) as is_archived, archived_at, created_at, updated_at
+                 FROM workspaces
+                WHERE id = ?`
+            )
+            .all(projectId) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
+        return sendJson(res, 201, project, corsHeaders);
+      }
+
+      if (req.method === 'POST' && url.pathname === '/projects/reorder') {
+        const body = await readJson(req);
+        const orderedIds = Array.isArray(body?.orderedIds) ? body.orderedIds.map((id: any) => String(id)) : [];
+        if (orderedIds.length === 0) return sendJson(res, 400, { error: 'orderedIds must be a non-empty array' }, corsHeaders);
+
+        db.exec('BEGIN');
+        try {
+          const upd = db.prepare(
+            'UPDATE workspaces SET position = ? WHERE id = ? AND COALESCE(is_archived, 0) = 0'
+          );
+          orderedIds.forEach((id: string, idx: number) => {
+            upd.run(idx, id);
+          });
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+
+        sseBroadcast({ type: 'projects.changed', payload: {} });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const patchProjectMatch = req.method === 'PATCH' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
+      if (patchProjectMatch) {
+        const projectId = decodeURIComponent(patchProjectMatch[1]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.name !== undefined) {
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name) return sendJson(res, 400, { error: 'name must be a non-empty string' }, corsHeaders);
+          updates.push('name = ?');
+          params.push(name);
+        }
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+        if (body?.position !== undefined) {
+          const position = Number(body.position);
+          if (!Number.isFinite(position)) return sendJson(res, 400, { error: 'position must be a number' }, corsHeaders);
+          updates.push('position = ?');
+          params.push(Math.max(0, Math.floor(position)));
+        }
+        if (body?.isArchived !== undefined || body?.is_archived !== undefined) {
+          const raw = body?.isArchived ?? body?.is_archived;
+          const isArchived =
+            raw === true || raw === 1 || raw === '1' || String(raw).toLowerCase() === 'true';
+          updates.push('is_archived = ?');
+          params.push(isArchived ? 1 : 0);
+          updates.push('archived_at = ?');
+          params.push(isArchived ? new Date().toISOString() : null);
+          if (body?.position === undefined) {
+            const maxRow = rowOrNull<{ v: number }>(
+              db
+                .prepare(
+                  'SELECT COALESCE(MAX(position), -1) as v FROM workspaces WHERE COALESCE(is_archived, 0) = ? AND id <> ?'
+                )
+                .all(isArchived ? 1 : 0, projectId) as any
+            );
+            updates.push('position = ?');
+            params.push(Number(maxRow?.v ?? -1) + 1);
+          }
+        }
+        if (!updates.length) {
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position/isArchived)' }, corsHeaders);
+        }
+
+        params.push(projectId);
+        const info = db.prepare(`UPDATE workspaces SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
+
+        const project = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, name, description, position, COALESCE(is_archived, 0) as is_archived, archived_at, created_at, updated_at
+                 FROM workspaces
+                WHERE id = ?`
+            )
+            .all(projectId) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        return sendJson(res, 200, project, corsHeaders);
+      }
+
+      const deleteProjectMatch = req.method === 'DELETE' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
+      if (deleteProjectMatch) {
+        const projectId = decodeURIComponent(deleteProjectMatch[1]);
+        const info = db.prepare('DELETE FROM workspaces WHERE id = ?').run(projectId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const listSectionsMatch = req.method === 'GET' ? url.pathname.match(/^\/projects\/([^/]+)\/sections$/) : null;
+      if (listSectionsMatch) {
+        const projectId = decodeURIComponent(listSectionsMatch[1]);
+        const sections = db
+          .prepare(
+            `SELECT
+               id,
+               workspace_id as project_id,
+               workspace_id,
+               name,
+               description,
+               position,
+               view_mode,
+               section_kind,
+               created_at,
+               updated_at
+             FROM boards
+             WHERE workspace_id = ?
+             ORDER BY position ASC, created_at ASC`
+          )
+          .all(projectId);
+        return sendJson(res, 200, sections, corsHeaders);
+      }
+
+      const createSectionMatch = req.method === 'POST' ? url.pathname.match(/^\/projects\/([^/]+)\/sections$/) : null;
+      if (createSectionMatch) {
+        const projectId = decodeURIComponent(createSectionMatch[1]);
+        const body = await readJson(req);
+        const name = typeof body?.name === 'string' ? body.name.trim() : '';
+        const description = typeof body?.description === 'string' ? body.description : null;
+        const viewMode = normalizeString(body?.viewMode ?? body?.view_mode) || 'kanban';
+        const sectionKind = normalizeString(body?.sectionKind ?? body?.section_kind) || 'section';
+
+        if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
+        if (viewMode !== 'kanban' && viewMode !== 'threads') {
+          return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+        }
+        if (sectionKind !== 'section' && sectionKind !== 'inbox') {
+          return sendJson(res, 400, { error: 'sectionKind must be section or inbox' }, corsHeaders);
+        }
+
+        const project = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM workspaces WHERE id = ?').all(projectId) as any);
+        if (!project) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
+
+        const sectionId = randomUUID();
+        db.prepare(
+          'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(
+          sectionId,
+          projectId,
+          name,
+          description,
+          Number.isFinite(Number(body?.position)) ? Number(body.position) : 0,
+          viewMode,
+          sectionKind
+        );
+
+        const section = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, name, description, position, view_mode, section_kind, created_at, updated_at
+                 FROM boards WHERE id = ?`
+            )
+            .all(sectionId) as any
+        );
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
+        return sendJson(res, 201, section, corsHeaders);
+      }
+
+      const patchSectionMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/projects\/([^/]+)\/sections\/([^/]+)$/)
+        : null;
+      if (patchSectionMatch) {
+        const projectId = decodeURIComponent(patchSectionMatch[1]);
+        const sectionId = decodeURIComponent(patchSectionMatch[2]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.name !== undefined) {
+          const name = typeof body.name === 'string' ? body.name.trim() : '';
+          if (!name) return sendJson(res, 400, { error: 'name must be a non-empty string' }, corsHeaders);
+          updates.push('name = ?');
+          params.push(name);
+        }
+        if (body?.description !== undefined) {
+          const description = body.description === null ? null : typeof body.description === 'string' ? body.description : undefined;
+          if (description === undefined) return sendJson(res, 400, { error: 'description must be a string or null' }, corsHeaders);
+          updates.push('description = ?');
+          params.push(description);
+        }
+        if (body?.position !== undefined) {
+          const position = Number(body.position);
+          if (!Number.isFinite(position)) return sendJson(res, 400, { error: 'position must be a number' }, corsHeaders);
+          updates.push('position = ?');
+          params.push(position);
+        }
+        if (body?.viewMode !== undefined || body?.view_mode !== undefined) {
+          const viewMode = normalizeString(body?.viewMode ?? body?.view_mode);
+          if (viewMode !== 'kanban' && viewMode !== 'threads') {
+            return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+          }
+          updates.push('view_mode = ?');
+          params.push(viewMode);
+        }
+        if (body?.sectionKind !== undefined || body?.section_kind !== undefined) {
+          const sectionKind = normalizeString(body?.sectionKind ?? body?.section_kind);
+          if (sectionKind !== 'section' && sectionKind !== 'inbox') {
+            return sendJson(res, 400, { error: 'sectionKind must be section or inbox' }, corsHeaders);
+          }
+          updates.push('section_kind = ?');
+          params.push(sectionKind);
+        }
+        if (!updates.length) {
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position/viewMode/sectionKind)' }, corsHeaders);
+        }
+
+        params.push(sectionId, projectId);
+        const info = db.prepare(`UPDATE boards SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+
+        const section = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, name, description, position, view_mode, section_kind, created_at, updated_at
+                 FROM boards WHERE id = ?`
+            )
+            .all(sectionId) as any
+        );
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
+        return sendJson(res, 200, section, corsHeaders);
+      }
+
+      const deleteSectionMatch = req.method === 'DELETE'
+        ? url.pathname.match(/^\/projects\/([^/]+)\/sections\/([^/]+)$/)
+        : null;
+      if (deleteSectionMatch) {
+        const projectId = decodeURIComponent(deleteSectionMatch[1]);
+        const sectionId = decodeURIComponent(deleteSectionMatch[2]);
+        const info = db.prepare('DELETE FROM boards WHERE id = ? AND workspace_id = ?').run(sectionId, projectId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const listProjectStatusesMatch = req.method === 'GET' ? url.pathname.match(/^\/projects\/([^/]+)\/statuses$/) : null;
+      if (listProjectStatusesMatch) {
+        const projectId = decodeURIComponent(listProjectStatusesMatch[1]);
+        const rows = db
+          .prepare(
+            `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
+               FROM project_statuses
+              WHERE workspace_id = ?
+              ORDER BY position ASC, created_at ASC`
+          )
+          .all(projectId);
+        return sendJson(res, 200, rows, corsHeaders);
+      }
+
+      const createProjectStatusMatch = req.method === 'POST' ? url.pathname.match(/^\/projects\/([^/]+)\/statuses$/) : null;
+      if (createProjectStatusMatch) {
+        const projectId = decodeURIComponent(createProjectStatusMatch[1]);
+        const body = await readJson(req);
+        const statusKey = normalizeString(body?.status_key ?? body?.key ?? body?.statusKey);
+        const label = normalizeString(body?.label);
+        if (!statusKey) return sendJson(res, 400, { error: 'status_key is required' }, corsHeaders);
+        if (!label) return sendJson(res, 400, { error: 'label is required' }, corsHeaders);
+
+        const id = randomUUID();
+        db.prepare(
+          'INSERT INTO project_statuses(id, workspace_id, status_key, label, position) VALUES (?, ?, ?, ?, ?)'
+        ).run(id, projectId, statusKey, label, Number.isFinite(Number(body?.position)) ? Number(body.position) : 0);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
+                 FROM project_statuses WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        return sendJson(res, 201, row, corsHeaders);
+      }
+
+      const patchProjectStatusMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/projects\/([^/]+)\/statuses\/([^/]+)$/)
+        : null;
+      if (patchProjectStatusMatch) {
+        const projectId = decodeURIComponent(patchProjectStatusMatch[1]);
+        const statusId = decodeURIComponent(patchProjectStatusMatch[2]);
+        const body = await readJson(req);
+        const updates: string[] = [];
+        const params: any[] = [];
+
+        if (body?.status_key !== undefined || body?.key !== undefined || body?.statusKey !== undefined) {
+          const statusKey = normalizeString(body?.status_key ?? body?.key ?? body?.statusKey);
+          if (!statusKey) return sendJson(res, 400, { error: 'status_key must be non-empty' }, corsHeaders);
+          updates.push('status_key = ?');
+          params.push(statusKey);
+        }
+        if (body?.label !== undefined) {
+          const label = normalizeString(body?.label);
+          if (!label) return sendJson(res, 400, { error: 'label must be non-empty' }, corsHeaders);
+          updates.push('label = ?');
+          params.push(label);
+        }
+        if (body?.position !== undefined) {
+          const position = Number(body.position);
+          if (!Number.isFinite(position)) return sendJson(res, 400, { error: 'position must be a number' }, corsHeaders);
+          updates.push('position = ?');
+          params.push(position);
+        }
+        if (!updates.length) {
+          return sendJson(res, 400, { error: 'No valid fields to update (status_key/label/position)' }, corsHeaders);
+        }
+        params.push(statusId, projectId);
+        const info = db.prepare(`UPDATE project_statuses SET ${updates.join(', ')} WHERE id = ? AND workspace_id = ?`).run(...params);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Project status not found' }, corsHeaders);
+
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
+                 FROM project_statuses WHERE id = ?`
+            )
+            .all(statusId) as any
+        );
+        sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        return sendJson(res, 200, row, corsHeaders);
+      }
+
+      // Legacy board endpoints remain available as aliases to sections.
       if (req.method === 'GET' && url.pathname === '/boards') {
         const boards = db
           .prepare(
-            'SELECT id, workspace_id, name, description, position, created_at, updated_at FROM boards ORDER BY position ASC, created_at ASC'
+            `SELECT
+               id,
+               workspace_id,
+               workspace_id as project_id,
+               name,
+               description,
+               position,
+               view_mode,
+               section_kind,
+               created_at,
+               updated_at
+             FROM boards
+             ORDER BY position ASC, created_at ASC`
           )
           .all();
         return sendJson(res, 200, boards, corsHeaders);
@@ -3897,24 +5608,37 @@ const server = http.createServer(async (req, res) => {
         const body = await readJson(req);
         const name = typeof body?.name === 'string' ? body.name.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
-        let workspaceId = typeof body?.workspaceId === 'string' ? body.workspaceId : null;
-        if (!workspaceId) workspaceId = getDefaultWorkspaceId(db);
-        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        let projectId =
+          (typeof body?.projectId === 'string' ? body.projectId : null) ??
+          (typeof body?.workspaceId === 'string' ? body.workspaceId : null);
+        if (!projectId) projectId = getDefaultProjectId(db);
+        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no project exists)' }, corsHeaders);
         if (!name) return sendJson(res, 400, { error: 'name is required' }, corsHeaders);
+
+        const viewMode = normalizeString(body?.viewMode ?? body?.view_mode) || 'kanban';
+        const sectionKind = normalizeString(body?.sectionKind ?? body?.section_kind) || 'section';
+        if (viewMode !== 'kanban' && viewMode !== 'threads') {
+          return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+        }
+        if (sectionKind !== 'section' && sectionKind !== 'inbox') {
+          return sendJson(res, 400, { error: 'sectionKind must be section or inbox' }, corsHeaders);
+        }
 
         const id = randomUUID();
         db.prepare(
-          'INSERT INTO boards(id, workspace_id, name, description, position) VALUES (?, ?, ?, ?, ?)'
-        ).run(id, workspaceId, name, description, body?.position ?? 0);
+          'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(id, projectId, name, description, body?.position ?? 0, viewMode, sectionKind);
 
-        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId } });
+        sseBroadcast({ type: 'sections.changed', payload: { sectionId: id, boardId: id, projectId, workspaceId: projectId } });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId: projectId } });
 
-        const board = rowOrNull<any>(
+        const section = rowOrNull<any>(
           db.prepare(
-            'SELECT id, workspace_id, name, description, position, created_at, updated_at FROM boards WHERE id = ?'
+            `SELECT id, workspace_id, workspace_id as project_id, name, description, position, view_mode, section_kind, created_at, updated_at
+               FROM boards WHERE id = ?`
           ).all(id) as any
         );
-        return sendJson(res, 201, board, corsHeaders);
+        return sendJson(res, 201, section, corsHeaders);
       }
 
       const patchBoardMatch = req.method === 'PATCH' ? url.pathname.match(/^\/boards\/([^/]+)$/) : null;
@@ -3942,31 +5666,50 @@ const server = http.createServer(async (req, res) => {
           updates.push('position = ?');
           params.push(position);
         }
+        if (body?.viewMode !== undefined || body?.view_mode !== undefined) {
+          const viewMode = normalizeString(body?.viewMode ?? body?.view_mode);
+          if (viewMode !== 'kanban' && viewMode !== 'threads') {
+            return sendJson(res, 400, { error: 'viewMode must be kanban or threads' }, corsHeaders);
+          }
+          updates.push('view_mode = ?');
+          params.push(viewMode);
+        }
 
         if (!updates.length) {
-          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position)' }, corsHeaders);
+          return sendJson(res, 400, { error: 'No valid fields to update (name/description/position/viewMode)' }, corsHeaders);
         }
 
         params.push(id);
         const info = db.prepare(`UPDATE boards SET ${updates.join(', ')} WHERE id = ?`).run(...params);
-        if (info.changes === 0) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
 
-        sseBroadcast({ type: 'boards.changed', payload: { boardId: id } });
+        const sectionMeta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(id) as any);
+        sseBroadcast({
+          type: 'sections.changed',
+          payload: { sectionId: id, boardId: id, projectId: sectionMeta?.workspace_id ?? null, workspaceId: sectionMeta?.workspace_id ?? null },
+        });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId: sectionMeta?.workspace_id ?? null } });
 
-        const board = rowOrNull<any>(
+        const section = rowOrNull<any>(
           db.prepare(
-            'SELECT id, workspace_id, name, description, position, created_at, updated_at FROM boards WHERE id = ?'
+            `SELECT id, workspace_id, workspace_id as project_id, name, description, position, view_mode, section_kind, created_at, updated_at
+               FROM boards WHERE id = ?`
           ).all(id) as any
         );
-        return sendJson(res, 200, board, corsHeaders);
+        return sendJson(res, 200, section, corsHeaders);
       }
 
       const deleteBoardMatch = req.method === 'DELETE' ? url.pathname.match(/^\/boards\/([^/]+)$/) : null;
       if (deleteBoardMatch) {
         const id = decodeURIComponent(deleteBoardMatch[1]);
+        const sectionMeta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(id) as any);
         const info = db.prepare('DELETE FROM boards WHERE id = ?').run(id);
-        if (info.changes === 0) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
-        sseBroadcast({ type: 'boards.changed', payload: { boardId: id } });
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        sseBroadcast({
+          type: 'sections.changed',
+          payload: { sectionId: id, boardId: id, projectId: sectionMeta?.workspace_id ?? null, workspaceId: sectionMeta?.workspace_id ?? null },
+        });
+        sseBroadcast({ type: 'boards.changed', payload: { boardId: id, workspaceId: sectionMeta?.workspace_id ?? null } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -4134,20 +5877,57 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/tasks') {
-        let boardId = url.searchParams.get('boardId');
-        if (!boardId) boardId = getDefaultBoardId(db);
-        if (!boardId) return sendJson(res, 400, { error: 'Missing boardId (and no default board exists)' }, corsHeaders);
+        const viewMode = normalizeString(url.searchParams.get('viewMode') ?? '');
+        const sectionId = normalizeString(url.searchParams.get('sectionId') ?? url.searchParams.get('boardId') ?? '') || null;
+        let projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
+        const queryText = normalizeString(url.searchParams.get('q') ?? '');
+        const statusesRaw = normalizeString(url.searchParams.get('statuses') ?? '');
+        const statuses = statusesRaw
+          ? statusesRaw
+              .split(',')
+              .map((s) => s.trim())
+              .filter((s) => TASK_STATUSES.has(s))
+          : [];
+
+        if (!projectId && sectionId) {
+          const sectionMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any
+          );
+          projectId = sectionMeta?.workspace_id ?? null;
+        }
+        if (!projectId) projectId = getDefaultProjectId(db);
+        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no default project exists)' }, corsHeaders);
+
+        const where: string[] = ['COALESCE(t.workspace_id, b.workspace_id) = ?'];
+        const params: any[] = [projectId];
+        if (sectionId) {
+          where.push('t.board_id = ?');
+          params.push(sectionId);
+        }
+        if (statuses.length > 0) {
+          where.push(`t.status IN (${statuses.map(() => '?').join(', ')})`);
+          params.push(...statuses);
+        }
+        if (queryText) {
+          where.push('(lower(t.title) LIKE ? OR lower(COALESCE(t.description, \'\')) LIKE ?)');
+          const needle = `%${queryText.toLowerCase()}%`;
+          params.push(needle, needle);
+        }
 
         const tasks = db
           .prepare(
             `SELECT
                t.id,
+               COALESCE(t.workspace_id, b.workspace_id) as project_id,
+               COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+               t.board_id as section_id,
                t.board_id,
                t.title,
                t.description,
                t.status,
                t.position,
                t.due_at,
+               t.is_inbox,
                t.created_at,
                t.updated_at,
                s.agent_id,
@@ -4158,8 +5938,10 @@ const server = http.createServer(async (req, res) => {
                r.started_at as run_started_at,
                r.updated_at as run_updated_at,
                r.finished_at as run_finished_at,
-               rs.kind as run_step_kind
+               rs.kind as run_step_kind,
+               ? as view_mode
              FROM tasks t
+             JOIN boards b ON b.id = t.board_id
              LEFT JOIN task_sessions s ON s.task_id = t.id
              LEFT JOIN agents a ON a.id = s.agent_id
              LEFT JOIN agent_runs r ON r.id = (
@@ -4168,25 +5950,26 @@ const server = http.createServer(async (req, res) => {
              LEFT JOIN run_steps rs ON rs.id = (
                SELECT id FROM run_steps WHERE run_id = r.id ORDER BY step_index DESC LIMIT 1
              )
-             WHERE t.board_id = ?
+             WHERE ${where.join(' AND ')}
              ORDER BY t.position ASC, t.created_at ASC`
           )
-          .all(boardId);
+          .all(viewMode === 'threads' ? 'threads' : 'kanban', ...params);
         return sendJson(res, 200, tasks, corsHeaders);
       }
 
       if (req.method === 'POST' && url.pathname === '/tasks/reorder') {
         const body = await readJson(req);
-        const boardId = typeof body?.boardId === 'string' ? body.boardId : null;
+        const sectionId = normalizeString(body?.sectionId ?? body?.boardId);
+        const projectId = normalizeString(body?.projectId ?? body?.workspaceId);
         const orderedIds = Array.isArray(body?.orderedIds) ? body.orderedIds.map((id: any) => String(id)) : [];
-        if (!boardId) return sendJson(res, 400, { error: 'boardId is required' }, corsHeaders);
+        if (!sectionId) return sendJson(res, 400, { error: 'sectionId is required' }, corsHeaders);
         if (orderedIds.length === 0) return sendJson(res, 400, { error: 'orderedIds must be a non-empty array' }, corsHeaders);
 
         db.exec('BEGIN');
         try {
           const upd = db.prepare('UPDATE tasks SET position = ? WHERE id = ? AND board_id = ?');
           orderedIds.forEach((id: string, idx: number) => {
-            upd.run(idx, id, boardId);
+            upd.run(idx, id, sectionId);
           });
           db.exec('COMMIT');
         } catch (e) {
@@ -4194,7 +5977,16 @@ const server = http.createServer(async (req, res) => {
           throw e;
         }
 
-        sseBroadcast({ type: 'tasks.changed', payload: { boardId } });
+        const meta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any);
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            sectionId,
+            boardId: sectionId,
+            projectId: projectId || (meta?.workspace_id ?? null),
+            workspaceId: projectId || (meta?.workspace_id ?? null),
+          },
+        });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -4203,30 +5995,65 @@ const server = http.createServer(async (req, res) => {
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
         const status = typeof body?.status === 'string' ? body.status : 'ideas';
-        let boardId = typeof body?.boardId === 'string' ? body.boardId : null;
-        if (!boardId) boardId = getDefaultBoardId(db);
-        if (!boardId) return sendJson(res, 400, { error: 'Missing boardId (and no default board exists)' }, corsHeaders);
+        const requestedSectionId = normalizeString(body?.sectionId ?? body?.boardId) || null;
+        let projectId = normalizeString(body?.projectId ?? body?.workspaceId) || null;
 
         if (!title) return sendJson(res, 400, { error: 'title is required' }, corsHeaders);
-        if (!TASK_STATUSES.has(status)) {
+
+        let sectionId = requestedSectionId;
+        if (!projectId && sectionId) {
+          const sectionMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any
+          );
+          projectId = sectionMeta?.workspace_id ?? null;
+        }
+        if (!projectId) projectId = getDefaultProjectId(db);
+        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no default project exists)' }, corsHeaders);
+        if (!sectionId) sectionId = getProjectInboxSectionId(db, projectId) ?? getDefaultSectionId(db, projectId);
+        if (!sectionId) return sendJson(res, 400, { error: 'Missing sectionId (and no default section exists)' }, corsHeaders);
+
+        const sectionRow = rowOrNull<{ id: string; workspace_id: string; section_kind: string }>(
+          db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(sectionId) as any
+        );
+        if (!sectionRow) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        if (sectionRow.workspace_id !== projectId) {
+          return sendJson(res, 400, { error: 'sectionId does not belong to projectId' }, corsHeaders);
+        }
+
+        const projectStatusCount = rowOrNull<{ c: number }>(
+          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ?').all(projectId) as any
+        )?.c ?? 0;
+        const hasStatus = rowOrNull<{ c: number }>(
+          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ? AND status_key = ?').all(projectId, status) as any
+        )?.c ?? 0;
+        if ((projectStatusCount > 0 && hasStatus === 0) || (projectStatusCount === 0 && !TASK_STATUSES.has(status))) {
           return sendJson(res, 400, { error: 'Invalid status' }, corsHeaders);
         }
 
         const id = randomUUID();
-        db.prepare('INSERT INTO tasks(id, board_id, title, description, status, position) VALUES (?, ?, ?, ?, ?, ?)').run(
+        db.prepare(
+          'INSERT INTO tasks(id, board_id, workspace_id, title, description, status, position, is_inbox) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        ).run(
           id,
-          boardId,
+          sectionId,
+          projectId,
           title,
           description,
           status,
-          Number.isFinite(Number(body?.position)) ? Number(body.position) : 0
+          Number.isFinite(Number(body?.position)) ? Number(body.position) : 0,
+          sectionRow.section_kind === 'inbox' ? 1 : 0
         );
 
-        sseBroadcast({ type: 'tasks.changed', payload: { boardId, taskId: id } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: { sectionId, boardId: sectionId, taskId: id, projectId, workspaceId: projectId },
+        });
 
         const task = rowOrNull<any>(
           db.prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
+            `SELECT id, board_id as section_id, board_id, workspace_id as project_id, workspace_id,
+                    title, description, status, position, due_at, is_inbox, created_at, updated_at
+               FROM tasks WHERE id = ?`
           ).all(id) as any
         );
         return sendJson(res, 201, task, corsHeaders);
@@ -4341,8 +6168,18 @@ const server = http.createServer(async (req, res) => {
         }
 
         db.prepare("UPDATE task_sessions SET status = 'idle' WHERE task_id = ?").run(taskId);
+        const taskMeta = getTaskMeta(taskId);
         sseBroadcast({ type: 'runs.changed', payload: { taskId, runId: session.last_run_id } });
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            taskId,
+            sectionId: taskMeta?.section_id ?? null,
+            boardId: taskMeta?.board_id ?? null,
+            projectId: taskMeta?.project_id ?? null,
+            workspaceId: taskMeta?.workspace_id ?? null,
+          },
+        });
         return sendJson(res, 200, { ok: true, stopped: Boolean(controller), runId: session.last_run_id }, corsHeaders);
       }
 
@@ -4539,9 +6376,14 @@ const server = http.createServer(async (req, res) => {
         const taskId = decodeURIComponent(requestApprovalMatch[1]);
         const body = await readJson(req);
 
-        const taskRow = rowOrNull<{ id: string; board_id: string; workspace_id: string; title: string }>(
+        const taskRow = rowOrNull<{ id: string; section_id: string; board_id: string; project_id: string; workspace_id: string; title: string }>(
           db.prepare(
-            `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id, t.title as title
+            `SELECT t.id as id,
+                    t.board_id as section_id,
+                    t.board_id as board_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                    t.title as title
              FROM tasks t
              JOIN boards b ON b.id = t.board_id
              WHERE t.id = ?`
@@ -4567,7 +6409,7 @@ const server = http.createServer(async (req, res) => {
             runId = randomUUID();
             db.prepare(
               'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, ?, ?, ?, ?)'
-            ).run(runId, taskRow.workspace_id, taskRow.board_id, taskRow.id, 'user', 'running');
+            ).run(runId, taskRow.project_id, taskRow.section_id, taskRow.id, 'user', 'running');
           }
 
           const approvalId = randomUUID();
@@ -4575,7 +6417,18 @@ const server = http.createServer(async (req, res) => {
             'INSERT INTO approvals(id, run_id, step_id, status, request_title, request_body) VALUES (?, ?, ?, ?, ?, ?)'
           ).run(approvalId, runId, stepId, 'pending', requestTitle, requestBody);
 
-          sseBroadcast({ type: 'approvals.changed', payload: { approvalId, status: 'pending', taskId: taskId, boardId: taskRow.board_id } });
+          sseBroadcast({
+            type: 'approvals.changed',
+            payload: {
+              approvalId,
+              status: 'pending',
+              taskId: taskId,
+              sectionId: taskRow.section_id,
+              boardId: taskRow.board_id,
+              projectId: taskRow.project_id,
+              workspaceId: taskRow.workspace_id,
+            },
+          });
 
           db.exec('COMMIT');
 
@@ -4595,6 +6448,9 @@ const server = http.createServer(async (req, res) => {
                    a.decision_reason,
                    a.created_at,
                    a.updated_at,
+                   r.workspace_id as project_id,
+                   r.workspace_id as workspace_id,
+                   r.board_id as section_id,
                    r.task_id as task_id,
                    r.board_id as board_id,
                    t.title as task_title
@@ -4616,9 +6472,13 @@ const server = http.createServer(async (req, res) => {
       if (simulateMatch) {
         const taskId = simulateMatch[1];
 
-        const taskRow = rowOrNull<{ id: string; board_id: string; workspace_id: string }>(
+        const taskRow = rowOrNull<{ id: string; section_id: string; board_id: string; project_id: string; workspace_id: string }>(
           db.prepare(
-            `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id
+            `SELECT t.id as id,
+                    t.board_id as section_id,
+                    t.board_id as board_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                    COALESCE(t.workspace_id, b.workspace_id) as workspace_id
              FROM tasks t
              JOIN boards b ON b.id = t.board_id
              WHERE t.id = ?`
@@ -4633,7 +6493,7 @@ const server = http.createServer(async (req, res) => {
         try {
           db.prepare(
             'INSERT INTO agent_runs(id, workspace_id, board_id, task_id, agent_name, status) VALUES (?, ?, ?, ?, ?, ?)'
-          ).run(runId, taskRow.workspace_id, taskRow.board_id, taskRow.id, 'simulator', 'running');
+          ).run(runId, taskRow.project_id, taskRow.section_id, taskRow.id, 'simulator', 'running');
 
           const ins = db.prepare(
             'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
@@ -4667,7 +6527,17 @@ const server = http.createServer(async (req, res) => {
           }
         })();
 
-        sseBroadcast({ type: 'runs.changed', payload: { runId, taskId } });
+        sseBroadcast({
+          type: 'runs.changed',
+          payload: {
+            runId,
+            taskId,
+            sectionId: taskRow.section_id,
+            boardId: taskRow.board_id,
+            projectId: taskRow.project_id,
+            workspaceId: taskRow.workspace_id,
+          },
+        });
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
@@ -4678,7 +6548,7 @@ const server = http.createServer(async (req, res) => {
 
         const runs = db
           .prepare(
-            `SELECT id, workspace_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
+            `SELECT id, workspace_id as project_id, workspace_id, board_id as section_id, board_id, task_id, agent_name, status, started_at, finished_at, created_at, updated_at,
                     input_tokens, output_tokens, total_tokens,
                     CASE
                       WHEN status = 'running' AND julianday(created_at) < julianday('now') - (? / 1440.0) THEN 1
@@ -4719,15 +6589,78 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, payload, corsHeaders);
       }
 
+      const taskDetailsMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
+      if (taskDetailsMatch) {
+        const taskId = decodeURIComponent(taskDetailsMatch[1]);
+        const task = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 t.id,
+                 COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                 t.board_id as section_id,
+                 t.board_id,
+                 t.title,
+                 t.description,
+                 t.status,
+                 t.position,
+                 t.due_at,
+                 t.is_inbox,
+                 t.created_at,
+                 t.updated_at,
+                 b.name as section_name,
+                 b.view_mode,
+                 s.agent_id,
+                 s.status as session_status,
+                 s.last_run_id,
+                 a.display_name as agent_display_name,
+                 r.status as run_status,
+                 r.started_at as run_started_at,
+                 r.updated_at as run_updated_at,
+                 r.finished_at as run_finished_at,
+                 rs.kind as run_step_kind
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               LEFT JOIN task_sessions s ON s.task_id = t.id
+               LEFT JOIN agents a ON a.id = s.agent_id
+               LEFT JOIN agent_runs r ON r.id = (
+                 SELECT id FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
+               )
+               LEFT JOIN run_steps rs ON rs.id = (
+                 SELECT id FROM run_steps WHERE run_id = r.id ORDER BY step_index DESC LIMIT 1
+               )
+              WHERE t.id = ?`
+            )
+            .all(taskId) as any
+        );
+        if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        return sendJson(res, 200, task, corsHeaders);
+      }
+
       const deleteTaskMatch = req.method === 'DELETE' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
       if (deleteTaskMatch) {
         const id = decodeURIComponent(deleteTaskMatch[1]);
-        const meta = rowOrNull<{ board_id: string }>(
-          db.prepare('SELECT board_id FROM tasks WHERE id = ?').all(id) as any
+        const meta = rowOrNull<{ section_id: string; board_id: string; project_id: string; workspace_id: string }>(
+          db
+            .prepare(
+              `SELECT board_id as section_id, board_id, workspace_id as project_id, workspace_id
+                 FROM tasks WHERE id = ?`
+            )
+            .all(id) as any
         );
         const info = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id, boardId: meta?.board_id ?? null } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            taskId: id,
+            sectionId: meta?.section_id ?? null,
+            boardId: meta?.board_id ?? null,
+            projectId: meta?.project_id ?? null,
+            workspaceId: meta?.workspace_id ?? null,
+          },
+        });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -4735,14 +6668,26 @@ const server = http.createServer(async (req, res) => {
       if (patchMatch) {
         const id = patchMatch[1];
         const body = await readJson(req);
-        const existing = rowOrNull<{ status: string; board_id: string; workspace_id: string; title: string; description: string | null }>(
+        const existing = rowOrNull<{
+          status: string;
+          section_id: string;
+          board_id: string;
+          project_id: string;
+          workspace_id: string;
+          title: string;
+          description: string | null;
+        }>(
           db
             .prepare(
-              `SELECT t.status as status, t.board_id as board_id, b.workspace_id as workspace_id,
-                      t.title as title, t.description as description
-               FROM tasks t
-               JOIN boards b ON b.id = t.board_id
-               WHERE t.id = ?`
+              `SELECT status,
+                      board_id as section_id,
+                      board_id,
+                      workspace_id as project_id,
+                      workspace_id,
+                      title,
+                      description
+                 FROM tasks
+                WHERE id = ?`
             )
             .all(id) as any
         );
@@ -4750,6 +6695,10 @@ const server = http.createServer(async (req, res) => {
 
         const updates: string[] = [];
         const params: any[] = [];
+        let nextSectionId = existing.section_id;
+        let nextProjectId = existing.project_id;
+        let nextWorkspaceId = existing.workspace_id;
+        let nextIsInbox: number | null = null;
 
         if (body?.title !== undefined) {
           const title = typeof body.title === 'string' ? body.title.trim() : '';
@@ -4767,11 +6716,33 @@ const server = http.createServer(async (req, res) => {
 
         if (body?.status !== undefined) {
           const status = typeof body.status === 'string' ? body.status : '';
-          if (!TASK_STATUSES.has(status)) {
+          const projectStatusCount = rowOrNull<{ c: number }>(
+            db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ?').all(nextProjectId) as any
+          )?.c ?? 0;
+          const hasStatus = rowOrNull<{ c: number }>(
+            db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ? AND status_key = ?').all(nextProjectId, status) as any
+          )?.c ?? 0;
+          if ((projectStatusCount > 0 && hasStatus === 0) || (projectStatusCount === 0 && !TASK_STATUSES.has(status))) {
             return sendJson(res, 400, { error: 'Invalid status' }, corsHeaders);
           }
           updates.push('status = ?');
           params.push(status);
+        }
+
+        if (body?.sectionId !== undefined || body?.boardId !== undefined) {
+          const sectionId = normalizeString(body?.sectionId ?? body?.boardId);
+          if (!sectionId) return sendJson(res, 400, { error: 'sectionId must be a non-empty string' }, corsHeaders);
+          const sectionRow = rowOrNull<{ id: string; workspace_id: string; section_kind: string }>(
+            db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(sectionId) as any
+          );
+          if (!sectionRow) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+          nextSectionId = sectionRow.id;
+          nextProjectId = sectionRow.workspace_id;
+          nextIsInbox = sectionRow.section_kind === 'inbox' ? 1 : 0;
+          updates.push('board_id = ?');
+          params.push(nextSectionId);
+          updates.push('workspace_id = ?');
+          params.push(nextProjectId);
         }
 
         if (body?.position !== undefined) {
@@ -4781,8 +6752,13 @@ const server = http.createServer(async (req, res) => {
           params.push(position);
         }
 
+        if (nextIsInbox != null) {
+          updates.push('is_inbox = ?');
+          params.push(nextIsInbox);
+        }
+
         if (updates.length === 0) {
-          return sendJson(res, 400, { error: 'No valid fields to update (status/title/description/position)' }, corsHeaders);
+          return sendJson(res, 400, { error: 'No valid fields to update (status/title/description/sectionId/position)' }, corsHeaders);
         }
 
         params.push(id);
@@ -4791,11 +6767,22 @@ const server = http.createServer(async (req, res) => {
 
         const task = rowOrNull<any>(
           db.prepare(
-            'SELECT id, board_id, title, description, status, position, due_at, created_at, updated_at FROM tasks WHERE id = ?'
+            `SELECT id, board_id as section_id, board_id, workspace_id as project_id, workspace_id,
+                    title, description, status, position, due_at, is_inbox, created_at, updated_at
+               FROM tasks WHERE id = ?`
           ).all(id) as any
         );
 
-        sseBroadcast({ type: 'tasks.changed', payload: { taskId: id, boardId: task?.board_id ?? null } });
+        sseBroadcast({
+          type: 'tasks.changed',
+          payload: {
+            taskId: id,
+            sectionId: task?.section_id ?? null,
+            boardId: task?.board_id ?? null,
+            projectId: task?.project_id ?? null,
+            workspaceId: task?.workspace_id ?? null,
+          },
+        });
 
         if (body?.status === 'doing' && existing.status !== 'doing') {
           runTask({ taskId: id, mode: 'execute' }).catch((err) => {
@@ -4811,8 +6798,15 @@ const server = http.createServer(async (req, res) => {
               sessionKey: `project:${existing.workspace_id}:board:${existing.board_id}:task:${id}`,
               agentOpenClawId: null,
             });
-            appendBoardSummary({ boardId: task?.board_id ?? existing.board_id, title: task?.title ?? existing.title, summary });
-            sseBroadcast({ type: 'docs.changed', payload: { boardId: task?.board_id ?? existing.board_id } });
+            appendSectionSummary({
+              sectionId: task?.section_id ?? existing.section_id,
+              title: task?.title ?? existing.title,
+              summary,
+            });
+            sseBroadcast({
+              type: 'docs.changed',
+              payload: { sectionId: task?.section_id ?? existing.section_id, boardId: task?.board_id ?? existing.board_id },
+            });
           } catch (err) {
             console.error('[dzzenos-api] done summary failed', err);
           }
@@ -4821,7 +6815,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/') {
-        return sendText(res, 200, 'DzzenOS API: try GET /boards', corsHeaders);
+        return sendText(res, 200, 'DzzenOS API: try GET /projects', corsHeaders);
       }
 
       return sendJson(res, 404, { error: 'Not found' }, corsHeaders);
@@ -4840,4 +6834,11 @@ const server = http.createServer(async (req, res) => {
   });
 }
 
-main();
+function isExecutedDirectly() {
+  if (!process.argv[1]) return false;
+  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+}
+
+if (isExecutedDirectly()) {
+  main();
+}

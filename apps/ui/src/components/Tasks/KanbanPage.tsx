@@ -1,19 +1,7 @@
-import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import type { Agent, Board, BoardAgentSettings, Task, TaskStatus, WorkspaceAgentSettings } from '../../api/types';
-import {
-  createBoard,
-  getBoardAgentSettings,
-  getWorkspaceAgentSettings,
-  listAgents,
-  patchTask,
-  upsertBoardAgentSettings,
-  upsertWorkspaceAgentSettings,
-} from '../../api/queries';
-import { cn } from '../../lib/cn';
-import { formatUpdatedAt } from './taskTime';
+import type { Project, Section, SectionViewMode, Task, TaskStatus } from '../../api/types';
+import { patchTask } from '../../api/queries';
 
 import { PageHeader } from '../Layout/PageHeader';
 import { Button } from '../ui/Button';
@@ -24,6 +12,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { TaskBoard } from './TaskBoard';
 import { TaskBoardSkeleton } from './TaskBoardSkeleton';
 import { NewTask } from './NewTask';
+import { ThreadsBoard } from './ThreadsBoard';
 
 const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
   { value: 'ideas', label: 'Ideas' },
@@ -36,11 +25,20 @@ const STATUS_OPTIONS: { value: TaskStatus; label: string }[] = [
 ];
 
 export function KanbanPage({
-  boards,
-  boardsLoading,
-  boardsError,
-  selectedBoardId,
-  onSelectBoard,
+  projects,
+  projectsLoading,
+  projectsError,
+  sections,
+  sectionsLoading,
+  sectionsError,
+  selectedProjectId,
+  onSelectProject,
+  selectedSectionId,
+  onSelectSection,
+  viewMode,
+  onChangeViewMode,
+  onCreateProject,
+  onCreateSection,
   tasks,
   tasksLoading,
   tasksError,
@@ -55,11 +53,20 @@ export function KanbanPage({
   moveError,
   reorderError,
 }: {
-  boards: Board[];
-  boardsLoading: boolean;
-  boardsError: unknown | null;
-  selectedBoardId: string | null;
-  onSelectBoard: (id: string) => void;
+  projects: Project[];
+  projectsLoading: boolean;
+  projectsError: unknown | null;
+  sections: Section[];
+  sectionsLoading: boolean;
+  sectionsError: unknown | null;
+  selectedProjectId: string | null;
+  onSelectProject: (id: string) => void;
+  selectedSectionId: string | null;
+  onSelectSection: (id: string) => void;
+  viewMode: SectionViewMode;
+  onChangeViewMode: (mode: SectionViewMode) => void;
+  onCreateProject: (name: string) => Promise<void> | void;
+  onCreateSection: (name: string) => Promise<void> | void;
   tasks: Task[];
   tasksLoading: boolean;
   tasksError: unknown | null;
@@ -74,214 +81,23 @@ export function KanbanPage({
   moveError: unknown | null;
   reorderError: unknown | null;
 }) {
-  const qc = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [quickTitle, setQuickTitle] = useState('');
+  const [projectName, setProjectName] = useState('');
+  const [sectionName, setSectionName] = useState('');
   const [search, setSearch] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false);
-  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [projectSettingsError, setProjectSettingsError] = useState<string | null>(null);
-  const [preferredAgentIdDraft, setPreferredAgentIdDraft] = useState('');
-  const [skillsDraft, setSkillsDraft] = useState('');
-  const [memoryPathDraft, setMemoryPathDraft] = useState('');
-  const [autoDelegateDraft, setAutoDelegateDraft] = useState(true);
-  const [systemPromptDraft, setSystemPromptDraft] = useState('');
-  const [planPromptDraft, setPlanPromptDraft] = useState('');
-  const [executePromptDraft, setExecutePromptDraft] = useState('');
-  const [chatPromptDraft, setChatPromptDraft] = useState('');
-  const [reportPromptDraft, setReportPromptDraft] = useState('');
-  const [policyDraft, setPolicyDraft] = useState('{}');
-  const [subAgentsDraft, setSubAgentsDraft] = useState('[]');
-  const [projectPreferredAgentIdDraft, setProjectPreferredAgentIdDraft] = useState('');
-  const [projectSkillsDraft, setProjectSkillsDraft] = useState('');
-  const [projectMemoryPathDraft, setProjectMemoryPathDraft] = useState('');
-  const [projectAutoDelegateDraft, setProjectAutoDelegateDraft] = useState(true);
-  const [projectSystemPromptDraft, setProjectSystemPromptDraft] = useState('');
-  const [projectPlanPromptDraft, setProjectPlanPromptDraft] = useState('');
-  const [projectExecutePromptDraft, setProjectExecutePromptDraft] = useState('');
-  const [projectChatPromptDraft, setProjectChatPromptDraft] = useState('');
-  const [projectReportPromptDraft, setProjectReportPromptDraft] = useState('');
-  const [projectPolicyDraft, setProjectPolicyDraft] = useState('{}');
-  const [projectSubAgentsDraft, setProjectSubAgentsDraft] = useState('[]');
-  const quickRef = useRef<HTMLInputElement | null>(null);
+  const [moveSectionId, setMoveSectionId] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const selectedWorkspaceId = useMemo(
-    () => boards.find((b) => b.id === selectedBoardId)?.workspace_id ?? null,
-    [boards, selectedBoardId]
+
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId]
   );
-
-  const boardAgentsQ = useQuery({
-    queryKey: ['agents', { boardId: selectedBoardId, scope: 'board-settings' }],
-    queryFn: () => listAgents({ boardId: selectedBoardId! }),
-    enabled: agentSettingsOpen && !!selectedBoardId,
-  });
-
-  const boardSettingsQ = useQuery({
-    queryKey: ['board-agent-settings', selectedBoardId],
-    queryFn: () => getBoardAgentSettings(selectedBoardId!),
-    enabled: agentSettingsOpen && !!selectedBoardId,
-    retry: false,
-  });
-
-  const workspaceAgentsQ = useQuery({
-    queryKey: ['agents', { workspaceId: selectedWorkspaceId, scope: 'workspace-settings' }],
-    queryFn: () => listAgents({ workspaceId: selectedWorkspaceId! }),
-    enabled: projectSettingsOpen && !!selectedWorkspaceId,
-  });
-
-  const workspaceSettingsQ = useQuery({
-    queryKey: ['workspace-agent-settings', selectedWorkspaceId],
-    queryFn: () => getWorkspaceAgentSettings(selectedWorkspaceId!),
-    enabled: projectSettingsOpen && !!selectedWorkspaceId,
-    retry: false,
-  });
-
-  const createM = useMutation({
-    mutationFn: async () => {
-      const trimmed = name.trim();
-      if (!trimmed) throw new Error('Board name is required');
-      return createBoard({ name: trimmed, description: description.trim() || null });
-    },
-    onSuccess: async (board) => {
-      await qc.invalidateQueries({ queryKey: ['boards'] });
-      onSelectBoard(board.id);
-      setCreateOpen(false);
-      setName('');
-      setDescription('');
-    },
-  });
-
-  const bulkMoveM = useMutation({
-    mutationFn: async (input: { ids: string[]; status: TaskStatus }) => {
-      await Promise.all(input.ids.map((id) => patchTask(id, { status: input.status })));
-      return { ok: true };
-    },
-    onSuccess: async () => {
-      if (selectedBoardId) {
-        await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
-      }
-    },
-  });
-
-  const saveBoardSettingsM = useMutation({
-    mutationFn: async () => {
-      if (!selectedBoardId) throw new Error('No board selected');
-      let parsedPolicy: Record<string, unknown> = {};
-      let parsedSubAgents: unknown[] = [];
-      try {
-        parsedPolicy = policyDraft.trim() ? (JSON.parse(policyDraft) as Record<string, unknown>) : {};
-      } catch {
-        throw new Error('Policy JSON is invalid');
-      }
-      try {
-        parsedSubAgents = subAgentsDraft.trim() ? (JSON.parse(subAgentsDraft) as unknown[]) : [];
-      } catch {
-        throw new Error('Sub-agents JSON is invalid');
-      }
-      if (!Array.isArray(parsedSubAgents)) {
-        throw new Error('Sub-agents JSON must be an array');
-      }
-      const promptOverrides = {
-        system: systemPromptDraft.trim() || undefined,
-        plan: planPromptDraft.trim() || undefined,
-        execute: executePromptDraft.trim() || undefined,
-        chat: chatPromptDraft.trim() || undefined,
-        report: reportPromptDraft.trim() || undefined,
-      };
-      return upsertBoardAgentSettings(selectedBoardId, {
-        preferred_agent_id: preferredAgentIdDraft || null,
-        skills: skillsDraft
-          .split(',')
-          .map((v) => v.trim())
-          .filter(Boolean),
-        prompt_overrides: promptOverrides,
-        policy: parsedPolicy,
-        memory_path: memoryPathDraft.trim() || null,
-        auto_delegate: autoDelegateDraft,
-        sub_agents: parsedSubAgents as any,
-      });
-    },
-    onSuccess: async () => {
-      setSettingsError(null);
-      if (selectedBoardId) {
-        await qc.invalidateQueries({ queryKey: ['board-agent-settings', selectedBoardId] });
-      }
-      await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
-      setAgentSettingsOpen(false);
-    },
-    onError: (err: any) => {
-      setSettingsError(String(err?.message ?? err));
-    },
-  });
-
-  const saveWorkspaceSettingsM = useMutation({
-    mutationFn: async () => {
-      if (!selectedWorkspaceId) throw new Error('No workspace selected');
-      let parsedPolicy: Record<string, unknown> = {};
-      let parsedSubAgents: unknown[] = [];
-      try {
-        parsedPolicy = projectPolicyDraft.trim() ? (JSON.parse(projectPolicyDraft) as Record<string, unknown>) : {};
-      } catch {
-        throw new Error('Project policy JSON is invalid');
-      }
-      try {
-        parsedSubAgents = projectSubAgentsDraft.trim() ? (JSON.parse(projectSubAgentsDraft) as unknown[]) : [];
-      } catch {
-        throw new Error('Project sub-agents JSON is invalid');
-      }
-      if (!Array.isArray(parsedSubAgents)) {
-        throw new Error('Project sub-agents JSON must be an array');
-      }
-      const promptOverrides = {
-        system: projectSystemPromptDraft.trim() || undefined,
-        plan: projectPlanPromptDraft.trim() || undefined,
-        execute: projectExecutePromptDraft.trim() || undefined,
-        chat: projectChatPromptDraft.trim() || undefined,
-        report: projectReportPromptDraft.trim() || undefined,
-      };
-      return upsertWorkspaceAgentSettings(selectedWorkspaceId, {
-        preferred_agent_id: projectPreferredAgentIdDraft || null,
-        skills: projectSkillsDraft
-          .split(',')
-          .map((v) => v.trim())
-          .filter(Boolean),
-        prompt_overrides: promptOverrides,
-        policy: parsedPolicy,
-        memory_path: projectMemoryPathDraft.trim() || null,
-        auto_delegate: projectAutoDelegateDraft,
-        sub_agents: parsedSubAgents as any,
-      });
-    },
-    onSuccess: async () => {
-      setProjectSettingsError(null);
-      if (selectedWorkspaceId) {
-        await qc.invalidateQueries({ queryKey: ['workspace-agent-settings', selectedWorkspaceId] });
-      }
-      if (selectedBoardId) {
-        await qc.invalidateQueries({ queryKey: ['tasks', selectedBoardId] });
-      }
-      setProjectSettingsOpen(false);
-    },
-    onError: (err: any) => {
-      setProjectSettingsError(String(err?.message ?? err));
-    },
-  });
-
-  const sortedBoards = useMemo(() => {
-    return [...boards].sort((a, b) => {
-      if (a.position !== b.position) return a.position - b.position;
-      return Date.parse(b.updated_at) - Date.parse(a.updated_at);
-    });
-  }, [boards]);
-
-  const hasBoards = sortedBoards.length > 0;
-  const selectedBoard = sortedBoards.find((b) => b.id === selectedBoardId) ?? null;
+  const selectedSection = useMemo(
+    () => sections.find((s) => s.id === selectedSectionId) ?? null,
+    [sections, selectedSectionId]
+  );
 
   const filteredTasks = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -295,48 +111,11 @@ export function KanbanPage({
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const visibleIds = useMemo(() => filteredTasks.map((t) => t.id), [filteredTasks]);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedSet.has(id));
-  const boardAgents = (boardAgentsQ.data ?? []) as Agent[];
-  const workspaceAgents = (workspaceAgentsQ.data ?? []) as Agent[];
-
-  useEffect(() => {
-    if (!agentSettingsOpen) return;
-    const s = boardSettingsQ.data as BoardAgentSettings | undefined;
-    if (!s) return;
-    setPreferredAgentIdDraft(s.preferred_agent_id ?? '');
-    setSkillsDraft((s.skills ?? []).join(', '));
-    setMemoryPathDraft(s.memory_path ?? '');
-    setAutoDelegateDraft(Boolean(s.auto_delegate));
-    setSystemPromptDraft(s.prompt_overrides?.system ?? '');
-    setPlanPromptDraft(s.prompt_overrides?.plan ?? '');
-    setExecutePromptDraft(s.prompt_overrides?.execute ?? '');
-    setChatPromptDraft(s.prompt_overrides?.chat ?? '');
-    setReportPromptDraft(s.prompt_overrides?.report ?? '');
-    setPolicyDraft(JSON.stringify(s.policy ?? {}, null, 2));
-    setSubAgentsDraft(JSON.stringify(s.sub_agents ?? [], null, 2));
-    setSettingsError(null);
-  }, [agentSettingsOpen, boardSettingsQ.data]);
-
-  useEffect(() => {
-    if (!projectSettingsOpen) return;
-    const s = workspaceSettingsQ.data as WorkspaceAgentSettings | undefined;
-    if (!s) return;
-    setProjectPreferredAgentIdDraft(s.preferred_agent_id ?? '');
-    setProjectSkillsDraft((s.skills ?? []).join(', '));
-    setProjectMemoryPathDraft(s.memory_path ?? '');
-    setProjectAutoDelegateDraft(Boolean(s.auto_delegate));
-    setProjectSystemPromptDraft(s.prompt_overrides?.system ?? '');
-    setProjectPlanPromptDraft(s.prompt_overrides?.plan ?? '');
-    setProjectExecutePromptDraft(s.prompt_overrides?.execute ?? '');
-    setProjectChatPromptDraft(s.prompt_overrides?.chat ?? '');
-    setProjectReportPromptDraft(s.prompt_overrides?.report ?? '');
-    setProjectPolicyDraft(JSON.stringify(s.policy ?? {}, null, 2));
-    setProjectSubAgentsDraft(JSON.stringify(s.sub_agents ?? [], null, 2));
-    setProjectSettingsError(null);
-  }, [projectSettingsOpen, workspaceSettingsQ.data]);
 
   useEffect(() => {
     if (!selectionMode) {
       setSelectedIds([]);
+      setMoveSectionId('');
     }
   }, [selectionMode]);
 
@@ -353,10 +132,6 @@ export function KanbanPage({
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTyping(document.activeElement)) return;
-      if (e.key.toLowerCase() === 'n') {
-        quickRef.current?.focus();
-        e.preventDefault();
-      }
       if ((e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) || e.key === '/') {
         searchRef.current?.focus();
         e.preventDefault();
@@ -370,251 +145,188 @@ export function KanbanPage({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [selectionMode]);
 
-  useEffect(() => {
-    const key = `dzzenos.kanban.scroll.${selectedBoardId ?? 'none'}`;
-    const saved = sessionStorage.getItem(key);
-    if (saved) {
-      const top = Number(saved);
-      if (Number.isFinite(top)) window.scrollTo({ top, behavior: 'auto' });
-    }
-    let raf: number | null = null;
-    const onScroll = () => {
-      if (raf != null) return;
-      raf = window.requestAnimationFrame(() => {
-        sessionStorage.setItem(key, String(window.scrollY));
-        raf = null;
-      });
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (raf != null) window.cancelAnimationFrame(raf);
-    };
-  }, [selectedBoardId]);
-
-  const handleQuickAdd = async () => {
-    const trimmed = quickTitle.trim();
-    if (!trimmed) return;
-    if (!selectedBoardId) {
-      setCreateOpen(true);
-      return;
-    }
-    await onCreateTask(trimmed);
-    setQuickTitle('');
-  };
-
   const toggleSelection = (id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
   const toggleSelectAll = () => {
-    if (allVisibleSelected) {
-      setSelectedIds([]);
-    } else {
-      setSelectedIds(visibleIds);
-    }
+    if (allVisibleSelected) setSelectedIds([]);
+    else setSelectedIds(visibleIds);
+  };
+
+  const moveSelected = async (status: TaskStatus) => {
+    if (!selectedIds.length) return;
+    await Promise.all(selectedIds.map((id) => patchTask(id, { status })));
+    setSelectedIds([]);
+  };
+
+  const moveSelectedToSection = async () => {
+    if (!moveSectionId || selectedIds.length === 0) return;
+    await Promise.all(selectedIds.map((id) => patchTask(id, { sectionId: moveSectionId })));
+    setSelectedIds([]);
+    setMoveSectionId('');
   };
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
-        title="Kanban"
-        subtitle="Boards and task execution"
+        title="Projects"
+        subtitle="Project overview → section workflow in Kanban or Threads mode"
         actions={
-          <Dialog.Root open={createOpen} onOpenChange={setCreateOpen}>
-            <Dialog.Trigger asChild>
-              <Button>Create board</Button>
-            </Dialog.Trigger>
-            <Dialog.Portal>
-              <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
-              <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[92vw] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-surface-1/90 p-5 shadow-popover backdrop-blur">
-                <Dialog.Title className="text-sm font-semibold text-foreground">Create board</Dialog.Title>
-                <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-                  Organize tasks by workflow. You can rename it later.
-                </Dialog.Description>
-
-                <div className="mt-4 grid gap-3">
-                  <div>
-                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Name</label>
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Startup launch" />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Description</label>
-                    <textarea
-                      className="min-h-[90px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="What this board is for"
-                    />
-                  </div>
-                  {createM.isError ? <InlineAlert>{String(createM.error)}</InlineAlert> : null}
-                </div>
-
-                <div className="mt-5 flex items-center justify-end gap-2">
-                  <Button variant="ghost" onClick={() => setCreateOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button onClick={() => createM.mutate()} disabled={createM.isPending || !name.trim()}>
-                    {createM.isPending ? 'Creating…' : 'Create board'}
-                  </Button>
-                </div>
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <div className="flex gap-2">
+              <Input
+                value={projectName}
+                onChange={(e) => setProjectName(e.target.value)}
+                placeholder="New project…"
+                className="w-[180px]"
+              />
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const name = projectName.trim();
+                  if (!name) return;
+                  await onCreateProject(name);
+                  setProjectName('');
+                }}
+                disabled={!projectName.trim()}
+              >
+                Add project
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                value={sectionName}
+                onChange={(e) => setSectionName(e.target.value)}
+                placeholder="New section…"
+                className="w-[180px]"
+              />
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  const name = sectionName.trim();
+                  if (!name) return;
+                  await onCreateSection(name);
+                  setSectionName('');
+                }}
+                disabled={!sectionName.trim() || !selectedProjectId}
+              >
+                Add section
+              </Button>
+            </div>
+          </div>
         }
       />
 
-      <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <div className="flex-1">
-            <Input
-              ref={quickRef}
-              value={quickTitle}
-              onChange={(e) => setQuickTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  handleQuickAdd();
-                }
-              }}
-              placeholder="Capture a quick idea… (Press N)"
-            />
-          </div>
-          <Button onClick={handleQuickAdd} disabled={!quickTitle.trim()}>
-            Add idea
-          </Button>
-        </div>
-        <div className="mt-2 text-xs text-muted-foreground">Fast capture goes to Ideas for the selected board.</div>
-      </div>
-
-      <div className="flex flex-col gap-3">
-        <div>
-          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Boards</div>
-          <div className="mt-1 text-sm text-muted-foreground">Pick a board or create a new workspace for tasks.</div>
-        </div>
-
-        {!boardsLoading && !boardsError && !hasBoards ? (
-          <div className="rounded-2xl border border-dashed border-border/70 bg-surface-1/60 p-6 text-sm text-muted-foreground shadow-panel">
-            <div className="text-base font-semibold text-foreground">Create your first board</div>
-            <div className="mt-2 max-w-lg text-sm text-muted-foreground">
-              Boards keep tasks grouped by workflow (product, content, ops). You can edit the name and description later.
-            </div>
-            <div className="mt-4">
-              <Button onClick={() => setCreateOpen(true)}>Create board</Button>
-            </div>
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {boardsLoading ? (
-              Array.from({ length: 6 }).map((_, idx) => <Skeleton key={idx} className="h-[120px] w-full" />)
-            ) : boardsError ? (
-              <div className="sm:col-span-2 lg:col-span-3">
-                <InlineAlert>{String(boardsError)}</InlineAlert>
-              </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
+          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Projects</div>
+          <div className="mt-2 grid gap-2">
+            {projectsLoading ? (
+              Array.from({ length: 4 }).map((_, idx) => <Skeleton key={idx} className="h-10 w-full" />)
+            ) : projectsError ? (
+              <InlineAlert>{String(projectsError)}</InlineAlert>
+            ) : !projects.length ? (
+              <EmptyState title="No projects" subtitle="Create your first project." />
             ) : (
-              <>
+              projects.map((p) => (
                 <button
+                  key={p.id}
                   type="button"
-                  onClick={() => setCreateOpen(true)}
-                  className={cn(
-                    'group flex min-h-[140px] w-full flex-col justify-between rounded-xl border border-dashed border-border/70 bg-surface-1/40 p-4 text-left text-sm text-muted-foreground transition',
-                    'hover:border-primary/60 hover:bg-surface-2/50 hover:text-foreground'
-                  )}
+                  onClick={() => onSelectProject(p.id)}
+                  className={
+                    'rounded-md border px-3 py-2 text-left text-sm transition ' +
+                    (p.id === selectedProjectId
+                      ? 'border-primary/60 bg-surface-2/80'
+                      : 'border-border/70 bg-surface-1/50 hover:bg-surface-2/60')
+                  }
                 >
-                  <div className="flex items-center gap-2 text-sm font-semibold text-foreground/80 group-hover:text-foreground">
-                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-border/70 bg-surface-2/70 text-base">
-                      +
-                    </span>
-                    Create board
-                  </div>
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    Start a new workflow for a project, team, or domain.
-                  </div>
-                  <div className="mt-auto text-xs text-primary/80 group-hover:text-primary">Open creator</div>
+                  <div className="font-medium text-foreground">{p.name}</div>
+                  <div className="text-xs text-muted-foreground">{p.description || 'No description'}</div>
                 </button>
-
-                {sortedBoards.map((board) => {
-                  const active = board.id === selectedBoardId;
-                  return (
-                    <button
-                      key={board.id}
-                      type="button"
-                      onClick={() => onSelectBoard(board.id)}
-                      className={cn(
-                        'group flex w-full flex-col gap-2 rounded-xl border border-border/70 bg-surface-1/70 p-4 text-left shadow-panel transition',
-                        'hover:-translate-y-0.5 hover:bg-surface-2/70',
-                        active && 'border-primary/60 bg-surface-2/80 ring-1 ring-primary/40'
-                      )}
-                    >
-                      <div className="text-sm font-semibold tracking-tight text-foreground">{board.name}</div>
-                      <div className="max-h-10 overflow-hidden text-xs text-muted-foreground">
-                        {board.description || 'No description yet.'}
-                      </div>
-                      <div className="mt-auto text-[11px] text-muted-foreground">
-                        Updated {formatUpdatedAt(board.updated_at)}
-                      </div>
-                    </button>
-                  );
-                })}
-              </>
+              ))
             )}
           </div>
-        )}
+        </div>
+
+        <div className="rounded-2xl border border-border/70 bg-surface-1/70 p-3 shadow-panel">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Sections</div>
+              <div className="mt-1 text-sm text-muted-foreground">{selectedProject?.name ?? 'Select a project'}</div>
+            </div>
+            <div className="inline-flex rounded-lg border border-border/70 bg-surface-2/60 p-1">
+              <button
+                type="button"
+                className={'rounded-md px-2 py-1 text-xs ' + (viewMode === 'kanban' ? 'bg-primary/20 text-foreground' : 'text-muted-foreground')}
+                onClick={() => onChangeViewMode('kanban')}
+              >
+                Kanban
+              </button>
+              <button
+                type="button"
+                className={'rounded-md px-2 py-1 text-xs ' + (viewMode === 'threads' ? 'bg-primary/20 text-foreground' : 'text-muted-foreground')}
+                onClick={() => onChangeViewMode('threads')}
+              >
+                Threads
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-2 grid gap-2">
+            {sectionsLoading ? (
+              Array.from({ length: 5 }).map((_, idx) => <Skeleton key={idx} className="h-10 w-full" />)
+            ) : sectionsError ? (
+              <InlineAlert>{String(sectionsError)}</InlineAlert>
+            ) : !sections.length ? (
+              <EmptyState title="No sections" subtitle="Add first section for this project." />
+            ) : (
+              sections.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => onSelectSection(s.id)}
+                  className={
+                    'rounded-md border px-3 py-2 text-left text-sm transition ' +
+                    (s.id === selectedSectionId
+                      ? 'border-primary/60 bg-surface-2/80'
+                      : 'border-border/70 bg-surface-1/50 hover:bg-surface-2/60')
+                  }
+                >
+                  <div className="font-medium text-foreground">{s.name}</div>
+                  <div className="text-xs text-muted-foreground">{s.section_kind === 'inbox' ? 'Project Inbox' : `Default: ${s.view_mode}`}</div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected board</div>
-            <h2 className="mt-1 text-base font-semibold tracking-tight">
-              {selectedBoard ? selectedBoard.name : 'No board selected'}
-            </h2>
+            <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Selected section</div>
+            <h2 className="mt-1 text-base font-semibold tracking-tight">{selectedSection?.name ?? 'No section selected'}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              {selectedBoard
-                ? selectedBoard.description || 'Move cards to advance the work.'
-                : 'Select a board above to view tasks.'}
+              {selectedSection ? selectedSection.description || 'Move tasks through statuses.' : 'Select a section above to view tasks.'}
             </p>
           </div>
           <div className="w-full sm:max-w-md">
-            {selectedBoardId ? (
+            {selectedSectionId ? (
               <div className="flex flex-col gap-2">
                 <NewTask onCreate={onCreateTask} />
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setProjectSettingsOpen(true)}
-                    disabled={!selectedWorkspaceId}
-                  >
-                    Project AI
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setAgentSettingsOpen(true)}
-                  >
-                    Board AI
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setSelectionMode((prev) => !prev)}
-                  >
+                  <Button variant="secondary" size="sm" onClick={() => setSelectionMode((prev) => !prev)}>
                     {selectionMode ? 'Done selecting' : 'Select'}
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={toggleSelectAll}
-                    disabled={!filteredTasks.length}
-                  >
+                  <Button variant="ghost" size="sm" onClick={toggleSelectAll} disabled={!filteredTasks.length}>
                     {allVisibleSelected ? 'Clear selection' : 'Select all visible'}
                   </Button>
                 </div>
               </div>
             ) : (
               <div className="rounded-md border border-border/70 bg-surface-1/50 px-3 py-2 text-xs text-muted-foreground">
-                Select a board to create tasks.
+                Select section to create tasks.
               </div>
             )}
           </div>
@@ -631,25 +343,43 @@ export function KanbanPage({
               />
             </div>
             <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={showArchived}
-                onChange={(e) => setShowArchived(e.target.checked)}
-              />
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
               Show archived
             </label>
           </div>
+
           {selectionMode ? (
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>{selectedIds.length} selected</span>
+              <select
+                className="h-8 rounded-md border border-input/70 bg-surface-1/70 px-2 text-xs text-foreground"
+                value={moveSectionId}
+                onChange={(e) => setMoveSectionId(e.target.value)}
+              >
+                <option value="">Move to section…</option>
+                {sections.map((section) => (
+                  <option key={section.id} value={section.id}>
+                    {section.name}
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  moveSelectedToSection().catch(() => undefined);
+                }}
+                disabled={!moveSectionId || selectedIds.length === 0}
+              >
+                Move section
+              </Button>
               <select
                 className="h-8 rounded-md border border-input/70 bg-surface-1/70 px-2 text-xs text-foreground"
                 value=""
                 onChange={(e) => {
                   const next = e.target.value as TaskStatus;
                   if (!next || selectedIds.length === 0) return;
-                  bulkMoveM.mutate({ ids: selectedIds, status: next });
-                  setSelectedIds([]);
+                  moveSelected(next).catch(() => undefined);
                 }}
               >
                 <option value="">Move to…</option>
@@ -662,11 +392,7 @@ export function KanbanPage({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => {
-                  if (!selectedIds.length) return;
-                  bulkMoveM.mutate({ ids: selectedIds, status: 'archived' });
-                  setSelectedIds([]);
-                }}
+                onClick={() => moveSelected('archived')}
                 disabled={selectedIds.length === 0}
               >
                 Archive
@@ -678,16 +404,29 @@ export function KanbanPage({
         {createTaskError ? <InlineAlert>{String(createTaskError)}</InlineAlert> : null}
         {moveError || reorderError ? <InlineAlert>{String(moveError ?? reorderError)}</InlineAlert> : null}
 
-        {!hasBoards ? (
-          <EmptyState title="No boards yet" subtitle="Create your first board to start." />
-        ) : !selectedBoardId ? (
-          <EmptyState title="Select a board" subtitle="Choose a board above to view tasks." />
+        {!selectedProjectId ? (
+          <EmptyState title="Select a project" subtitle="Choose a project above to continue." />
+        ) : !selectedSectionId ? (
+          <EmptyState title="Select a section" subtitle="Choose a section above to view tasks." />
         ) : tasksLoading ? (
           <TaskBoardSkeleton />
         ) : tasksError ? (
           <InlineAlert>{String(tasksError)}</InlineAlert>
         ) : filteredTasks.length === 0 ? (
-          <EmptyState title="No tasks yet" subtitle="Create one with the input above." />
+          <EmptyState title="No tasks" subtitle="Create one with the input above." />
+        ) : viewMode === 'threads' ? (
+          <ThreadsBoard
+            tasks={filteredTasks}
+            selectedTaskId={selectedTaskId}
+            onSelectTask={onSelectTask}
+            onMoveTask={onMoveTask}
+            moveDisabled={moveDisabled}
+            onReorder={onReorder}
+            onQuickCreate={onQuickCreate}
+            selectionMode={selectionMode}
+            selectedIds={selectedSet}
+            onToggleSelect={toggleSelection}
+          />
         ) : (
           <TaskBoard
             tasks={filteredTasks}
@@ -703,292 +442,6 @@ export function KanbanPage({
           />
         )}
       </div>
-
-      <Dialog.Root open={projectSettingsOpen} onOpenChange={setProjectSettingsOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[94vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-surface-1/90 p-5 shadow-popover backdrop-blur">
-            <Dialog.Title className="text-sm font-semibold text-foreground">Project AI Settings</Dialog.Title>
-            <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-              Project-level defaults for all boards in this workspace. Board AI can override these settings.
-            </Dialog.Description>
-
-            <div className="mt-4 grid max-h-[72vh] gap-3 overflow-auto pr-1">
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Preferred project agent</label>
-                <select
-                  className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
-                  value={projectPreferredAgentIdDraft}
-                  onChange={(e) => setProjectPreferredAgentIdDraft(e.target.value)}
-                  disabled={workspaceAgentsQ.isLoading}
-                >
-                  <option value="">Auto (workspace default)</option>
-                  {workspaceAgents.filter((a) => a.enabled).map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.display_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Skills overlay (comma separated)</label>
-                <Input
-                  value={projectSkillsDraft}
-                  onChange={(e) => setProjectSkillsDraft(e.target.value)}
-                  placeholder="research.web, writing.blog, social.packager"
-                />
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Memory path</label>
-                  <Input
-                    value={projectMemoryPathDraft}
-                    onChange={(e) => setProjectMemoryPathDraft(e.target.value)}
-                    placeholder="memory/project/working.md"
-                  />
-                </div>
-                <label className="mt-6 inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={projectAutoDelegateDraft}
-                    onChange={(e) => setProjectAutoDelegateDraft(e.target.checked)}
-                  />
-                  Enable sub-agent delegation by default
-                </label>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">System prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={projectSystemPromptDraft}
-                    onChange={(e) => setProjectSystemPromptDraft(e.target.value)}
-                    placeholder="Global role for this project..."
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Execute prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={projectExecutePromptDraft}
-                    onChange={(e) => setProjectExecutePromptDraft(e.target.value)}
-                    placeholder="Execution rules for this project..."
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Plan prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={projectPlanPromptDraft}
-                    onChange={(e) => setProjectPlanPromptDraft(e.target.value)}
-                    placeholder="Planning style..."
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Report prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={projectReportPromptDraft}
-                    onChange={(e) => setProjectReportPromptDraft(e.target.value)}
-                    placeholder="Reporting style..."
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Chat prompt override</label>
-                <textarea
-                  className="min-h-[72px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                  value={projectChatPromptDraft}
-                  onChange={(e) => setProjectChatPromptDraft(e.target.value)}
-                  placeholder="Task chat behavior..."
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Policy JSON</label>
-                <textarea
-                  className="min-h-[120px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 font-mono text-xs text-foreground outline-none"
-                  value={projectPolicyDraft}
-                  onChange={(e) => setProjectPolicyDraft(e.target.value)}
-                  placeholder='{"tools":{"mode":"allowlist","allow":["dzzen.*"]}}'
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Sub-agents JSON</label>
-                <textarea
-                  className="min-h-[140px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 font-mono text-xs text-foreground outline-none"
-                  value={projectSubAgentsDraft}
-                  onChange={(e) => setProjectSubAgentsDraft(e.target.value)}
-                  placeholder='[{"key":"research","label":"Research Worker","agent_id":"...","role_prompt":"Collect facts","enabled":true}]'
-                />
-              </div>
-
-              {projectSettingsError ? <InlineAlert>{projectSettingsError}</InlineAlert> : null}
-              {workspaceSettingsQ.isError ? <InlineAlert>{String(workspaceSettingsQ.error)}</InlineAlert> : null}
-            </div>
-
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <Button variant="ghost" onClick={() => setProjectSettingsOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => saveWorkspaceSettingsM.mutate()}
-                disabled={saveWorkspaceSettingsM.isPending || !selectedWorkspaceId}
-              >
-                {saveWorkspaceSettingsM.isPending ? 'Saving…' : 'Save project AI settings'}
-              </Button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-
-      <Dialog.Root open={agentSettingsOpen} onOpenChange={setAgentSettingsOpen}>
-        <Dialog.Portal>
-          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm" />
-          <Dialog.Content className="fixed left-1/2 top-1/2 z-[60] w-[94vw] max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-2xl border border-border/70 bg-surface-1/90 p-5 shadow-popover backdrop-blur">
-            <Dialog.Title className="text-sm font-semibold text-foreground">Board AI Settings</Dialog.Title>
-            <Dialog.Description className="mt-1 text-xs text-muted-foreground">
-              Board-level overrides over Project AI defaults: preferred agent, prompts, skills, policy, and delegated sub-agents.
-            </Dialog.Description>
-
-            <div className="mt-4 grid max-h-[72vh] gap-3 overflow-auto pr-1">
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Preferred agent</label>
-                <select
-                  className="h-9 w-full rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm text-foreground"
-                  value={preferredAgentIdDraft}
-                  onChange={(e) => setPreferredAgentIdDraft(e.target.value)}
-                  disabled={boardAgentsQ.isLoading}
-                >
-                  <option value="">Auto (project default)</option>
-                  {boardAgents.filter((a) => a.enabled).map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.display_name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Skills overlay (comma separated)</label>
-                <Input
-                  value={skillsDraft}
-                  onChange={(e) => setSkillsDraft(e.target.value)}
-                  placeholder="research.web, writing.blog, social.packager"
-                />
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Memory path</label>
-                  <Input
-                    value={memoryPathDraft}
-                    onChange={(e) => setMemoryPathDraft(e.target.value)}
-                    placeholder="memory/boards/content.md"
-                  />
-                </div>
-                <label className="mt-6 inline-flex items-center gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={autoDelegateDraft}
-                    onChange={(e) => setAutoDelegateDraft(e.target.checked)}
-                  />
-                  Enable sub-agent delegation in execute mode
-                </label>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">System prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={systemPromptDraft}
-                    onChange={(e) => setSystemPromptDraft(e.target.value)}
-                    placeholder="Global role for this board..."
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Execute prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={executePromptDraft}
-                    onChange={(e) => setExecutePromptDraft(e.target.value)}
-                    placeholder="Execution rules for this board..."
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Plan prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={planPromptDraft}
-                    onChange={(e) => setPlanPromptDraft(e.target.value)}
-                    placeholder="Planning style..."
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Report prompt override</label>
-                  <textarea
-                    className="min-h-[88px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                    value={reportPromptDraft}
-                    onChange={(e) => setReportPromptDraft(e.target.value)}
-                    placeholder="Reporting style..."
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Chat prompt override</label>
-                <textarea
-                  className="min-h-[72px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                  value={chatPromptDraft}
-                  onChange={(e) => setChatPromptDraft(e.target.value)}
-                  placeholder="Task chat behavior..."
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Policy JSON</label>
-                <textarea
-                  className="min-h-[120px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 font-mono text-xs text-foreground outline-none"
-                  value={policyDraft}
-                  onChange={(e) => setPolicyDraft(e.target.value)}
-                  placeholder='{"tools":{"mode":"allowlist","allow":["dzzen.*"]}}'
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block text-xs uppercase tracking-wide text-muted-foreground">Sub-agents JSON</label>
-                <textarea
-                  className="min-h-[140px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 font-mono text-xs text-foreground outline-none"
-                  value={subAgentsDraft}
-                  onChange={(e) => setSubAgentsDraft(e.target.value)}
-                  placeholder='[{"key":"research","label":"Research Worker","agent_id":"...","role_prompt":"Collect facts","enabled":true}]'
-                />
-              </div>
-
-              {settingsError ? <InlineAlert>{settingsError}</InlineAlert> : null}
-              {boardSettingsQ.isError ? <InlineAlert>{String(boardSettingsQ.error)}</InlineAlert> : null}
-            </div>
-
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <Button variant="ghost" onClick={() => setAgentSettingsOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={() => saveBoardSettingsM.mutate()}
-                disabled={saveBoardSettingsM.isPending || !selectedBoardId}
-              >
-                {saveBoardSettingsM.isPending ? 'Saving…' : 'Save settings'}
-              </Button>
-            </div>
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
     </div>
   );
 }

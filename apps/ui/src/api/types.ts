@@ -1,12 +1,33 @@
-export type Board = {
+export type SectionViewMode = 'kanban' | 'threads';
+
+export type Project = {
   id: string;
+  name: string;
+  description: string | null;
+  position: number;
+  is_archived: number | boolean;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+  section_count?: number;
+  task_count?: number;
+};
+
+export type Section = {
+  id: string;
+  project_id: string;
   workspace_id: string;
   name: string;
   description: string | null;
   position: number;
+  view_mode: SectionViewMode;
+  section_kind: 'section' | 'inbox';
   created_at: string;
   updated_at: string;
 };
+
+// Legacy alias for gradual migration of components.
+export type Board = Section;
 
 export type BoardAgentSubAgent = {
   key: string;
@@ -89,18 +110,76 @@ export type OpenClawCronJobList = {
   raw: unknown;
 };
 
+export type ProjectStatus = {
+  id: string;
+  project_id: string;
+  workspace_id: string;
+  status_key: string;
+  label: string;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type NavigationTreeTask = {
+  id: string;
+  section_id: string;
+  board_id: string;
+  project_id: string;
+  workspace_id: string;
+  title: string;
+  status: TaskStatus;
+  pending_approval?: number | boolean;
+  updated_at: string;
+};
+
+export type NavigationTreeSection = Section & {
+  counters: {
+    total: number;
+    doing: number;
+    review: number;
+  };
+  tasks: NavigationTreeTask[];
+};
+
+export type NavigationTreeProject = Project & {
+  counters: {
+    total: number;
+    doing: number;
+    review: number;
+    needs_user: number;
+  };
+  sections: NavigationTreeSection[];
+  focus_lists: {
+    in_progress_total: number;
+    needs_user_total: number;
+    in_progress: NavigationTreeTask[];
+    needs_user: NavigationTreeTask[];
+  };
+};
+
+export type NavigationTree = {
+  projects: NavigationTreeProject[];
+  limit_per_section: number;
+};
+
 export type TaskStatus = 'ideas' | 'todo' | 'doing' | 'review' | 'release' | 'done' | 'archived';
 export type ChecklistState = 'todo' | 'doing' | 'done';
 export type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
 
 export type Task = {
   id: string;
+  project_id: string;
+  workspace_id: string;
+  section_id: string;
   board_id: string;
   title: string;
   description: string | null;
   status: TaskStatus;
   position: number;
   due_at: string | null;
+  is_inbox?: number | boolean | null;
+  view_mode?: SectionViewMode | null;
   agent_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -112,6 +191,10 @@ export type Task = {
   run_updated_at?: string | null;
   run_finished_at?: string | null;
   run_step_kind?: string | null;
+};
+
+export type TaskDetails = Task & {
+  section_name?: string | null;
 };
 
 export type TaskSession = {
@@ -180,6 +263,38 @@ export type Agent = {
   parsed_guardrails?: unknown;
 };
 
+export type SubAgentLink = {
+  id: string;
+  parent_agent_id: string;
+  child_agent_id: string;
+  role: string;
+  trigger_rules_json: Record<string, unknown>;
+  max_calls: number;
+  order: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  child_display_name: string;
+  child_openclaw_agent_id: string;
+};
+
+export type AgentOrchestrationPolicy = {
+  agent_id: string;
+  mode: 'openclaw';
+  delegation_budget_json: Record<string, unknown>;
+  escalation_rules_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OrchestrationPreview = {
+  agent_id: string;
+  mode: 'openclaw';
+  policy: AgentOrchestrationPolicy | null;
+  subagents: SubAgentLink[];
+  preview: string;
+};
+
 export type PromptOverrides = Partial<Record<'system' | 'plan' | 'execute' | 'chat' | 'report', string>>;
 
 export type MarketplaceAgent = {
@@ -203,6 +318,54 @@ export type SkillCapabilities = {
   filesystem?: boolean;
   external_write?: boolean;
   secrets?: string[];
+};
+
+export type OpenClawProvider = {
+  id: string;
+  kind: string;
+  enabled: boolean;
+  auth_mode: 'api_key' | 'oauth' | 'none';
+  auth_state: 'connected' | 'pending' | 'error' | 'not_configured';
+  last_error: string | null;
+};
+
+export type OpenClawModel = {
+  id: string;
+  provider_id: string;
+  display_name: string;
+  availability: 'ready' | 'degraded' | 'unavailable' | 'unknown';
+};
+
+export type ModelsOverview = {
+  providers: OpenClawProvider[];
+  models: OpenClawModel[];
+  updated_at: string;
+};
+
+export type OpenClawProviderInput = {
+  id: string;
+  kind: string;
+  enabled?: boolean;
+  auth_mode?: 'api_key' | 'oauth' | 'none';
+  api_base_url?: string;
+  api_key?: string;
+  oauth?: Record<string, unknown>;
+  options?: Record<string, unknown>;
+};
+
+export type OpenClawOAuthStartResult = {
+  provider_id: string;
+  attempt_id: string | null;
+  auth_url: string | null;
+  status: string | null;
+  expires_at: string | null;
+};
+
+export type OpenClawOAuthStatusResult = {
+  provider_id: string;
+  attempt_id: string | null;
+  status: 'connected' | 'pending' | 'error' | 'timeout' | 'not_configured';
+  message: string | null;
 };
 
 export type InstalledSkill = {
@@ -251,7 +414,9 @@ export type AgentRunStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export type AgentRun = {
   id: string;
+  project_id: string;
   workspace_id: string;
+  section_id: string | null;
   board_id: string | null;
   task_id: string | null;
   agent_name: string | null;
@@ -289,6 +454,9 @@ export type Approval = {
   created_at: string;
   updated_at: string;
   // Joined for dashboard linking.
+  project_id: string | null;
+  workspace_id: string | null;
+  section_id: string | null;
   task_id: string | null;
   board_id: string | null;
   task_title: string | null;
@@ -305,6 +473,8 @@ export type Automation = {
 
 export type TaskExecutionConfig = {
   task_id: string;
+  project_id: string;
+  section_id: string;
   board_id: string;
   managed_by: 'agent-profile';
   read_only: boolean;
@@ -328,4 +498,43 @@ export type TaskContextItem = {
   content: string;
   created_at: string;
   updated_at: string;
+};
+
+export type MemoryDoc = {
+  id: string | null;
+  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  scope_id: string;
+  content: string;
+  updated_by: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type MemoryScopes = {
+  projects: Project[];
+  sections: Section[];
+  agents: Agent[];
+  tasks: Task[];
+};
+
+export type MemoryIndexStatus = {
+  status: 'idle' | 'pending' | 'running' | 'succeeded' | 'failed';
+  last_job: {
+    id: string;
+    status: 'pending' | 'running' | 'succeeded' | 'failed';
+    started_at: string | null;
+    finished_at: string | null;
+    stats_json: Record<string, unknown>;
+    error_text: string | null;
+    created_at: string;
+    updated_at: string;
+  } | null;
+};
+
+export type MemoryModelConfig = {
+  id: number;
+  provider_id: string | null;
+  model_id: string | null;
+  embedding_model_id: string | null;
+  updated_at: string | null;
 };

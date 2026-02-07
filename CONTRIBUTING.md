@@ -26,7 +26,7 @@ Open a PR against `main`. The [pull request template](.github/PULL_REQUEST_TEMPL
 
 ## Dev setup
 
-- **Clone and install:** see [README — Install](README.md#install) and [docs/INSTALL.md](docs/INSTALL.md).
+- **Clone and install:** see [README — Install](README.md#install) and [Docs/INSTALL.md](Docs/INSTALL.md).
 - **Monorepo:** from repo root we use `pnpm` (see root [package.json](package.json)).
 - **UI (local):** `pnpm run dev:ui` (or `pnpm -C apps/ui dev`). See [apps/ui/README.md](apps/ui/README.md).
 - **API (local):** `pnpm run dzzenos:api`.
