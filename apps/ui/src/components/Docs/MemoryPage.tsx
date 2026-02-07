@@ -1,165 +1,225 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { listBoards, getOverviewDoc, updateOverviewDoc, getBoardDoc, updateBoardDoc, getBoardChangelog } from '../../api/queries';
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
-import { Button } from '../ui/Button';
-import { InlineAlert } from '../ui/InlineAlert';
-import { Skeleton } from '../ui/Skeleton';
-import { PageHeader } from '../Layout/PageHeader';
 import { useTranslation } from 'react-i18next';
+
+import {
+  getMemoryDoc,
+  getMemoryIndexStatus,
+  getMemoryModels,
+  listMemoryScopes,
+  rebuildMemoryIndex,
+  updateMemoryDoc,
+  updateMemoryModels,
+} from '../../api/queries';
+import { PageHeader } from '../Layout/PageHeader';
+import { Card, CardContent, CardHeader, CardTitle } from '../ui/Card';
+import { InlineAlert } from '../ui/InlineAlert';
+import { Button } from '../ui/Button';
+
+type ScopeKey = 'overview' | 'project' | 'section' | 'agent' | 'task';
+
+const SCOPE_OPTIONS: ScopeKey[] = ['overview', 'project', 'section', 'agent', 'task'];
+
+function scopeLabel(scope: ScopeKey, t: (s: string) => string) {
+  if (scope === 'overview') return t('Overview');
+  if (scope === 'project') return t('Project Memory');
+  if (scope === 'section') return t('Section Memory');
+  if (scope === 'agent') return t('Agent Memory');
+  return t('Task Memory');
+}
 
 export function MemoryPage() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
-  const [overviewDraft, setOverviewDraft] = useState('');
-  const [boardDraft, setBoardDraft] = useState('');
+  const [scope, setScope] = useState<ScopeKey>('overview');
+  const [scopeId, setScopeId] = useState('');
+  const [draft, setDraft] = useState('');
+  const [providerId, setProviderId] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [embeddingModelId, setEmbeddingModelId] = useState('');
 
-  const boardsQ = useQuery({ queryKey: ['boards'], queryFn: listBoards });
-
-  useEffect(() => {
-    if (selectedBoardId) return;
-    const first = boardsQ.data?.[0];
-    if (first) setSelectedBoardId(first.id);
-  }, [boardsQ.data, selectedBoardId]);
-
-  const overviewQ = useQuery({ queryKey: ['docs', 'overview'], queryFn: getOverviewDoc });
-  const boardDocQ = useQuery({
-    queryKey: ['docs', 'board', selectedBoardId],
-    queryFn: () => (selectedBoardId ? getBoardDoc(selectedBoardId) : Promise.resolve({ content: '' })),
-    enabled: !!selectedBoardId,
+  const scopesQ = useQuery({ queryKey: ['memory-scopes'], queryFn: listMemoryScopes });
+  const docQ = useQuery({
+    queryKey: ['memory-doc', scope, scopeId],
+    queryFn: () => getMemoryDoc({ scope, id: scope === 'overview' ? undefined : scopeId }),
+    enabled: scope === 'overview' || !!scopeId,
   });
-  const changelogQ = useQuery({
-    queryKey: ['docs', 'changelog', selectedBoardId],
-    queryFn: () => (selectedBoardId ? getBoardChangelog(selectedBoardId) : Promise.resolve({ content: '' })),
-    enabled: !!selectedBoardId,
-  });
+  const indexQ = useQuery({ queryKey: ['memory-index-status'], queryFn: getMemoryIndexStatus });
+  const modelsQ = useQuery({ queryKey: ['memory-models'], queryFn: getMemoryModels });
 
-  const saveOverviewM = useMutation({
-    mutationFn: async () => updateOverviewDoc(overviewDraft),
+  const saveDocM = useMutation({
+    mutationFn: async () =>
+      updateMemoryDoc({
+        scope,
+        id: scope === 'overview' ? undefined : scopeId,
+        content: draft,
+      }),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ['docs', 'overview'] });
+      await qc.invalidateQueries({ queryKey: ['memory-doc', scope, scopeId] });
+      await qc.invalidateQueries({ queryKey: ['docs'] });
     },
   });
-
-  const saveBoardM = useMutation({
-    mutationFn: async () => {
-      if (!selectedBoardId) return;
-      return updateBoardDoc(selectedBoardId, boardDraft);
-    },
+  const rebuildM = useMutation({
+    mutationFn: async () => rebuildMemoryIndex(),
     onSuccess: async () => {
-      if (!selectedBoardId) return;
-      await qc.invalidateQueries({ queryKey: ['docs', 'board', selectedBoardId] });
+      await qc.invalidateQueries({ queryKey: ['memory-index-status'] });
+    },
+  });
+  const saveModelsM = useMutation({
+    mutationFn: async () =>
+      updateMemoryModels({
+        provider_id: providerId || null,
+        model_id: modelId || null,
+        embedding_model_id: embeddingModelId || null,
+      }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ['memory-models'] });
     },
   });
 
   useEffect(() => {
-    setOverviewDraft(overviewQ.data?.content ?? '');
-  }, [overviewQ.data?.content]);
+    setDraft(docQ.data?.content ?? '');
+  }, [docQ.data?.content]);
 
   useEffect(() => {
-    setBoardDraft(boardDocQ.data?.content ?? '');
-  }, [boardDocQ.data?.content]);
+    setProviderId(modelsQ.data?.provider_id ?? '');
+    setModelId(modelsQ.data?.model_id ?? '');
+    setEmbeddingModelId(modelsQ.data?.embedding_model_id ?? '');
+  }, [modelsQ.data?.provider_id, modelsQ.data?.model_id, modelsQ.data?.embedding_model_id]);
+
+  const scopeItems = useMemo(() => {
+    const scopes = scopesQ.data;
+    if (!scopes) return [];
+    if (scope === 'project') return scopes.projects.map((p) => ({ id: p.id, label: p.name }));
+    if (scope === 'section') return scopes.sections.map((s) => ({ id: s.id, label: s.name }));
+    if (scope === 'agent') return scopes.agents.map((a) => ({ id: a.id, label: a.display_name }));
+    if (scope === 'task') return scopes.tasks.map((task) => ({ id: task.id, label: task.title }));
+    return [];
+  }, [scopesQ.data, scope]);
+
+  useEffect(() => {
+    if (scope === 'overview') {
+      setScopeId('');
+      return;
+    }
+    if (scopeId && scopeItems.some((item) => item.id === scopeId)) return;
+    setScopeId(scopeItems[0]?.id ?? '');
+  }, [scope, scopeId, scopeItems]);
 
   return (
-    <div className="flex flex-col gap-4">
-      <PageHeader title={t('Memory')} subtitle={t('Workspace and board memory.')} />
-      <div className="grid w-full gap-4 lg:grid-cols-[280px,1fr]">
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle>{t('Boards')}</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {boardsQ.isLoading ? (
-              <div className="flex flex-col gap-2">
-                {Array.from({ length: 4 }).map((_, idx) => (
-                  <Skeleton key={idx} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : boardsQ.isError ? (
-              <InlineAlert>{String(boardsQ.error)}</InlineAlert>
-            ) : (
-              <div className="flex flex-col gap-2">
-                {(boardsQ.data ?? []).map((b) => (
-                  <button
-                    key={b.id}
-                    type="button"
-                    onClick={() => setSelectedBoardId(b.id)}
-                    className={
-                      'rounded-md border px-3 py-2 text-left text-sm transition ' +
-                      (b.id === selectedBoardId ? 'border-primary/50 bg-surface-2/60' : 'border-border/70 hover:bg-surface-2/50')
-                    }
-                  >
-                    <div className="text-foreground">{b.name}</div>
-                    <div className="text-xs text-muted-foreground">{b.description ?? t('No description')}</div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+    <div className="mx-auto w-full max-w-6xl">
+      <PageHeader title={t('Memory')} subtitle={t('Project, section, agent and task memory hub with indexing controls.')} />
 
+      {scopesQ.isError || docQ.isError || indexQ.isError || modelsQ.isError ? (
+        <div className="mt-4">
+          <InlineAlert>{String(scopesQ.error ?? docQ.error ?? indexQ.error ?? modelsQ.error)}</InlineAlert>
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[320px,1fr]">
         <div className="grid gap-4">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>{t('Overview')}</CardTitle>
-              <Button size="sm" variant="secondary" onClick={() => saveOverviewM.mutate()} disabled={saveOverviewM.isPending}>
-                {saveOverviewM.isPending ? t('Saving…') : t('Save')}
-              </Button>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {overviewQ.isLoading ? (
-                <Skeleton className="h-[200px] w-full" />
-              ) : (
-                <textarea
-                  className="min-h-[200px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                  value={overviewDraft}
-                  onChange={(e) => setOverviewDraft(e.target.value)}
-                  placeholder={t('Write the project overview here…')}
-                />
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle>{t('Board Doc')}</CardTitle>
-              <Button size="sm" variant="secondary" onClick={() => saveBoardM.mutate()} disabled={saveBoardM.isPending || !selectedBoardId}>
-                {saveBoardM.isPending ? t('Saving…') : t('Save')}
-              </Button>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {boardDocQ.isLoading ? (
-                <Skeleton className="h-[220px] w-full" />
-              ) : (
-                <textarea
-                  className="min-h-[220px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-foreground outline-none"
-                  value={boardDraft}
-                  onChange={(e) => setBoardDraft(e.target.value)}
-                  placeholder={t('Board context and notes…')}
-                />
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
             <CardHeader>
-              <CardTitle>{t('Changelog')}</CardTitle>
+              <CardTitle>{t('Scope')}</CardTitle>
             </CardHeader>
-            <CardContent className="pt-0">
-              {changelogQ.isLoading ? (
-                <Skeleton className="h-[160px] w-full" />
-              ) : (
-                <textarea
-                  readOnly
-                  className="min-h-[160px] w-full resize-none rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm text-muted-foreground outline-none"
-                  value={changelogQ.data?.content ?? ''}
-                  placeholder={t('No changelog entries yet.')}
-                />
-              )}
+            <CardContent className="grid gap-2">
+              <select
+                className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
+                value={scope}
+                onChange={(e) => setScope(e.target.value as ScopeKey)}
+              >
+                {SCOPE_OPTIONS.map((item) => (
+                  <option key={item} value={item}>
+                    {scopeLabel(item, t)}
+                  </option>
+                ))}
+              </select>
+              {scope !== 'overview' ? (
+                <select
+                  className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
+                  value={scopeId}
+                  onChange={(e) => setScopeId(e.target.value)}
+                >
+                  {scopeItems.length ? (
+                    scopeItems.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.label}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">{t('No items')}</option>
+                  )}
+                </select>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>{t('Indexing')}</CardTitle>
+              <Button size="sm" onClick={() => rebuildM.mutate()} disabled={rebuildM.isPending}>
+                {rebuildM.isPending ? t('Running…') : t('Reindex')}
+              </Button>
+            </CardHeader>
+            <CardContent className="grid gap-2 text-sm text-muted-foreground">
+              <div>{t('Status')}: {indexQ.data?.status ?? 'idle'}</div>
+              <div>{t('Last job')}: {indexQ.data?.last_job?.id ?? '—'}</div>
+              <div>{t('Finished')}: {indexQ.data?.last_job?.finished_at ?? '—'}</div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>{t('Memory Models')}</CardTitle>
+              <Button size="sm" onClick={() => saveModelsM.mutate()} disabled={saveModelsM.isPending}>
+                {saveModelsM.isPending ? t('Saving…') : t('Save')}
+              </Button>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              <input
+                className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
+                placeholder={t('Provider id')}
+                value={providerId}
+                onChange={(e) => setProviderId(e.target.value)}
+              />
+              <input
+                className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
+                placeholder={t('Model id')}
+                value={modelId}
+                onChange={(e) => setModelId(e.target.value)}
+              />
+              <input
+                className="h-9 rounded-md border border-input/70 bg-surface-1/70 px-3 text-sm"
+                placeholder={t('Embedding model id')}
+                value={embeddingModelId}
+                onChange={(e) => setEmbeddingModelId(e.target.value)}
+              />
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>{scopeLabel(scope, t)}</CardTitle>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => saveDocM.mutate()}
+              disabled={saveDocM.isPending || (scope !== 'overview' && !scopeId)}
+            >
+              {saveDocM.isPending ? t('Saving…') : t('Save')}
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <textarea
+              className="min-h-[520px] w-full rounded-md border border-input/70 bg-surface-1/70 px-3 py-2 text-sm"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={t('Memory document content…')}
+              disabled={scope !== 'overview' && !scopeId}
+            />
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

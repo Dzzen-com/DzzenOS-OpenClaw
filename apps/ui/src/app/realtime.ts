@@ -35,7 +35,9 @@ export function startRealtime(opts: {
         const taskId = msg.payload?.taskId as string | null | undefined;
         if (projectId || sectionId) opts.qc.invalidateQueries({ queryKey: ['tasks'] });
         else opts.qc.invalidateQueries({ queryKey: ['tasks'] });
+        opts.qc.invalidateQueries({ queryKey: ['projects-tree'] });
         if (taskId) {
+          opts.qc.invalidateQueries({ queryKey: ['task-details', taskId] });
           opts.qc.invalidateQueries({ queryKey: ['execution-config', taskId] });
           opts.qc.invalidateQueries({ queryKey: ['context-items', taskId] });
         }
@@ -43,11 +45,13 @@ export function startRealtime(opts: {
 
       if (msg.type === 'projects.changed') {
         opts.qc.invalidateQueries({ queryKey: ['projects'] });
+        opts.qc.invalidateQueries({ queryKey: ['projects-tree'] });
       }
 
       if (msg.type === 'sections.changed' || msg.type === 'boards.changed') {
         opts.qc.invalidateQueries({ queryKey: ['sections'] });
         opts.qc.invalidateQueries({ queryKey: ['boards'] });
+        opts.qc.invalidateQueries({ queryKey: ['projects-tree'] });
       }
 
       if (msg.type === 'task.checklist.changed') {
@@ -75,9 +79,18 @@ export function startRealtime(opts: {
         }
       }
 
+      if (msg.type === 'memory.changed') {
+        opts.qc.invalidateQueries({ queryKey: ['memory-scopes'] });
+        opts.qc.invalidateQueries({ queryKey: ['memory-doc'] });
+        opts.qc.invalidateQueries({ queryKey: ['memory-index-status'] });
+        opts.qc.invalidateQueries({ queryKey: ['memory-models'] });
+      }
+
       if (msg.type === 'agents.changed') {
         opts.qc.invalidateQueries({ queryKey: ['agents'] });
         opts.qc.invalidateQueries({ queryKey: ['marketplace-agents'] });
+        opts.qc.invalidateQueries({ queryKey: ['agent-subagents'] });
+        opts.qc.invalidateQueries({ queryKey: ['agent-orchestration-preview'] });
       }
 
       if (msg.type === 'skills.changed') {

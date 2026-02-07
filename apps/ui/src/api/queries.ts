@@ -15,15 +15,24 @@ import type {
   Approval,
   ApprovalStatus,
   Automation,
+  AgentOrchestrationPolicy,
   Project,
   ProjectStatus,
+  OrchestrationPreview,
   Section,
   Board,
   DocContent,
+  MemoryDoc,
+  MemoryIndexStatus,
+  MemoryModelConfig,
+  MemoryScopes,
+  NavigationTree,
   Task,
+  TaskDetails,
   TaskChecklistItem,
   TaskMessage,
   TaskStatus,
+  SubAgentLink,
   TaskSession,
 } from './types';
 
@@ -129,6 +138,14 @@ export function patchProjectStatus(
   });
 }
 
+export function getProjectsTree(input?: { projectId?: string; limitPerSection?: number }): Promise<NavigationTree> {
+  const qs = new URLSearchParams();
+  if (input?.projectId) qs.set('projectId', input.projectId);
+  if (input?.limitPerSection != null) qs.set('limitPerSection', String(input.limitPerSection));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/navigation/projects-tree${suffix}`);
+}
+
 // Legacy wrappers (board -> section).
 export function listBoards(): Promise<Board[]> {
   return apiFetch('/boards');
@@ -179,7 +196,17 @@ export function deleteBoard(id: string): Promise<{ ok: boolean }> {
   });
 }
 
-export function listTasks(input: string | { projectId?: string; sectionId?: string; viewMode?: 'kanban' | 'threads' }): Promise<Task[]> {
+export function listTasks(
+  input:
+    | string
+    | {
+        projectId?: string;
+        sectionId?: string;
+        viewMode?: 'kanban' | 'threads';
+        statuses?: TaskStatus[];
+        q?: string;
+      }
+): Promise<Task[]> {
   const qs = new URLSearchParams();
   if (typeof input === 'string') {
     qs.set('sectionId', input);
@@ -187,8 +214,14 @@ export function listTasks(input: string | { projectId?: string; sectionId?: stri
     if (input.projectId) qs.set('projectId', input.projectId);
     if (input.sectionId) qs.set('sectionId', input.sectionId);
     if (input.viewMode) qs.set('viewMode', input.viewMode);
+    if (input.statuses?.length) qs.set('statuses', input.statuses.join(','));
+    if (input.q) qs.set('q', input.q);
   }
   return apiFetch(`/tasks?${qs.toString()}`);
+}
+
+export function getTaskDetails(taskId: string): Promise<TaskDetails> {
+  return apiFetch(`/tasks/${encodeURIComponent(taskId)}`);
 }
 
 export function createTask(input: {
@@ -436,6 +469,45 @@ export function patchAgent(
   });
 }
 
+export function listSubagents(agentId: string): Promise<SubAgentLink[]> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/subagents`);
+}
+
+export function replaceSubagents(
+  agentId: string,
+  items: Array<{
+    child_agent_id: string;
+    role?: string;
+    trigger_rules_json?: Record<string, unknown>;
+    max_calls?: number;
+    order?: number;
+    sort_order?: number;
+  }>
+): Promise<{ ok: boolean; items: SubAgentLink[] }> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/subagents`, {
+    method: 'PUT',
+    body: JSON.stringify(items),
+  });
+}
+
+export function patchOrchestrationPolicy(
+  agentId: string,
+  patch: {
+    mode?: 'openclaw';
+    delegation_budget_json?: Record<string, unknown>;
+    escalation_rules_json?: Record<string, unknown>;
+  }
+): Promise<AgentOrchestrationPolicy> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/orchestration`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export function getOrchestrationPreview(agentId: string): Promise<OrchestrationPreview> {
+  return apiFetch(`/agents/${encodeURIComponent(agentId)}/orchestration/preview`);
+}
+
 export function resetAgent(id: string): Promise<Agent> {
   return apiFetch(`/agents/${encodeURIComponent(id)}/reset`, { method: 'POST' });
 }
@@ -546,6 +618,64 @@ export function getModelProviderOAuthStatus(
   if (input?.attemptId) qs.set('attemptId', input.attemptId);
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/openclaw/models/providers/${encodeURIComponent(id)}/oauth/status${suffix}`);
+}
+
+// --- Memory Hub ---
+export function listMemoryScopes(): Promise<MemoryScopes> {
+  return apiFetch('/memory/scopes');
+}
+
+export function getMemoryDoc(input: {
+  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  id?: string;
+}): Promise<MemoryDoc> {
+  const qs = new URLSearchParams();
+  qs.set('scope', input.scope);
+  if (input.id) qs.set('id', input.id);
+  return apiFetch(`/memory/docs?${qs.toString()}`);
+}
+
+export function updateMemoryDoc(input: {
+  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  id?: string;
+  content: string;
+  updatedBy?: string;
+}): Promise<{ ok: boolean; doc: MemoryDoc }> {
+  return apiFetch('/memory/docs', {
+    method: 'PUT',
+    body: JSON.stringify({
+      scope: input.scope,
+      id: input.id ?? null,
+      content: input.content,
+      updatedBy: input.updatedBy ?? 'ui',
+    }),
+  });
+}
+
+export function getMemoryIndexStatus(): Promise<MemoryIndexStatus> {
+  return apiFetch('/memory/index/status');
+}
+
+export function rebuildMemoryIndex(): Promise<{
+  ok: boolean;
+  job: MemoryIndexStatus['last_job'];
+}> {
+  return apiFetch('/memory/index/rebuild', { method: 'POST', body: JSON.stringify({}) });
+}
+
+export function getMemoryModels(): Promise<MemoryModelConfig> {
+  return apiFetch('/memory/models');
+}
+
+export function updateMemoryModels(input: {
+  provider_id?: string | null;
+  model_id?: string | null;
+  embedding_model_id?: string | null;
+}): Promise<{ ok: boolean; config: MemoryModelConfig }> {
+  return apiFetch('/memory/models', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
 }
 
 // --- Docs ---

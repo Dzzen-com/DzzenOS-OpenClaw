@@ -553,6 +553,22 @@ function jsonStringifyPromptOverrides(value: PromptOverrides): string {
   return JSON.stringify(out);
 }
 
+function parseJsonRecord(raw: any, fallback: Record<string, unknown> = {}): Record<string, unknown> {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // noop
+  }
+  return fallback;
+}
+
 function parseCapabilitiesJson(raw: any): SkillCapabilities {
   const normalize = (v: any) => (typeof v === 'string' ? v.trim() : '');
 
@@ -770,6 +786,15 @@ function main() {
     return path.join(memoryDir, 'sections', `${sectionId}.md`);
   }
 
+  function scopeMemoryPath(scope: string, scopeId: string) {
+    if (scope === 'overview') return path.join(memoryDir, 'overview.md');
+    if (scope === 'project') return path.join(memoryDir, 'projects', `${scopeId}.md`);
+    if (scope === 'section') return path.join(memoryDir, 'sections', `${scopeId}.md`);
+    if (scope === 'agent') return path.join(memoryDir, 'agents', `${scopeId}.md`);
+    if (scope === 'task') return path.join(memoryDir, 'tasks', `${scopeId}.md`);
+    return path.join(memoryDir, `${scope}-${scopeId}.md`);
+  }
+
   // Legacy aliases for internal compatibility.
   function boardDocPath(boardId: string) {
     return sectionDocPath(boardId);
@@ -963,6 +988,148 @@ function main() {
     );
   }
 
+  function getAgentSubagents(parentAgentId: string) {
+    const rows = db
+      .prepare(
+        `SELECT
+           s.id,
+           s.parent_agent_id,
+           s.child_agent_id,
+           s.role,
+           s.trigger_rules_json,
+           s.max_calls,
+           s.sort_order,
+           s.created_at,
+           s.updated_at,
+           a.display_name as child_display_name,
+           a.openclaw_agent_id as child_openclaw_agent_id
+         FROM agent_subagents s
+         JOIN agents a ON a.id = s.child_agent_id
+        WHERE s.parent_agent_id = ?
+        ORDER BY s.sort_order ASC, s.created_at ASC`
+      )
+      .all(parentAgentId) as any[];
+    return rows.map((r) => ({
+      id: String(r.id),
+      parent_agent_id: String(r.parent_agent_id),
+      child_agent_id: String(r.child_agent_id),
+      role: typeof r.role === 'string' ? r.role : '',
+      trigger_rules_json: parseJsonRecord(r.trigger_rules_json),
+      max_calls: Number.isFinite(Number(r.max_calls)) ? Number(r.max_calls) : 3,
+      order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
+      sort_order: Number.isFinite(Number(r.sort_order)) ? Number(r.sort_order) : 0,
+      created_at: String(r.created_at ?? ''),
+      updated_at: String(r.updated_at ?? ''),
+      child_display_name: String(r.child_display_name ?? ''),
+      child_openclaw_agent_id: String(r.child_openclaw_agent_id ?? ''),
+    }));
+  }
+
+  function getOrchestrationPolicy(agentId: string) {
+    db.prepare(
+      `INSERT OR IGNORE INTO agent_orchestration_policies(
+        agent_id, mode, delegation_budget_json, escalation_rules_json
+      ) VALUES (?, 'openclaw', '{"max_total_calls":8,"max_parallel":2}', '{}')`
+    ).run(agentId);
+
+    const row = rowOrNull<any>(
+      db
+        .prepare(
+          `SELECT agent_id, mode, delegation_budget_json, escalation_rules_json, created_at, updated_at
+             FROM agent_orchestration_policies
+            WHERE agent_id = ?`
+        )
+        .all(agentId) as any
+    );
+    if (!row) return null;
+    return {
+      agent_id: String(row.agent_id),
+      mode: String(row.mode ?? 'openclaw'),
+      delegation_budget_json: parseJsonRecord(row.delegation_budget_json),
+      escalation_rules_json: parseJsonRecord(row.escalation_rules_json),
+      created_at: String(row.created_at ?? ''),
+      updated_at: String(row.updated_at ?? ''),
+    };
+  }
+
+  function createArtifact(runId: string, stepId: string, kind: string, uri: string, meta?: Record<string, unknown>) {
+    db.prepare(
+      `INSERT INTO artifacts(id, run_id, step_id, kind, uri, mime_type, meta_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      runId,
+      stepId,
+      kind,
+      uri,
+      'application/json',
+      meta ? JSON.stringify(meta) : null
+    );
+  }
+
+  function memoryScopeFallback(scope: string, scopeId: string) {
+    if (scope === 'overview') return readTextFile(overviewDocPath);
+    if (scope === 'section') {
+      const fromDb = readTextFile(sectionMemoryPath(scopeId));
+      if (fromDb.trim()) return fromDb;
+      return readTextFile(sectionDocPath(scopeId));
+    }
+    return readTextFile(scopeMemoryPath(scope, scopeId));
+  }
+
+  function getMemoryDoc(scope: string, scopeId: string) {
+    const row = rowOrNull<any>(
+      db
+        .prepare(
+          `SELECT id, scope, scope_id, content, updated_by, created_at, updated_at
+             FROM memory_docs
+            WHERE scope = ? AND scope_id = ?`
+        )
+        .all(scope, scopeId) as any
+    );
+    if (row) {
+      return {
+        id: String(row.id),
+        scope: String(row.scope),
+        scope_id: String(row.scope_id),
+        content: String(row.content ?? ''),
+        updated_by: row.updated_by == null ? null : String(row.updated_by),
+        created_at: String(row.created_at ?? ''),
+        updated_at: String(row.updated_at ?? ''),
+      };
+    }
+    const content = memoryScopeFallback(scope, scopeId);
+    return {
+      id: null,
+      scope,
+      scope_id: scopeId,
+      content,
+      updated_by: null,
+      created_at: null,
+      updated_at: null,
+    };
+  }
+
+  function upsertMemoryDoc(scope: string, scopeId: string, content: string, updatedBy: string | null) {
+    db.prepare(
+      `INSERT INTO memory_docs(id, scope, scope_id, content, updated_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(scope, scope_id)
+       DO UPDATE SET
+         content = excluded.content,
+         updated_by = excluded.updated_by`
+    ).run(randomUUID(), scope, scopeId, content, updatedBy);
+
+    if (scope === 'overview') {
+      writeTextFile(overviewDocPath, content);
+    } else if (scope === 'section') {
+      writeTextFile(sectionMemoryPath(scopeId), content);
+      writeTextFile(sectionDocPath(scopeId), content);
+    } else {
+      writeTextFile(scopeMemoryPath(scope, scopeId), content);
+    }
+  }
+
   function ensureTaskSession(
     taskId: string,
     opts?: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null }
@@ -1056,6 +1223,21 @@ function main() {
     const agentRow = session?.agent_id ? getAgentRowById(session.agent_id) : getDefaultAgentRow();
     const agentOpenClawId = agentRow?.openclaw_agent_id ?? (defaultAgentId || null);
     const agentDisplayName = agentRow?.display_name ?? 'orchestrator';
+    const subagents = agentRow?.id ? getAgentSubagents(agentRow.id) : [];
+    const orchestrationPolicy = agentRow?.id ? getOrchestrationPolicy(agentRow.id) : null;
+    const orchestrationSnapshot = {
+      mode: 'openclaw',
+      parent_agent_id: agentRow?.id ?? null,
+      parent_agent_name: agentDisplayName,
+      policy: orchestrationPolicy,
+      subagents: subagents.map((s) => ({
+        id: s.id,
+        child_agent_id: s.child_agent_id,
+        role: s.role,
+        trigger_rules_json: s.trigger_rules_json,
+        max_calls: s.max_calls,
+      })),
+    };
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
 
@@ -1072,7 +1254,7 @@ function main() {
       ).run(runId, task.workspace_id, task.board_id, task.id, agentDisplayName, 'running');
       db.prepare(
         'INSERT INTO run_steps(id, run_id, step_index, kind, status, input_json, output_json) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(stepId, runId, 0, opts.mode, 'running', JSON.stringify({ mode: opts.mode }), null);
+      ).run(stepId, runId, 0, opts.mode, 'running', JSON.stringify({ mode: opts.mode, orchestration: orchestrationSnapshot }), null);
       db.exec('COMMIT');
     } catch (e) {
       db.exec('ROLLBACK');
@@ -1089,11 +1271,25 @@ function main() {
           : opts.mode === 'execute'
             ? 'You are executing the task. Return JSON: { "status": "review" | "doing", "report": "..." }.'
             : 'Summarize the completion for changelog. Return bullet points.';
+      const orchestrationPrompt =
+        subagents.length > 0
+          ? [
+              'Delegation policy: OpenClaw-only orchestration. Use subagents when relevant.',
+              `Budget: ${JSON.stringify(orchestrationPolicy?.delegation_budget_json ?? { max_total_calls: 8, max_parallel: 2 })}`,
+              `Escalation: ${JSON.stringify(orchestrationPolicy?.escalation_rules_json ?? {})}`,
+              'Available subagents:',
+              ...subagents.map(
+                (s, idx) =>
+                  `${idx + 1}. ${s.child_display_name || s.child_agent_id} (${s.child_openclaw_agent_id}) role="${s.role}" max_calls=${s.max_calls} trigger_rules=${JSON.stringify(s.trigger_rules_json)}`
+              ),
+              'If delegation details are not observable in runtime output, continue safely and return final result.',
+            ].join('\n')
+          : 'No subagents configured. Execute directly as the main agent.';
 
       const reasoning = resolveReasoning(session?.reasoning_level ?? 'auto', task.description);
       const reasoningPrefix = reasoning ? `/think ${reasoning}` : '';
       const inputText =
-        `${reasoningPrefix ? `${reasoningPrefix}\n` : ''}${prompt}\n\n` +
+        `${reasoningPrefix ? `${reasoningPrefix}\n` : ''}${prompt}\n\n${orchestrationPrompt}\n\n` +
         `Task title: ${task.title}\nTask description: ${task.description ?? ''}`;
 
       const { text, raw } = await callOpenResponses({
@@ -1109,6 +1305,16 @@ function main() {
       db.prepare(
         "UPDATE run_steps SET status = 'succeeded', output_json = ?, finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')) WHERE id = ?"
       ).run(JSON.stringify({ text: outputText, parsed, usage: raw?.usage ?? null }), stepId);
+      createArtifact(runId, stepId, 'orchestration.snapshot', `memory://runs/${runId}/orchestration-snapshot.json`, orchestrationSnapshot);
+      const delegation = parseJsonRecord(
+        parsed?.delegation_decisions,
+        parseJsonRecord(parsed?.delegation, {})
+      );
+      createArtifact(runId, stepId, 'orchestration.decisions', `memory://runs/${runId}/delegation-decisions.json`, {
+        delegation_decisions: delegation,
+        delegation_observable: Object.keys(delegation).length > 0,
+        note: Object.keys(delegation).length > 0 ? null : 'delegation not observable',
+      });
 
       const usage = raw?.usage ?? null;
       if (usage && typeof usage === 'object') {
@@ -2682,6 +2888,115 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, row ? agentRowToDto(row) : { id }, corsHeaders);
       }
 
+      const listSubagentsMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/subagents$/)
+        : null;
+      if (listSubagentsMatch) {
+        const agentId = decodeURIComponent(listSubagentsMatch[1]);
+        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        return sendJson(res, 200, getAgentSubagents(agentId), corsHeaders);
+      }
+
+      const replaceSubagentsMatch = req.method === 'PUT'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/subagents$/)
+        : null;
+      if (replaceSubagentsMatch) {
+        const agentId = decodeURIComponent(replaceSubagentsMatch[1]);
+        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        const body = await readJson(req);
+        const items = Array.isArray(body) ? body : Array.isArray(body?.items) ? body.items : null;
+        if (!items) return sendJson(res, 400, { error: 'Expected array payload' }, corsHeaders);
+
+        db.exec('BEGIN');
+        try {
+          db.prepare('DELETE FROM agent_subagents WHERE parent_agent_id = ?').run(agentId);
+          const ins = db.prepare(
+            `INSERT INTO agent_subagents(
+              id, parent_agent_id, child_agent_id, role, trigger_rules_json, max_calls, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+          );
+          for (let idx = 0; idx < items.length; idx += 1) {
+            const row = items[idx];
+            const childAgentId = normalizeString(row?.child_agent_id ?? row?.childAgentId);
+            if (!childAgentId) throw new HttpError(400, `child_agent_id is required at index ${idx}`);
+            if (childAgentId === agentId) throw new HttpError(400, `child_agent_id cannot equal parent agent at index ${idx}`);
+            const child = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(childAgentId) as any);
+            if (!child) throw new HttpError(400, `child agent not found at index ${idx}`);
+            const role = normalizeString(row?.role) || '';
+            const triggerRules = parseJsonRecord(row?.trigger_rules_json ?? row?.triggerRules ?? {}, {});
+            const maxCallsRaw = Number(row?.max_calls ?? row?.maxCalls ?? 3);
+            const maxCalls = Number.isFinite(maxCallsRaw) ? Math.max(1, Math.min(50, Math.floor(maxCallsRaw))) : 3;
+            const sortOrderRaw = Number(row?.sort_order ?? row?.order ?? idx);
+            const sortOrder = Number.isFinite(sortOrderRaw) ? Math.floor(sortOrderRaw) : idx;
+            ins.run(randomUUID(), agentId, childAgentId, role, JSON.stringify(triggerRules), maxCalls, sortOrder);
+          }
+          db.exec('COMMIT');
+        } catch (err) {
+          db.exec('ROLLBACK');
+          throw err;
+        }
+        sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        return sendJson(res, 200, { ok: true, items: getAgentSubagents(agentId) }, corsHeaders);
+      }
+
+      const patchOrchestrationMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/orchestration$/)
+        : null;
+      if (patchOrchestrationMatch) {
+        const agentId = decodeURIComponent(patchOrchestrationMatch[1]);
+        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        const body = await readJson(req);
+        const mode = normalizeString(body?.mode || 'openclaw') || 'openclaw';
+        if (mode !== 'openclaw') return sendJson(res, 400, { error: 'mode must be openclaw' }, corsHeaders);
+        const delegationBudget = parseJsonRecord(body?.delegation_budget_json ?? body?.delegationBudget ?? {}, {});
+        const escalationRules = parseJsonRecord(body?.escalation_rules_json ?? body?.escalationRules ?? {}, {});
+
+        db.prepare(
+          `INSERT INTO agent_orchestration_policies(
+            agent_id, mode, delegation_budget_json, escalation_rules_json
+          ) VALUES (?, ?, ?, ?)
+          ON CONFLICT(agent_id)
+          DO UPDATE SET
+            mode = excluded.mode,
+            delegation_budget_json = excluded.delegation_budget_json,
+            escalation_rules_json = excluded.escalation_rules_json`
+        ).run(agentId, mode, JSON.stringify(delegationBudget), JSON.stringify(escalationRules));
+
+        sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        return sendJson(res, 200, getOrchestrationPolicy(agentId), corsHeaders);
+      }
+
+      const orchestrationPreviewMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/agents\/([^/]+)\/orchestration\/preview$/)
+        : null;
+      if (orchestrationPreviewMatch) {
+        const agentId = decodeURIComponent(orchestrationPreviewMatch[1]);
+        const agent = rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+          db
+            .prepare('SELECT id, display_name, openclaw_agent_id FROM agents WHERE id = ?')
+            .all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        const subagents = getAgentSubagents(agentId);
+        const policy = getOrchestrationPolicy(agentId);
+        const preview = [
+          `Parent agent: ${agent.display_name} (${agent.openclaw_agent_id})`,
+          `Mode: ${policy?.mode ?? 'openclaw'}`,
+          `Delegation budget: ${JSON.stringify(policy?.delegation_budget_json ?? { max_total_calls: 8, max_parallel: 2 })}`,
+          `Escalation rules: ${JSON.stringify(policy?.escalation_rules_json ?? {})}`,
+          'Subagents:',
+          ...(subagents.length
+            ? subagents.map((s, idx) =>
+                `${idx + 1}. ${s.child_display_name || s.child_agent_id} (${s.child_openclaw_agent_id}) role="${s.role}" max_calls=${s.max_calls} trigger_rules=${JSON.stringify(s.trigger_rules_json)}`
+              )
+            : ['(none)']),
+        ].join('\n');
+        return sendJson(res, 200, { agent_id: agentId, mode: 'openclaw', policy, subagents, preview }, corsHeaders);
+      }
+
       const agentResetMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/reset$/) : null;
       if (agentResetMatch) {
         const id = decodeURIComponent(agentResetMatch[1]);
@@ -2884,21 +3199,24 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/docs/overview') {
-        return sendJson(res, 200, { content: readTextFile(overviewDocPath) }, corsHeaders);
+        const doc = getMemoryDoc('overview', '');
+        return sendJson(res, 200, { content: doc.content }, corsHeaders);
       }
 
       if (req.method === 'PUT' && url.pathname === '/docs/overview') {
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
-        writeTextFile(overviewDocPath, content);
+        upsertMemoryDoc('overview', '', content, 'docs-overview');
         sseBroadcast({ type: 'docs.changed', payload: { scope: 'overview' } });
+        sseBroadcast({ type: 'memory.changed', payload: { scope: 'overview', scopeId: '' } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       const sectionDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
       if (sectionDocsGet) {
         const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsGet[1]), 'sectionId');
-        return sendJson(res, 200, { content: readTextFile(sectionDocPath(sectionId)) }, corsHeaders);
+        const doc = getMemoryDoc('section', sectionId);
+        return sendJson(res, 200, { content: doc.content }, corsHeaders);
       }
 
       const sectionDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
@@ -2906,8 +3224,9 @@ const server = http.createServer(async (req, res) => {
         const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsPut[1]), 'sectionId');
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
-        writeTextFile(sectionDocPath(sectionId), content);
+        upsertMemoryDoc('section', sectionId, content, 'docs-section');
         sseBroadcast({ type: 'docs.changed', payload: { sectionId, boardId: sectionId } });
+        sseBroadcast({ type: 'memory.changed', payload: { scope: 'section', scopeId: sectionId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -2929,8 +3248,280 @@ const server = http.createServer(async (req, res) => {
         const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
         if (!summary) return sendJson(res, 400, { error: 'summary is required' }, corsHeaders);
         appendSectionSummary({ sectionId, title, summary });
+        upsertMemoryDoc('section', sectionId, readTextFile(sectionMemoryPath(sectionId)), 'summary-bot');
         sseBroadcast({ type: 'docs.changed', payload: { sectionId, boardId: sectionId } });
+        sseBroadcast({ type: 'memory.changed', payload: { scope: 'section', scopeId: sectionId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/scopes') {
+        const projects = db
+          .prepare('SELECT id, name, description, created_at, updated_at FROM workspaces ORDER BY created_at ASC')
+          .all();
+        const sections = db
+          .prepare(
+            `SELECT id, workspace_id as project_id, name, description, position, section_kind, view_mode, created_at, updated_at
+               FROM boards
+              ORDER BY workspace_id ASC, position ASC, created_at ASC`
+          )
+          .all();
+        const agents = db
+          .prepare(
+            `SELECT id, display_name, openclaw_agent_id, enabled, category, created_at, updated_at
+               FROM agents
+              ORDER BY enabled DESC, sort_order ASC, display_name ASC`
+          )
+          .all();
+        const tasks = db
+          .prepare(
+            `SELECT id, board_id as section_id, workspace_id as project_id, title, status, created_at, updated_at
+               FROM tasks
+              ORDER BY updated_at DESC
+              LIMIT 500`
+          )
+          .all();
+        return sendJson(res, 200, { projects, sections, agents, tasks }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/docs') {
+        const scope = normalizeString(url.searchParams.get('scope'));
+        if (!new Set(['overview', 'project', 'section', 'agent', 'task']).has(scope)) {
+          return sendJson(res, 400, { error: 'scope must be one of overview|project|section|agent|task' }, corsHeaders);
+        }
+        const scopeId = scope === 'overview' ? '' : normalizeString(url.searchParams.get('id'));
+        if (scope !== 'overview' && !scopeId) return sendJson(res, 400, { error: 'id is required for this scope' }, corsHeaders);
+        return sendJson(res, 200, getMemoryDoc(scope, scopeId), corsHeaders);
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/memory/docs') {
+        const body = await readJson(req);
+        const scope = normalizeString(body?.scope ?? url.searchParams.get('scope'));
+        if (!new Set(['overview', 'project', 'section', 'agent', 'task']).has(scope)) {
+          return sendJson(res, 400, { error: 'scope must be one of overview|project|section|agent|task' }, corsHeaders);
+        }
+        const scopeId =
+          scope === 'overview'
+            ? ''
+            : normalizeString(body?.id ?? body?.scopeId ?? url.searchParams.get('id'));
+        if (scope !== 'overview' && !scopeId) return sendJson(res, 400, { error: 'id is required for this scope' }, corsHeaders);
+        const content = typeof body?.content === 'string' ? body.content : '';
+        const updatedBy = normalizeString(body?.updatedBy) || 'ui';
+        upsertMemoryDoc(scope, scopeId, content, updatedBy);
+        sseBroadcast({ type: 'memory.changed', payload: { scope, scopeId } });
+        if (scope === 'overview') sseBroadcast({ type: 'docs.changed', payload: { scope: 'overview' } });
+        if (scope === 'section') sseBroadcast({ type: 'docs.changed', payload: { sectionId: scopeId, boardId: scopeId } });
+        return sendJson(res, 200, { ok: true, doc: getMemoryDoc(scope, scopeId) }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/index/status') {
+        const lastJob = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, status, started_at, finished_at, stats_json, error_text, created_at, updated_at
+                 FROM memory_index_jobs
+                ORDER BY created_at DESC
+                LIMIT 1`
+            )
+            .all() as any
+        );
+        return sendJson(
+          res,
+          200,
+          {
+            status: lastJob?.status ?? 'idle',
+            last_job: lastJob
+              ? {
+                  ...lastJob,
+                  stats_json: parseJsonRecord(lastJob.stats_json),
+                }
+              : null,
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'POST' && url.pathname === '/memory/index/rebuild') {
+        const id = randomUUID();
+        const now = new Date().toISOString();
+        db.prepare(
+          `INSERT INTO memory_index_jobs(id, status, started_at, stats_json)
+           VALUES (?, 'running', ?, ?)`
+        ).run(id, now, JSON.stringify({ scanned_docs: 0, indexed_chunks: 0 }));
+        db.prepare(
+          `UPDATE memory_index_jobs
+              SET status = 'succeeded',
+                  finished_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                  stats_json = ?
+            WHERE id = ?`
+        ).run(JSON.stringify({ scanned_docs: 0, indexed_chunks: 0, mode: 'stub' }), id);
+        sseBroadcast({ type: 'memory.changed', payload: { indexJobId: id } });
+        const job = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, status, started_at, finished_at, stats_json, error_text, created_at, updated_at
+                 FROM memory_index_jobs
+                WHERE id = ?`
+            )
+            .all(id) as any
+        );
+        return sendJson(
+          res,
+          200,
+          {
+            ok: true,
+            job: job
+              ? {
+                  ...job,
+                  stats_json: parseJsonRecord(job.stats_json),
+                }
+              : null,
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'GET' && url.pathname === '/memory/models') {
+        const row = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT id, provider_id, model_id, embedding_model_id, updated_at
+                 FROM memory_model_config
+                WHERE id = 1`
+            )
+            .all() as any
+        );
+        return sendJson(
+          res,
+          200,
+          {
+            id: 1,
+            provider_id: row?.provider_id ?? null,
+            model_id: row?.model_id ?? null,
+            embedding_model_id: row?.embedding_model_id ?? null,
+            updated_at: row?.updated_at ?? null,
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'PUT' && url.pathname === '/memory/models') {
+        const body = await readJson(req);
+        const providerId = normalizeString(body?.provider_id ?? body?.providerId) || null;
+        const modelId = normalizeString(body?.model_id ?? body?.modelId) || null;
+        const embeddingModelId = normalizeString(body?.embedding_model_id ?? body?.embeddingModelId) || null;
+        db.prepare(
+          `INSERT INTO memory_model_config(id, provider_id, model_id, embedding_model_id)
+           VALUES (1, ?, ?, ?)
+           ON CONFLICT(id)
+           DO UPDATE SET
+             provider_id = excluded.provider_id,
+             model_id = excluded.model_id,
+             embedding_model_id = excluded.embedding_model_id`
+        ).run(providerId, modelId, embeddingModelId);
+        sseBroadcast({ type: 'memory.changed', payload: { models: true } });
+        return sendJson(
+          res,
+          200,
+          {
+            ok: true,
+            config: rowOrNull<any>(
+              db
+                .prepare(
+                  `SELECT id, provider_id, model_id, embedding_model_id, updated_at
+                     FROM memory_model_config
+                    WHERE id = 1`
+                )
+                .all() as any
+            ),
+          },
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'GET' && url.pathname === '/navigation/projects-tree') {
+        const projectIdFilter = normalizeString(url.searchParams.get('projectId') ?? '');
+        const limitRaw = Number(url.searchParams.get('limitPerSection') ?? '');
+        const limitPerSection = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(20, Math.max(1, Math.floor(limitRaw))) : 5;
+        const projectRows = db
+          .prepare(
+            `SELECT
+               w.id,
+               w.name,
+               w.description,
+               w.created_at,
+               w.updated_at
+             FROM workspaces w
+             ${projectIdFilter ? 'WHERE w.id = ?' : ''}
+             ORDER BY w.created_at ASC`
+          )
+          .all(...(projectIdFilter ? [projectIdFilter] : [])) as any[];
+
+        const projects = projectRows.map((p) => {
+          const counters = rowOrNull<any>(
+            db
+              .prepare(
+                `SELECT
+                   COUNT(*) as total,
+                   SUM(CASE WHEN t.status = 'doing' THEN 1 ELSE 0 END) as doing,
+                   SUM(CASE WHEN t.status = 'review' THEN 1 ELSE 0 END) as review
+                 FROM tasks t
+                 JOIN boards b ON b.id = t.board_id
+                 WHERE COALESCE(t.workspace_id, b.workspace_id) = ?`
+              )
+              .all(p.id) as any
+          );
+          const sectionRows = db
+            .prepare(
+              `SELECT id, workspace_id as project_id, name, description, position, view_mode, section_kind, created_at, updated_at
+                 FROM boards
+                WHERE workspace_id = ?
+                ORDER BY position ASC, created_at ASC`
+            )
+            .all(p.id) as any[];
+          const sections = sectionRows.map((s) => {
+            const sectionCounters = rowOrNull<any>(
+              db
+                .prepare(
+                  `SELECT
+                     COUNT(*) as total,
+                     SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END) as doing,
+                     SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END) as review
+                   FROM tasks
+                   WHERE board_id = ?`
+                )
+                .all(s.id) as any
+            );
+            const tasks = db
+              .prepare(
+                `SELECT id, board_id as section_id, board_id, workspace_id as project_id, workspace_id, title, status, updated_at
+                   FROM tasks
+                  WHERE board_id = ? AND status IN ('doing', 'review')
+                  ORDER BY updated_at DESC
+                  LIMIT ?`
+              )
+              .all(s.id, limitPerSection);
+            return {
+              ...s,
+              counters: {
+                total: Number(sectionCounters?.total ?? 0),
+                doing: Number(sectionCounters?.doing ?? 0),
+                review: Number(sectionCounters?.review ?? 0),
+              },
+              tasks,
+            };
+          });
+          return {
+            ...p,
+            counters: {
+              total: Number(counters?.total ?? 0),
+              doing: Number(counters?.doing ?? 0),
+              review: Number(counters?.review ?? 0),
+            },
+            sections,
+          };
+        });
+
+        return sendJson(res, 200, { projects, limit_per_section: limitPerSection }, corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/projects') {
@@ -3409,6 +4000,14 @@ const server = http.createServer(async (req, res) => {
         const viewMode = normalizeString(url.searchParams.get('viewMode') ?? '');
         const sectionId = normalizeString(url.searchParams.get('sectionId') ?? url.searchParams.get('boardId') ?? '') || null;
         let projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
+        const queryText = normalizeString(url.searchParams.get('q') ?? '');
+        const statusesRaw = normalizeString(url.searchParams.get('statuses') ?? '');
+        const statuses = statusesRaw
+          ? statusesRaw
+              .split(',')
+              .map((s) => s.trim())
+              .filter((s) => TASK_STATUSES.has(s))
+          : [];
 
         if (!projectId && sectionId) {
           const sectionMeta = rowOrNull<{ workspace_id: string }>(
@@ -3424,6 +4023,15 @@ const server = http.createServer(async (req, res) => {
         if (sectionId) {
           where.push('t.board_id = ?');
           params.push(sectionId);
+        }
+        if (statuses.length > 0) {
+          where.push(`t.status IN (${statuses.map(() => '?').join(', ')})`);
+          params.push(...statuses);
+        }
+        if (queryText) {
+          where.push('(lower(t.title) LIKE ? OR lower(COALESCE(t.description, \'\')) LIKE ?)');
+          const needle = `%${queryText.toLowerCase()}%`;
+          params.push(needle, needle);
         }
 
         const tasks = db
@@ -4045,6 +4653,55 @@ const server = http.createServer(async (req, res) => {
         }));
 
         return sendJson(res, 200, payload, corsHeaders);
+      }
+
+      const taskDetailsMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
+      if (taskDetailsMatch) {
+        const taskId = decodeURIComponent(taskDetailsMatch[1]);
+        const task = rowOrNull<any>(
+          db
+            .prepare(
+              `SELECT
+                 t.id,
+                 COALESCE(t.workspace_id, b.workspace_id) as project_id,
+                 COALESCE(t.workspace_id, b.workspace_id) as workspace_id,
+                 t.board_id as section_id,
+                 t.board_id,
+                 t.title,
+                 t.description,
+                 t.status,
+                 t.position,
+                 t.due_at,
+                 t.is_inbox,
+                 t.created_at,
+                 t.updated_at,
+                 b.name as section_name,
+                 b.view_mode,
+                 s.agent_id,
+                 s.status as session_status,
+                 s.last_run_id,
+                 a.display_name as agent_display_name,
+                 r.status as run_status,
+                 r.started_at as run_started_at,
+                 r.updated_at as run_updated_at,
+                 r.finished_at as run_finished_at,
+                 rs.kind as run_step_kind
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+               LEFT JOIN task_sessions s ON s.task_id = t.id
+               LEFT JOIN agents a ON a.id = s.agent_id
+               LEFT JOIN agent_runs r ON r.id = (
+                 SELECT id FROM agent_runs WHERE task_id = t.id ORDER BY created_at DESC LIMIT 1
+               )
+               LEFT JOIN run_steps rs ON rs.id = (
+                 SELECT id FROM run_steps WHERE run_id = r.id ORDER BY step_index DESC LIMIT 1
+               )
+              WHERE t.id = ?`
+            )
+            .all(taskId) as any
+        );
+        if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        return sendJson(res, 200, task, corsHeaders);
       }
 
       const deleteTaskMatch = req.method === 'DELETE' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
