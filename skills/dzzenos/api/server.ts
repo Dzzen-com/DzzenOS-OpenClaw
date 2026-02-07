@@ -1046,24 +1046,24 @@ function main() {
     };
   }
 
-  function getResolvedWorkspaceAgentSettings(workspaceId: string) {
-    const row = getWorkspaceAgentSettingsRow(workspaceId);
-    if (row) return row;
-    return {
-      workspace_id: workspaceId,
-      preferred_agent_id: null,
-      skills_json: '[]',
-      prompt_overrides_json: '{}',
-      policy_json: '{}',
-      memory_path: null,
-      auto_delegate: 1,
-      sub_agents_json: '[]',
-      created_at: null,
-      updated_at: null,
-      preferred_agent_display_name: null,
-      preferred_agent_openclaw_id: null,
-    };
-  }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   function resolvePromptForMode(input: {
     mode: 'plan' | 'execute' | 'report' | 'chat';
