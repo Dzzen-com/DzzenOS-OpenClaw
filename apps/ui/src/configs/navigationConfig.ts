@@ -17,28 +17,35 @@ const navigationConfig: FuseNavItemType[] = [
 		title: 'Workspace',
 		type: 'item',
 		icon: 'lucide:layout-dashboard',
-		url: 'workspace'
+		url: '/workspace'
 	},
 	{
 		id: 'projects',
 		title: 'Projects',
 		type: 'item',
 		icon: 'lucide:kanban-square',
-		url: 'workspace'
+		url: '/projects'
 	},
 	{
 		id: 'agents',
 		title: 'Agents',
 		type: 'item',
 		icon: 'lucide:bot',
-		url: 'workspace'
+		url: '/agents'
 	},
 	{
 		id: 'docs',
 		title: 'Docs',
 		type: 'item',
 		icon: 'lucide:file-text',
-		url: 'workspace'
+		url: '/docs'
+	},
+	{
+		id: 'automations',
+		title: 'Automations',
+		type: 'item',
+		icon: 'lucide:workflow',
+		url: '/automations'
 	}
 ];
 
