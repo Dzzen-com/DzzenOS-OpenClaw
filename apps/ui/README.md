@@ -1,67 +1,33 @@
-# @dzzenos/ui
 
-UI shell for DzzenOS (Issue #7): Linear-like layout scaffolding.
+# Fuse React Versions
+## Available Versions
+- **Fuse React ViteJs** - Single Page Application (SPA)
+  - ViteJs offers a fast development experience with its instant server start and hot module replacement, making it ideal for SPAs where quick feedback and performance are crucial.
+- **Fuse React NextJs** - Server Side Rendering (SSR)
+  - NextJs excels in SSR by providing automatic static optimization and server-side rendering capabilities, which enhance SEO and initial load performance, making it perfect for dynamic web applications.
 
-## What’s implemented
+## GitHub Branches
 
-- Left sidebar (placeholder boards/workspaces)
-- Top bar (search + New button placeholders)
-- Main area with a tasks table (placeholder data)
-- Task drawer placeholder (Radix Dialog) opened by selecting a row
+| | **ViteJs** | **NextJs** |
+|---------|------|----------|
+| **Demo** | [`vitejs-demo`](https://github.com/withinpixels/fuse-react/tree/vitejs-demo) [🌐](https://fuse-react-vitejs-demo.fusetheme.com) | [`nextjs-demo`](https://github.com/withinpixels/fuse-react/tree/nextjs-demo) [🌐](https://fuse-react-nextjs-demo.fusetheme.com) |
+| **Skeleton** | [`vitejs-skeleton`](https://github.com/withinpixels/fuse-react/tree/vitejs-skeleton) [🌐](https://fuse-react-vitejs-skeleton.fusetheme.com) | [`nextjs-skeleton`](https://github.com/withinpixels/fuse-react/tree/nextjs-skeleton) [🌐](https://fuse-react-nextjs-skeleton.fusetheme.com) |
+| **Development Demo** | [`vitejs-demo-dev`](https://github.com/withinpixels/fuse-react/tree/vitejs-demo-dev) [🌐](https://fuse-react-vitejs-demo-dev.fusetheme.com) | [`nextjs-demo-dev`](https://github.com/withinpixels/fuse-react/tree/nextjs-demo-dev) [🌐](https://fuse-react-nextjs-demo-dev.fusetheme.com) |
+| **Development Skeleton** | [`vitejs-skeleton-dev`](https://github.com/withinpixels/fuse-react/tree/vitejs-skeleton-dev) [🌐](https://fuse-react-vitejs-skeleton-dev.fusetheme.com) | [`nextjs-skeleton-dev`](https://github.com/withinpixels/fuse-react/tree/nextjs-skeleton-dev) [🌐](https://fuse-react-nextjs-skeleton-dev.fusetheme.com) |
 
-## Run locally
 
-From repo root:
+## CLI Reference Links
 
-```bash
-corepack pnpm -C apps/ui dev
-```
+- [ViteJs CLI Documentation](https://vitejs.dev/guide/cli.html)
+ 
+- [NextJs CLI Documentation](https://nextjs.org/docs/api-reference/cli)
 
-Then open the URL printed by Vite (usually http://localhost:5173).
+## License
 
-## Version in UI
+- [License Information](https://themeforest.net/licenses/terms/regular)
 
-The sidebar version badge is injected automatically at build time.
+## More
 
-Resolution order:
+- [Fuse Theme Official Website](https://fusetheme.com/)
 
-1. `VITE_APP_VERSION`
-2. `VITE_DZZENOS_VERSION`
-3. `VITE_PACKAGE_VERSION`
-4. root `package.json` `version`
-5. `git describe --tags --always`
-6. `apps/ui/package.json` `version`
-7. fallback `0.0.0`
 
-This means after install/update from git or tagged releases, the platform UI version updates without manual edits.
-
-If you want strict release versioning in CI/CD, set `VITE_APP_VERSION` explicitly during the build.
-
-## Internationalization (i18n)
-
-The UI uses `i18next` + `react-i18next`.
-
-### Source files
-
-- i18n bootstrap: `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/i18n/index.ts`
-- translation dictionary: `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/i18n/resources.ts`
-- i18n init import: `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/main.tsx`
-- language selector UI: `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/components/Sidebar/Sidebar.tsx`
-
-### Add a new language
-
-1. Add dictionary entries in `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/i18n/resources.ts` (create a new object like `xxTranslation`).
-2. Register the language in `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/i18n/index.ts`:
-   - add to `resources`
-   - add to `supportedLngs`
-3. Add option in the language selector in `/Users/admin/.codex/worktrees/11bb/DzzenOS-OpenClaw/apps/ui/src/components/Sidebar/Sidebar.tsx`.
-4. Run checks:
-   - `pnpm -C apps/ui lint`
-   - `pnpm -C apps/ui build`
-
-### Rules for contributors
-
-- Do not hardcode user-facing strings in components; use `t('...')`.
-- Reuse existing keys where possible; avoid duplicate semantic keys.
-- Keep English as fallback language.
-- For new UI sections, add keys before shipping the feature.
