@@ -4,9 +4,6 @@ import {
 	Alert,
 	Avatar,
 	Button,
-	Card,
-	CardContent,
-	Chip,
 	Divider,
 	FormControl,
 	InputLabel,
@@ -24,7 +21,6 @@ import {
 } from '@mui/material';
 import { darken, styled } from '@mui/material/styles';
 import { useLocation, useNavigate } from 'react-router';
-import { motion } from 'motion/react';
 import FusePageSimple from '@fuse/core/FusePageSimple';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
@@ -39,6 +35,16 @@ import {
 	rejectApproval
 } from '@/api/queries';
 import type { Approval, Section, Task, TaskStatus } from '@/api/types';
+import {
+	GithubIssuesWidget,
+	MetricWidget,
+	ScheduleWidget,
+	SummaryWidget,
+	TaskDistributionWidget,
+	type GithubOverview,
+	type RangesMap,
+	type ScheduleEntry
+} from '@/components/fuse-demo/widgets/ProjectDashboardWidgets';
 
 const Root = styled(FusePageSimple)(() => ({
 	'& .container': {
@@ -56,17 +62,49 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 	archived: 'Archived'
 };
 
-function withinLastHours(iso: string, hours: number) {
-	const t = Date.parse(iso);
-	if (!Number.isFinite(t)) return false;
-	return t >= Date.now() - hours * 60 * 60 * 1000;
+const DASHBOARD_RANGES: RangesMap = {
+	today: 'Today',
+	week: 'This Week',
+	month: 'This Month'
+};
+
+type DashboardRange = keyof typeof DASHBOARD_RANGES;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function inRange(iso: string, range: DashboardRange): boolean {
+	const time = Date.parse(iso);
+	if (!Number.isFinite(time)) return false;
+	const now = Date.now();
+	if (range === 'today') return time >= now - DAY_MS;
+	if (range === 'week') return time >= now - 7 * DAY_MS;
+	return time >= now - 30 * DAY_MS;
 }
 
-function severityByStatus(status: TaskStatus): 'default' | 'info' | 'warning' | 'success' {
-	if (status === 'doing') return 'info';
-	if (status === 'review' || status === 'release') return 'warning';
-	if (status === 'done') return 'success';
-	return 'default';
+function dayLabelsLast7(): string[] {
+	return Array.from({ length: 7 }, (_value, index) => {
+		const shift = 6 - index;
+		const date = new Date(Date.now() - shift * DAY_MS);
+		return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+	});
+}
+
+function bucketByLast7Days(items: Array<{ at: string }>): number[] {
+	const now = new Date();
+	const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+	const buckets = Array.from({ length: 7 }, () => 0);
+
+	for (const item of items) {
+		const time = Date.parse(item.at);
+		if (!Number.isFinite(time)) continue;
+		const startItemDay = new Date(new Date(time).getFullYear(), new Date(time).getMonth(), new Date(time).getDate()).getTime();
+		const dayDiff = Math.floor((startToday - startItemDay) / DAY_MS);
+		if (dayDiff >= 0 && dayDiff < 7) {
+			buckets[6 - dayDiff] += 1;
+		}
+	}
+
+	return buckets;
 }
 
 function WorkspaceHeader({
@@ -103,9 +141,7 @@ function WorkspaceHeader({
 						</Avatar>
 						<div className="min-w-0">
 							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">Workspace Dashboard</Typography>
-							<Typography className="text-md mt-1" color="text.secondary">
-								Control panel for tasks, approvals and run health
-							</Typography>
+							<Typography className="text-md mt-1" color="text.secondary">Fuse demo layout connected to live workspace data</Typography>
 						</div>
 					</div>
 
@@ -135,28 +171,21 @@ function WorkspaceHeader({
 									onCreateTask();
 								}
 							}}
-							sx={{ minWidth: { xs: 230, md: 280 } }}
+							sx={{ minWidth: { xs: 220, md: 260 } }}
 						/>
 
-						<Button variant="contained" disabled={!capture.trim() || !projectId || creating} onClick={onCreateTask} startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>}>
+						<Button
+							variant="contained"
+							disabled={!capture.trim() || !projectId || creating}
+							onClick={onCreateTask}
+							startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>}
+						>
 							{creating ? 'Adding...' : 'Add'}
 						</Button>
 					</div>
 				</div>
 			</div>
 		</div>
-	);
-}
-
-function StatCard({ title, value, icon }: { title: string; value: number; icon: string }) {
-	return (
-		<Paper className="flex flex-auto flex-col overflow-hidden rounded-xl p-4 shadow-sm">
-			<Stack direction="row" justifyContent="space-between" alignItems="center">
-				<Typography className="text-md" color="text.secondary">{title}</Typography>
-				<FuseSvgIcon size={18} color="action">{icon}</FuseSvgIcon>
-			</Stack>
-			<Typography className="mt-3 text-4xl leading-none font-bold tracking-tight">{value}</Typography>
-		</Paper>
 	);
 }
 
@@ -169,7 +198,6 @@ export default function WorkspaceView() {
 
 	const params = new URLSearchParams(location.search);
 	const projectId = params.get('projectId');
-	const selectedTaskId = params.get('taskId');
 
 	const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => listProjects({ archived: 'active' }) });
 
@@ -248,9 +276,119 @@ export default function WorkspaceView() {
 		}
 	}, [location.search, navigate, projectId, projectsQ.data]);
 
-	const tasks = tasksQ.data ?? [];
-	const approvals = approvalsQ.data ?? [];
-	const failed24h = useMemo(() => (failedQ.data ?? []).filter((run) => withinLastHours(run.created_at, 24)), [failedQ.data]);
+	const tasks = useMemo(() => tasksQ.data ?? [], [tasksQ.data]);
+	const sections = useMemo(() => sectionsQ.data ?? [], [sectionsQ.data]);
+	const approvals = useMemo(() => approvalsQ.data ?? [], [approvalsQ.data]);
+	const stuckRuns = useMemo(() => stuckQ.data ?? [], [stuckQ.data]);
+	const failedRuns = useMemo(() => failedQ.data ?? [], [failedQ.data]);
+
+	const summaryCounts = useMemo(() => {
+		const out: Record<string, number> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			out[key] = tasks.filter((task) => inRange(task.updated_at, key)).length;
+		}
+		return out;
+	}, [tasks]);
+
+	const summaryExtra = useMemo(() => {
+		const out: Record<string, number> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			out[key] = tasks.filter((task) => inRange(task.updated_at, key) && (task.status === 'doing' || task.status === 'review' || task.status === 'release')).length;
+		}
+		return out;
+	}, [tasks]);
+
+	const overdueCount = useMemo(() => tasks.filter((task) => task.status === 'review' || task.status === 'release').length, [tasks]);
+	const issuesCount = useMemo(() => failedRuns.length, [failedRuns]);
+	const featuresCount = sections.length;
+	const completedCount = useMemo(() => tasks.filter((task) => task.status === 'done').length, [tasks]);
+
+	const labels = useMemo(() => dayLabelsLast7(), []);
+
+	const githubSeries = useMemo(() => {
+		const out: Record<string, Array<{ name: string; type?: 'line' | 'bar'; data: number[] }>> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			const newData = bucketByLast7Days(scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').map((task) => ({ at: task.updated_at })));
+			const closedData = bucketByLast7Days(scoped.filter((task) => task.status === 'done' || task.status === 'archived').map((task) => ({ at: task.updated_at })));
+			out[key] = [
+				{ name: 'New', type: 'line', data: newData },
+				{ name: 'Closed', type: 'bar', data: closedData }
+			];
+		}
+		return out;
+	}, [tasks]);
+
+	const githubOverview = useMemo(() => {
+		const out: Record<string, GithubOverview> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			out[key] = {
+				'new-issues': scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').length,
+				'closed-issues': scoped.filter((task) => task.status === 'done').length,
+				fixed: scoped.filter((task) => task.status === 'done').length,
+				'wont-fix': scoped.filter((task) => task.status === 'archived').length,
+				're-opened': scoped.filter((task) => task.status === 'review').length,
+				'needs-triage': approvals.filter((approval) => inRange(approval.requested_at, key)).length
+			};
+		}
+		return out;
+	}, [approvals, tasks]);
+
+	const distributionSeries = useMemo(() => {
+		const out: Record<string, number[]> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			out[key] = [
+				scoped.filter((task) => task.status === 'ideas').length,
+				scoped.filter((task) => task.status === 'todo').length,
+				scoped.filter((task) => task.status === 'doing').length,
+				scoped.filter((task) => task.status === 'review' || task.status === 'release').length,
+				scoped.filter((task) => task.status === 'done').length,
+				scoped.filter((task) => task.status === 'archived').length
+			];
+		}
+		return out;
+	}, [tasks]);
+
+	const distributionOverview = useMemo(() => {
+		const out: Record<string, { new: number; completed: number }> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			out[key] = {
+				new: scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').length,
+				completed: scoped.filter((task) => task.status === 'done').length
+			};
+		}
+		return out;
+	}, [tasks]);
+
+	const projectById = useMemo(() => Object.fromEntries((projectsQ.data ?? []).map((project) => [project.id, project.name])), [projectsQ.data]);
+
+	const scheduleSeries = useMemo(() => {
+		const out: Record<string, ScheduleEntry[]> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const approvalsEntries = approvals
+				.filter((approval) => inRange(approval.requested_at, key))
+				.slice(0, 4)
+				.map((approval) => ({
+					title: approval.request_title ?? approval.task_title ?? 'Pending approval',
+					time: new Date(approval.requested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+					location: approval.project_id ? projectById[approval.project_id] : 'Workspace'
+				}));
+			const taskEntries = tasks
+				.filter((task) => inRange(task.updated_at, key))
+				.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+				.slice(0, 4)
+				.map((task) => ({
+					title: task.title,
+					time: new Date(task.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+					location: STATUS_LABEL[task.status]
+				}));
+			out[key] = [...approvalsEntries, ...taskEntries].slice(0, 8);
+		}
+		return out;
+	}, [approvals, projectById, tasks]);
 
 	const statusCounts = useMemo(() => {
 		const output: Record<TaskStatus, number> = {
@@ -262,38 +400,15 @@ export default function WorkspaceView() {
 			done: 0,
 			archived: 0
 		};
-		for (const task of tasks) output[task.status] = (output[task.status] ?? 0) + 1;
+		for (const task of tasks) {
+			output[task.status] = (output[task.status] ?? 0) + 1;
+		}
 		return output;
 	}, [tasks]);
 
-	const recentTasks = useMemo(
-		() => [...tasks].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, 12),
-		[tasks]
-	);
+	const recentTasks = useMemo(() => [...tasks].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, 12), [tasks]);
 
-	const selectedTask = useMemo(() => tasks.find((task) => task.id === selectedTaskId) ?? null, [tasks, selectedTaskId]);
-
-	const selectProject = (id: string) => {
-		const next = new URLSearchParams(location.search);
-		next.set('projectId', id);
-		next.delete('taskId');
-		navigate(`/workspace?${next.toString()}`);
-	};
-
-	const openTask = (taskId: string) => {
-		const next = new URLSearchParams(location.search);
-		next.set('taskId', taskId);
-		navigate(`/workspace?${next.toString()}`);
-	};
-
-	const container = {
-		show: {
-			transition: {
-				staggerChildren: 0.04
-			}
-		}
-	};
-	const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } };
+	const failed24h = useMemo(() => failedRuns.filter((run) => inRange(run.created_at, 'today')), [failedRuns]);
 
 	const content = (
 		<div className="w-full pt-4 sm:pt-6">
@@ -305,50 +420,30 @@ export default function WorkspaceView() {
 				</Tabs>
 			</div>
 
-			{tabValue === 'overview' && (
-				<motion.div className="grid w-full min-w-0 grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-4 md:px-8" variants={container} initial="hidden" animate="show">
-					<motion.div variants={item}><StatCard title="Tasks" value={tasks.length} icon="lucide:list-checks" /></motion.div>
-					<motion.div variants={item}><StatCard title="Approvals" value={approvals.length} icon="lucide:shield-alert" /></motion.div>
-					<motion.div variants={item}><StatCard title="Running" value={stuckQ.data?.length ?? 0} icon="lucide:activity" /></motion.div>
-					<motion.div variants={item}><StatCard title="Failed (24h)" value={failed24h.length} icon="lucide:octagon-alert" /></motion.div>
+			{tabValue === 'overview' ? (
+				<div className="grid w-full min-w-0 grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-4 md:px-8">
+					<SummaryWidget ranges={DASHBOARD_RANGES} counts={summaryCounts} extraCounts={summaryExtra} name="Tasks" extraName="Active" />
+					<MetricWidget title="Overdue" value={overdueCount} name="Need review" extraName="Pending approvals" extraCount={approvals.length} />
+					<MetricWidget title="Issues" value={issuesCount} name="Failed runs" extraName="Stuck runs" extraCount={stuckRuns.length} />
+					<MetricWidget title="Features" value={featuresCount} name="Sections" extraName="Completed tasks" extraCount={completedCount} />
+					<div className="sm:col-span-2 md:col-span-4">
+						<GithubIssuesWidget ranges={DASHBOARD_RANGES} labels={labels} series={githubSeries} overview={githubOverview} title="Execution Summary" />
+					</div>
+					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
+						<TaskDistributionWidget
+							ranges={DASHBOARD_RANGES}
+							labels={['Ideas', 'Todo', 'Doing', 'Review', 'Done', 'Archived']}
+							series={distributionSeries}
+							overview={distributionOverview}
+						/>
+					</div>
+					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
+						<ScheduleWidget ranges={DASHBOARD_RANGES} series={scheduleSeries} />
+					</div>
+				</div>
+			) : null}
 
-					<motion.div variants={item} className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<Paper className="flex h-full flex-auto flex-col overflow-hidden rounded-xl p-6 shadow-sm">
-							<Typography className="text-xl leading-6 font-medium tracking-tight">Recent Tasks</Typography>
-							<List className="mt-2 divide-y py-0">
-								{recentTasks.length === 0 ? (
-									<ListItemText className="px-0 py-4" primary="No tasks yet" />
-								) : (
-									recentTasks.map((task) => (
-										<ListItemButton key={task.id} disableGutters selected={task.id === selectedTaskId} onClick={() => openTask(task.id)}>
-											<ListItemText primary={task.title} secondary={`${STATUS_LABEL[task.status]} · ${new Date(task.updated_at).toLocaleString()}`} />
-											<Chip size="small" color={severityByStatus(task.status)} label={STATUS_LABEL[task.status]} />
-										</ListItemButton>
-									))
-								)}
-							</List>
-						</Paper>
-					</motion.div>
-
-					<motion.div variants={item} className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<Paper className="flex h-full flex-auto flex-col overflow-hidden rounded-xl p-6 shadow-sm">
-							<Typography className="text-xl leading-6 font-medium tracking-tight">Task Focus</Typography>
-							<Divider className="my-4" />
-							{selectedTask ? (
-								<Stack spacing={1.5}>
-									<Typography className="text-lg font-semibold">{selectedTask.title}</Typography>
-									<Chip size="small" color={severityByStatus(selectedTask.status)} label={STATUS_LABEL[selectedTask.status]} sx={{ width: 'fit-content' }} />
-									<Typography className="text-sm" color="text.secondary">Updated: {new Date(selectedTask.updated_at).toLocaleString()}</Typography>
-								</Stack>
-							) : (
-								<Typography color="text.secondary">Select a task from Recent Tasks.</Typography>
-							)}
-						</Paper>
-					</motion.div>
-				</motion.div>
-			)}
-
-			{tabValue === 'approvals' && (
+			{tabValue === 'approvals' ? (
 				<Paper className="mx-4 overflow-hidden rounded-xl shadow-sm md:mx-8">
 					<Typography className="px-5 pt-5 text-xl font-semibold">Pending Approvals</Typography>
 					<Divider className="mt-4" />
@@ -371,38 +466,35 @@ export default function WorkspaceView() {
 						)}
 					</List>
 				</Paper>
-			)}
+			) : null}
 
-			{tabValue === 'health' && (
+			{tabValue === 'health' ? (
 				<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 md:grid-cols-2 md:px-8">
 					<Paper className="rounded-xl p-6 shadow-sm">
 						<Typography className="text-xl leading-6 font-medium tracking-tight">Status Breakdown</Typography>
 						<Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" className="mt-4">
 							{(Object.keys(STATUS_LABEL) as TaskStatus[]).map((status) => (
-								<Chip key={status} size="small" label={`${STATUS_LABEL[status]}: ${statusCounts[status]}`} color={severityByStatus(status)} />
+								<Button key={status} size="small" variant="outlined" disabled>
+									{STATUS_LABEL[status]}: {statusCounts[status]}
+								</Button>
 							))}
 						</Stack>
 					</Paper>
 
 					<Paper className="rounded-xl p-6 shadow-sm">
 						<Typography className="text-xl leading-6 font-medium tracking-tight">Run Health</Typography>
-						<Card className="mt-4 rounded-xl shadow-none" variant="outlined">
-							<CardContent>
-								<Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-									<Chip color="warning" label={`Stuck: ${stuckQ.data?.length ?? 0}`} />
-									<Chip color="error" label={`Failed (24h): ${failed24h.length}`} />
-									<Chip color="info" label={`Sections: ${sectionsQ.data?.length ?? 0}`} />
-								</Stack>
-							</CardContent>
-						</Card>
+						<List className="mt-3 divide-y py-0">
+							<ListItemText className="py-2" primary={`Stuck runs: ${stuckRuns.length}`} />
+							<ListItemText className="py-2" primary={`Failed (24h): ${failed24h.length}`} />
+							<ListItemText className="py-2" primary={`Sections: ${sections.length}`} />
+							<ListItemText className="py-2" primary={`Recent tasks shown: ${recentTasks.length}`} />
+						</List>
 					</Paper>
 				</div>
-			)}
+			) : null}
 
 			{createTaskM.isError ? (
-				<Alert severity="error" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
-					{String(createTaskM.error)}
-				</Alert>
+				<Alert severity="error" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>{String(createTaskM.error)}</Alert>
 			) : null}
 		</div>
 	);
@@ -415,7 +507,11 @@ export default function WorkspaceView() {
 					projects={(projectsQ.data ?? []).map((project) => ({ id: project.id, name: project.name }))}
 					capture={capture}
 					onSetCapture={setCapture}
-					onSelectProject={selectProject}
+					onSelectProject={(id) => {
+						const next = new URLSearchParams(location.search);
+						next.set('projectId', id);
+						navigate(`/workspace?${next.toString()}`);
+					}}
 					onCreateTask={() => createTaskM.mutate(capture.trim())}
 					creating={createTaskM.isPending}
 				/>

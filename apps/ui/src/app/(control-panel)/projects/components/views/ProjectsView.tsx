@@ -2,22 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
 	Avatar,
-	Box,
 	Button,
-	Card,
-	CardContent,
-	Chip,
 	Divider,
 	FormControl,
 	InputLabel,
-	LinearProgress,
 	List,
 	ListItemButton,
 	ListItemText,
 	MenuItem,
 	Paper,
 	Select,
-	Stack,
 	Tab,
 	Tabs,
 	Typography
@@ -25,11 +19,20 @@ import {
 import { darken, styled } from '@mui/material/styles';
 import FusePageSimple from '@fuse/core/FusePageSimple';
 import { useLocation, useNavigate } from 'react-router';
-import { motion } from 'motion/react';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
 import { listApprovals, listProjects, listRuns, listSections, listTasks } from '@/api/queries';
 import type { Section, Task, TaskStatus } from '@/api/types';
+import {
+	GithubIssuesWidget,
+	MetricWidget,
+	ScheduleWidget,
+	SummaryWidget,
+	TaskDistributionWidget,
+	type GithubOverview,
+	type RangesMap,
+	type ScheduleEntry
+} from '@/components/fuse-demo/widgets/ProjectDashboardWidgets';
 
 const Root = styled(FusePageSimple)(() => ({
 	'& .container': {
@@ -46,6 +49,52 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 	done: 'Done',
 	archived: 'Archived'
 };
+
+const DASHBOARD_RANGES: RangesMap = {
+	today: 'Today',
+	week: 'This Week',
+	month: 'This Month'
+};
+
+type DashboardRange = keyof typeof DASHBOARD_RANGES;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function inRange(iso: string, range: DashboardRange): boolean {
+	const time = Date.parse(iso);
+	if (!Number.isFinite(time)) return false;
+	const now = Date.now();
+	if (range === 'today') return time >= now - DAY_MS;
+	if (range === 'week') return time >= now - 7 * DAY_MS;
+	return time >= now - 30 * DAY_MS;
+}
+
+function dayLabelsLast7(): string[] {
+	return Array.from({ length: 7 }, (_value, index) => {
+		const shift = 6 - index;
+		const date = new Date(Date.now() - shift * DAY_MS);
+		return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+	});
+}
+
+function bucketByLast7Days(items: Array<{ at: string }>): number[] {
+	const now = new Date();
+	const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+	const buckets = Array.from({ length: 7 }, () => 0);
+
+	for (const item of items) {
+		const time = Date.parse(item.at);
+		if (!Number.isFinite(time)) continue;
+		const d = new Date(time);
+		const startItemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+		const dayDiff = Math.floor((startToday - startItemDay) / DAY_MS);
+		if (dayDiff >= 0 && dayDiff < 7) {
+			buckets[6 - dayDiff] += 1;
+		}
+	}
+
+	return buckets;
+}
 
 function ProjectsHeader({
 	projectName,
@@ -76,17 +125,13 @@ function ProjectsHeader({
 							<FuseSvgIcon size={20}>lucide:kanban-square</FuseSvgIcon>
 						</Avatar>
 						<div className="min-w-0">
-							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">
-								{projectName}
-							</Typography>
-							<Typography className="text-md mt-1" color="text.secondary">
-								Project control panel with Fuse widgets
-							</Typography>
+							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">{projectName}</Typography>
+							<Typography className="text-md mt-1" color="text.secondary">Project dashboard with Fuse demo widgets</Typography>
 						</div>
 					</div>
 
 					<div className="flex flex-col items-start gap-2 md:flex-row md:items-center">
-						<FormControl size="small" sx={{ minWidth: { xs: 240, md: 260 } }}>
+						<FormControl size="small" sx={{ minWidth: { xs: 230, md: 250 } }}>
 							<InputLabel id="projects-page-project-label">Project</InputLabel>
 							<Select
 								labelId="projects-page-project-label"
@@ -95,18 +140,11 @@ function ProjectsHeader({
 								onChange={(event) => onSelectProject(String(event.target.value))}
 							>
 								{projects.map((project) => (
-									<MenuItem key={project.id} value={project.id}>
-										{project.name}
-									</MenuItem>
+									<MenuItem key={project.id} value={project.id}>{project.name}</MenuItem>
 								))}
 							</Select>
 						</FormControl>
-						<Button
-							className="whitespace-nowrap"
-							variant="contained"
-							startIcon={<FuseSvgIcon>lucide:list-todo</FuseSvgIcon>}
-							onClick={onOpenWorkspace}
-						>
+						<Button variant="contained" onClick={onOpenWorkspace} startIcon={<FuseSvgIcon>lucide:list-todo</FuseSvgIcon>} disabled={!projectId}>
 							Open Workspace
 						</Button>
 					</div>
@@ -116,28 +154,6 @@ function ProjectsHeader({
 	);
 }
 
-function StatCard({ title, value, icon }: { title: string; value: number; icon: string }) {
-	return (
-		<Paper className="flex flex-auto flex-col overflow-hidden rounded-xl p-4 shadow-sm">
-			<Stack direction="row" alignItems="center" justifyContent="space-between">
-				<Typography className="text-md" color="text.secondary">
-					{title}
-				</Typography>
-				<FuseSvgIcon size={18} color="action">{icon}</FuseSvgIcon>
-			</Stack>
-			<Typography className="mt-3 text-4xl leading-none font-bold tracking-tight">{value}</Typography>
-		</Paper>
-	);
-}
-
-function taskProgress(status: TaskStatus, total: number, count: number): { label: string; color: 'primary' | 'secondary' | 'success' | 'warning' | 'error' } {
-	if (status === 'done') return { label: 'Completed', color: 'success' };
-	if (status === 'review' || status === 'release') return { label: 'Needs review', color: 'warning' };
-	if (status === 'doing') return { label: 'Active', color: 'primary' };
-	if (status === 'archived') return { label: 'Archived', color: 'secondary' };
-	return { label: `Share ${total ? Math.round((count / total) * 100) : 0}%`, color: 'secondary' };
-}
-
 export default function ProjectsView() {
 	const location = useLocation();
 	const navigate = useNavigate();
@@ -145,11 +161,7 @@ export default function ProjectsView() {
 	const params = new URLSearchParams(location.search);
 	const projectId = params.get('projectId');
 
-	const projectsQ = useQuery({
-		queryKey: ['projects', 'projects-page'],
-		queryFn: () => listProjects({ archived: 'active' })
-	});
-
+	const projectsQ = useQuery({ queryKey: ['projects', 'projects-page'], queryFn: () => listProjects({ archived: 'active' }) });
 	const sectionsQ = useQuery({
 		queryKey: ['sections', projectId, 'projects-page'],
 		queryFn: () => {
@@ -158,7 +170,6 @@ export default function ProjectsView() {
 		},
 		enabled: !!projectId
 	});
-
 	const tasksQ = useQuery({
 		queryKey: ['tasks', projectId, 'projects-page'],
 		queryFn: () => {
@@ -167,17 +178,14 @@ export default function ProjectsView() {
 		},
 		enabled: !!projectId
 	});
-
 	const approvalsQ = useQuery({
 		queryKey: ['approvals', 'pending', projectId, 'projects-page'],
 		queryFn: () => listApprovals({ status: 'pending', projectId: projectId ?? undefined })
 	});
-
 	const runningQ = useQuery({
 		queryKey: ['runs', 'running', projectId, 'projects-page'],
 		queryFn: () => listRuns({ status: 'running', projectId: projectId ?? undefined })
 	});
-
 	const failedQ = useQuery({
 		queryKey: ['runs', 'failed', projectId, 'projects-page'],
 		queryFn: () => listRuns({ status: 'failed', projectId: projectId ?? undefined })
@@ -191,81 +199,127 @@ export default function ProjectsView() {
 		}
 	}, [location.search, navigate, projectId, projectsQ.data]);
 
-	const tasks = tasksQ.data ?? [];
-	const sections = sectionsQ.data ?? [];
-	const pendingApprovals = approvalsQ.data ?? [];
-	const selectedProject = useMemo(
-		() => (projectsQ.data ?? []).find((project) => project.id === projectId) ?? null,
-		[projectId, projectsQ.data]
-	);
+	const tasks = useMemo(() => tasksQ.data ?? [], [tasksQ.data]);
+	const sections = useMemo(() => sectionsQ.data ?? [], [sectionsQ.data]);
+	const approvals = useMemo(() => approvalsQ.data ?? [], [approvalsQ.data]);
+	const runningRuns = useMemo(() => runningQ.data ?? [], [runningQ.data]);
+	const failedRuns = useMemo(() => failedQ.data ?? [], [failedQ.data]);
 
-	const statusCounts = useMemo(() => {
-		const output: Record<TaskStatus, number> = {
-			ideas: 0,
-			todo: 0,
-			doing: 0,
-			review: 0,
-			release: 0,
-			done: 0,
-			archived: 0
-		};
-		for (const task of tasks) output[task.status] = (output[task.status] ?? 0) + 1;
-		return output;
+	const selectedProject = useMemo(() => (projectsQ.data ?? []).find((project) => project.id === projectId) ?? null, [projectId, projectsQ.data]);
+
+	const summaryCounts = useMemo(() => {
+		const out: Record<string, number> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			out[key] = tasks.filter((task) => inRange(task.updated_at, key)).length;
+		}
+		return out;
 	}, [tasks]);
 
-	const tasksBySection = useMemo(() => {
+	const summaryExtra = useMemo(() => {
+		const out: Record<string, number> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			out[key] = tasks.filter((task) => inRange(task.updated_at, key) && (task.status === 'doing' || task.status === 'review' || task.status === 'release')).length;
+		}
+		return out;
+	}, [tasks]);
+
+	const overdueCount = useMemo(() => tasks.filter((task) => task.status === 'review' || task.status === 'release').length, [tasks]);
+	const issuesCount = failedRuns.length;
+	const featuresCount = sections.length;
+	const completedCount = useMemo(() => tasks.filter((task) => task.status === 'done').length, [tasks]);
+
+	const labels = useMemo(() => dayLabelsLast7(), []);
+
+	const githubSeries = useMemo(() => {
+		const out: Record<string, Array<{ name: string; type?: 'line' | 'bar'; data: number[] }>> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			const newData = bucketByLast7Days(scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').map((task) => ({ at: task.updated_at })));
+			const closedData = bucketByLast7Days(scoped.filter((task) => task.status === 'done' || task.status === 'archived').map((task) => ({ at: task.updated_at })));
+			out[key] = [
+				{ name: 'New', type: 'line', data: newData },
+				{ name: 'Closed', type: 'bar', data: closedData }
+			];
+		}
+		return out;
+	}, [tasks]);
+
+	const githubOverview = useMemo(() => {
+		const out: Record<string, GithubOverview> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			out[key] = {
+				'new-issues': scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').length,
+				'closed-issues': scoped.filter((task) => task.status === 'done').length,
+				fixed: scoped.filter((task) => task.status === 'done').length,
+				'wont-fix': scoped.filter((task) => task.status === 'archived').length,
+				're-opened': scoped.filter((task) => task.status === 'review').length,
+				'needs-triage': approvals.filter((approval) => inRange(approval.requested_at, key)).length
+			};
+		}
+		return out;
+	}, [approvals, tasks]);
+
+	const distributionSeries = useMemo(() => {
+		const out: Record<string, number[]> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			out[key] = [
+				scoped.filter((task) => task.status === 'ideas').length,
+				scoped.filter((task) => task.status === 'todo').length,
+				scoped.filter((task) => task.status === 'doing').length,
+				scoped.filter((task) => task.status === 'review' || task.status === 'release').length,
+				scoped.filter((task) => task.status === 'done').length,
+				scoped.filter((task) => task.status === 'archived').length
+			];
+		}
+		return out;
+	}, [tasks]);
+
+	const distributionOverview = useMemo(() => {
+		const out: Record<string, { new: number; completed: number }> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
+			out[key] = {
+				new: scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').length,
+				completed: scoped.filter((task) => task.status === 'done').length
+			};
+		}
+		return out;
+	}, [tasks]);
+
+	const scheduleSeries = useMemo(() => {
+		const out: Record<string, ScheduleEntry[]> = {};
+		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
+			const approvalsEntries = approvals
+				.filter((approval) => inRange(approval.requested_at, key))
+				.slice(0, 4)
+				.map((approval) => ({
+					title: approval.request_title ?? approval.task_title ?? 'Pending approval',
+					time: new Date(approval.requested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+					location: 'Approvals'
+				}));
+			const taskEntries = tasks
+				.filter((task) => inRange(task.updated_at, key))
+				.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
+				.slice(0, 4)
+				.map((task) => ({
+					title: task.title,
+					time: new Date(task.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+					location: STATUS_LABEL[task.status]
+				}));
+			out[key] = [...approvalsEntries, ...taskEntries].slice(0, 8);
+		}
+		return out;
+	}, [approvals, tasks]);
+
+	const sectionRows = useMemo(() => {
 		const map = new Map<string, number>();
 		for (const task of tasks) {
 			map.set(task.section_id, (map.get(task.section_id) ?? 0) + 1);
 		}
-		return map;
-	}, [tasks]);
-
-	const activeTasks = useMemo(
-		() =>
-			[...tasks]
-				.filter((task) => task.status === 'doing' || task.status === 'review' || task.status === 'release')
-				.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-				.slice(0, 12),
-		[tasks]
-	);
-
-	const failed24h = useMemo(
-		() => (failedQ.data ?? []).filter((run) => Date.parse(run.created_at) >= Date.now() - 24 * 60 * 60 * 1000),
-		[failedQ.data]
-	);
-
-	const sectionRows = useMemo(
-		() =>
-			sections.map((section) => ({
-				...section,
-				tasks: tasksBySection.get(section.id) ?? 0
-			})),
-		[sections, tasksBySection]
-	);
-
-	const selectProject = (id: string) => {
-		const next = new URLSearchParams(location.search);
-		next.set('projectId', id);
-		navigate(`/projects?${next.toString()}`);
-	};
-
-	const openTask = (taskId: string) => {
-		if (!projectId) return;
-		navigate(`/workspace?projectId=${encodeURIComponent(projectId)}&taskId=${encodeURIComponent(taskId)}`);
-	};
-
-	const container = {
-		show: {
-			transition: {
-				staggerChildren: 0.04
-			}
-		}
-	};
-	const item = {
-		hidden: { opacity: 0, y: 20 },
-		show: { opacity: 1, y: 0 }
-	};
+		return sections.map((section) => ({ ...section, taskCount: map.get(section.id) ?? 0 }));
+	}, [sections, tasks]);
 
 	const content = (
 		<div className="w-full pt-4 sm:pt-6">
@@ -277,143 +331,62 @@ export default function ProjectsView() {
 				</Tabs>
 			</div>
 
-			{tabValue === 'overview' && (
-				<motion.div
-					className="grid w-full min-w-0 grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-4 md:px-8"
-					variants={container}
-					initial="hidden"
-					animate="show"
-				>
-					<motion.div variants={item}><StatCard title="Tasks" value={tasks.length} icon="lucide:list-checks" /></motion.div>
-					<motion.div variants={item}><StatCard title="Sections" value={sections.length} icon="lucide:columns-3" /></motion.div>
-					<motion.div variants={item}><StatCard title="Pending approvals" value={pendingApprovals.length} icon="lucide:shield-alert" /></motion.div>
-					<motion.div variants={item}><StatCard title="Active runs" value={runningQ.data?.length ?? 0} icon="lucide:activity" /></motion.div>
-
-					<motion.div variants={item} className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<Paper className="flex h-full flex-auto flex-col overflow-hidden rounded-xl p-6 shadow-sm">
-							<Typography className="text-xl leading-6 font-medium tracking-tight">Active Tasks</Typography>
-							<List className="mt-2 divide-y py-0">
-								{activeTasks.length === 0 ? (
-									<ListItemText className="px-0 py-4" primary="No active tasks" />
-								) : (
-									activeTasks.map((task) => (
-										<ListItemButton key={task.id} disableGutters onClick={() => openTask(task.id)}>
-											<ListItemText
-												primary={task.title}
-												secondary={`${STATUS_LABEL[task.status]} · ${new Date(task.updated_at).toLocaleString()}`}
-											/>
-											<Chip size="small" label={STATUS_LABEL[task.status]} />
-										</ListItemButton>
-									))
-								)}
-							</List>
-						</Paper>
-					</motion.div>
-
-					<motion.div variants={item} className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<Paper className="flex h-full flex-auto flex-col overflow-hidden rounded-xl p-6 shadow-sm">
-							<Typography className="text-xl leading-6 font-medium tracking-tight">Pending Approvals</Typography>
-							<List className="mt-2 divide-y py-0">
-								{pendingApprovals.length === 0 ? (
-									<ListItemText className="px-0 py-4" primary="No pending approvals" />
-								) : (
-									pendingApprovals.slice(0, 12).map((approval) => (
-										<ListItemButton
-											key={approval.id}
-											disableGutters
-											onClick={() => approval.task_id && openTask(approval.task_id)}
-										>
-											<ListItemText
-												primary={approval.request_title ?? approval.task_title ?? approval.id}
-												secondary={new Date(approval.requested_at).toLocaleString()}
-											/>
-											<Chip size="small" color="warning" label="Needs action" />
-										</ListItemButton>
-									))
-								)}
-							</List>
-						</Paper>
-					</motion.div>
-				</motion.div>
-			)}
-
-			{tabValue === 'sections' && (
-				<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-3 md:px-8">
-					{sectionRows.length === 0 ? (
-						<Paper className="rounded-xl p-6 shadow-sm sm:col-span-2 md:col-span-3">
-							<Typography color="text.secondary">No sections in this project.</Typography>
-						</Paper>
-					) : (
-						sectionRows.map((section) => (
-							<Paper key={section.id} className="rounded-xl p-5 shadow-sm">
-								<Stack direction="row" justifyContent="space-between" alignItems="center">
-									<Typography className="text-lg leading-6 font-medium tracking-tight">{section.name}</Typography>
-									<Chip size="small" label={section.section_kind === 'inbox' ? 'Inbox' : section.view_mode} />
-								</Stack>
-								<Typography className="mt-2 text-sm" color="text.secondary">
-									{section.tasks} tasks in section
-								</Typography>
-								<Button className="mt-4" size="small" variant="outlined" onClick={() => navigate(`/workspace?projectId=${encodeURIComponent(section.project_id)}`)}>
-									Open in workspace
-								</Button>
-							</Paper>
-						))
-					)}
+			{tabValue === 'overview' ? (
+				<div className="grid w-full min-w-0 grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-4 md:px-8">
+					<SummaryWidget ranges={DASHBOARD_RANGES} counts={summaryCounts} extraCounts={summaryExtra} name="Tasks" extraName="Active" />
+					<MetricWidget title="Overdue" value={overdueCount} name="Need review" extraName="Pending approvals" extraCount={approvals.length} />
+					<MetricWidget title="Issues" value={issuesCount} name="Failed runs" extraName="Running" extraCount={runningRuns.length} />
+					<MetricWidget title="Features" value={featuresCount} name="Sections" extraName="Completed tasks" extraCount={completedCount} />
+					<div className="sm:col-span-2 md:col-span-4">
+						<GithubIssuesWidget ranges={DASHBOARD_RANGES} labels={labels} series={githubSeries} overview={githubOverview} title="Project Execution Summary" />
+					</div>
+					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
+						<TaskDistributionWidget
+							ranges={DASHBOARD_RANGES}
+							labels={['Ideas', 'Todo', 'Doing', 'Review', 'Done', 'Archived']}
+							series={distributionSeries}
+							overview={distributionOverview}
+						/>
+					</div>
+					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
+						<ScheduleWidget ranges={DASHBOARD_RANGES} series={scheduleSeries} />
+					</div>
 				</div>
-			)}
+			) : null}
 
-			{tabValue === 'health' && (
-				<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 md:grid-cols-2 md:px-8">
-					<Paper className="rounded-xl p-6 shadow-sm">
-						<Typography className="text-xl leading-6 font-medium tracking-tight">Status Distribution</Typography>
-						<Stack spacing={2} className="mt-4">
-							{(Object.keys(STATUS_LABEL) as TaskStatus[]).map((status) => {
-								const count = statusCounts[status];
-								const progress = tasks.length ? Math.round((count / tasks.length) * 100) : 0;
-								const meta = taskProgress(status, tasks.length, count);
-								return (
-									<Box key={status}>
-										<Stack direction="row" justifyContent="space-between" alignItems="center">
-											<Typography className="text-sm font-medium">{STATUS_LABEL[status]}</Typography>
-											<Typography className="text-sm" color="text.secondary">{count} · {meta.label}</Typography>
-										</Stack>
-										<LinearProgress color={meta.color} variant="determinate" value={progress} sx={{ mt: 0.75, height: 8, borderRadius: 999 }} />
-									</Box>
-								);
-							})}
-						</Stack>
-					</Paper>
+			{tabValue === 'sections' ? (
+				<Paper className="mx-4 overflow-hidden rounded-xl shadow-sm md:mx-8">
+					<Typography className="px-5 pt-5 text-xl font-semibold">Sections</Typography>
+					<Divider className="mt-4" />
+					<List className="divide-y py-0">
+						{sectionRows.length === 0 ? (
+							<ListItemText className="px-5 py-5" primary="No sections in project" />
+						) : (
+							sectionRows.map((section) => (
+								<ListItemButton key={section.id} className="px-5 py-4" onClick={() => navigate(`/workspace?projectId=${encodeURIComponent(section.project_id)}`)}>
+									<ListItemText
+										primary={section.name}
+										secondary={`${section.section_kind === 'inbox' ? 'Inbox' : section.view_mode} · ${section.taskCount} tasks`}
+									/>
+								</ListItemButton>
+							))
+						)}
+					</List>
+				</Paper>
+			) : null}
 
-					<Paper className="rounded-xl p-6 shadow-sm">
-						<Typography className="text-xl leading-6 font-medium tracking-tight">Run Health</Typography>
-						<Card className="mt-4 rounded-xl shadow-none" variant="outlined">
-							<CardContent>
-								<Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-									<Chip size="small" color="info" label={`Running: ${runningQ.data?.length ?? 0}`} />
-									<Chip size="small" color="error" label={`Failed (24h): ${failed24h.length}`} />
-									<Chip size="small" color="warning" label={`Pending approvals: ${pendingApprovals.length}`} />
-								</Stack>
-							</CardContent>
-						</Card>
-
-						<Divider className="my-4" />
-						<Typography className="text-sm font-medium" color="text.secondary">Recently changed tasks</Typography>
-						<List className="mt-1 divide-y py-0">
-							{[...tasks]
-								.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-								.slice(0, 8)
-								.map((task) => (
-									<ListItemButton key={task.id} disableGutters onClick={() => openTask(task.id)}>
-										<ListItemText
-											primary={task.title}
-											secondary={`${STATUS_LABEL[task.status]} · ${new Date(task.updated_at).toLocaleString()}`}
-										/>
-									</ListItemButton>
-								))}
-						</List>
-					</Paper>
-				</div>
-			)}
+			{tabValue === 'health' ? (
+				<Paper className="mx-4 overflow-hidden rounded-xl shadow-sm md:mx-8">
+					<Typography className="px-5 pt-5 text-xl font-semibold">Run Health</Typography>
+					<Divider className="mt-4" />
+					<List className="divide-y py-0">
+						<ListItemText className="px-5 py-4" primary={`Running runs: ${runningRuns.length}`} />
+						<ListItemText className="px-5 py-4" primary={`Failed runs: ${failedRuns.length}`} />
+						<ListItemText className="px-5 py-4" primary={`Pending approvals: ${approvals.length}`} />
+						<ListItemText className="px-5 py-4" primary={`Sections: ${sections.length}`} />
+					</List>
+				</Paper>
+			) : null}
 		</div>
 	);
 
@@ -424,7 +397,11 @@ export default function ProjectsView() {
 					projectName={selectedProject?.name ?? 'Projects'}
 					projectId={projectId}
 					projects={(projectsQ.data ?? []).map((project) => ({ id: project.id, name: project.name }))}
-					onSelectProject={selectProject}
+					onSelectProject={(id) => {
+						const next = new URLSearchParams(location.search);
+						next.set('projectId', id);
+						navigate(`/projects?${next.toString()}`);
+					}}
 					onOpenWorkspace={() => projectId && navigate(`/workspace?projectId=${encodeURIComponent(projectId)}`)}
 				/>
 			}
