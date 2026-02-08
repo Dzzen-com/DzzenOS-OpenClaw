@@ -39,6 +39,13 @@
 - установка/обновление skills + policy presets
 - вкладка Agent Packs (Official)
 
+### Внешние каналы (V1 follow-up трек)
+- Блок `Email + Telegram/Slack` вынесен в отдельный пост-V1 трек:
+  - [#79](https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues/79) channel actions
+  - [#80](https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues/80) governance/approval gating
+  - [#81](https://github.com/Dzzen-com/DzzenOS-OpenClaw/issues/81) reliability/e2e
+- Причина: сначала фиксируем устойчивую платформенную базу (`workspace/board/task`, runtime, memory SoT, ACL, governance), затем закрываем интеграционный delivery слой.
+
 ---
 
 ## Позже (v2+) — обязательно

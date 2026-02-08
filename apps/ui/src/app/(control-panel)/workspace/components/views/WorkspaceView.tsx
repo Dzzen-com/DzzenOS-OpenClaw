@@ -2,9 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
 	Alert,
+	Box,
 	Button,
+	Chip,
 	Divider,
 	FormControl,
+	IconButton,
 	InputLabel,
 	List,
 	ListItem,
@@ -20,32 +23,46 @@ import {
 	Typography
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
-import { useLocation, useNavigate } from 'react-router';
 import FusePageSimple from '@fuse/core/FusePageSimple';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
 import useThemeMediaQuery from '@fuse/hooks/useThemeMediaQuery';
+import { useLocation, useNavigate } from 'react-router';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
 import {
 	approveApproval,
+	createChecklistItem,
 	createTask,
+	deleteChecklistItem,
+	getMemoryDoc,
+	getTaskChat,
+	getTaskDetails,
+	getTaskSession,
 	listApprovals,
+	listChecklist,
 	listProjects,
-	listRuns,
 	listSections,
+	listTaskRuns,
 	listTasks,
-	rejectApproval
+	patchTask,
+	rejectApproval,
+	requestTaskApproval,
+	runTask,
+	sendTaskChat,
+	stopTask,
+	updateChecklistItem,
+	updateMemoryDoc,
+	upsertTaskSession
 } from '@/api/queries';
-import type { Approval, Section, Task, TaskStatus } from '@/api/types';
-import {
-	GithubIssuesWidget,
-	MetricWidget,
-	ScheduleWidget,
-	SummaryWidget,
-	TaskDistributionWidget,
-	type GithubOverview,
-	type RangesMap,
-	type ScheduleEntry
-} from '@/components/fuse-demo/widgets/ProjectDashboardWidgets';
+import type {
+	Approval,
+	ChecklistState,
+	ReasoningLevel,
+	Task,
+	TaskChecklistItem,
+	TaskMessage,
+	TaskSession,
+	TaskStatus
+} from '@/api/types';
 
 const Root = styled(FusePageSimple)(({ theme }) => ({
 	'& .container': {
@@ -59,6 +76,8 @@ const Root = styled(FusePageSimple)(({ theme }) => ({
 	}
 }));
 
+const STATUS_ORDER: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
+
 const STATUS_LABEL: Record<TaskStatus, string> = {
 	ideas: 'Ideas',
 	todo: 'To do',
@@ -69,77 +88,33 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 	archived: 'Archived'
 };
 
-const DASHBOARD_RANGES: RangesMap = {
-	today: 'Today',
-	week: 'This Week',
-	month: 'This Month'
-};
-
-type DashboardRange = keyof typeof DASHBOARD_RANGES;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-function inRange(iso: string, range: DashboardRange): boolean {
-	const time = Date.parse(iso);
-
-	if (!Number.isFinite(time)) return false;
-
-	const now = Date.now();
-
-	if (range === 'today') return time >= now - DAY_MS;
-
-	if (range === 'week') return time >= now - 7 * DAY_MS;
-
-	return time >= now - 30 * DAY_MS;
-}
-
-function dayLabelsLast7(): string[] {
-	return Array.from({ length: 7 }, (_value, index) => {
-		const shift = 6 - index;
-		const date = new Date(Date.now() - shift * DAY_MS);
-		return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-	});
-}
-
-function bucketByLast7Days(items: Array<{ at: string }>): number[] {
-	const now = new Date();
-	const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-	const buckets = Array.from({ length: 7 }, () => 0);
-
-	for (const item of items) {
-		const time = Date.parse(item.at);
-
-		if (!Number.isFinite(time)) continue;
-
-		const startItemDay = new Date(
-			new Date(time).getFullYear(),
-			new Date(time).getMonth(),
-			new Date(time).getDate()
-		).getTime();
-		const dayDiff = Math.floor((startToday - startItemDay) / DAY_MS);
-
-		if (dayDiff >= 0 && dayDiff < 7) {
-			buckets[6 - dayDiff] += 1;
-		}
-	}
-
-	return buckets;
+function parseSelection(search: string) {
+	const params = new URLSearchParams(search);
+	const workspaceId = params.get('workspaceId') ?? params.get('projectId') ?? null;
+	const boardId = params.get('boardId') ?? params.get('sectionId') ?? null;
+	return { workspaceId, boardId };
 }
 
 function WorkspaceHeader({
-	projectId,
-	projects,
+	workspaceId,
+	boardId,
+	workspaces,
+	boards,
 	capture,
 	onSetCapture,
-	onSelectProject,
+	onSelectWorkspace,
+	onSelectBoard,
 	onCreateTask,
 	creating
 }: {
-	projectId: string | null;
-	projects: Array<{ id: string; name: string }>;
+	workspaceId: string | null;
+	boardId: string | null;
+	workspaces: Array<{ id: string; name: string }>;
+	boards: Array<{ id: string; name: string }>;
 	capture: string;
 	onSetCapture: (value: string) => void;
-	onSelectProject: (id: string) => void;
+	onSelectWorkspace: (id: string) => void;
+	onSelectBoard: (id: string) => void;
 	onCreateTask: () => void;
 	creating: boolean;
 }) {
@@ -150,34 +125,57 @@ function WorkspaceHeader({
 				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center md:justify-between">
 					<div className="min-w-0">
 						<Typography className="truncate text-3xl leading-none font-bold tracking-tight md:text-4xl">
-							Workspace
+							Workspace Board
 						</Typography>
 						<Typography
 							className="text-md mt-1"
 							color="text.secondary"
 						>
-							Live control panel dashboard
+							Task-centric execution shell
 						</Typography>
 					</div>
 
 					<div className="flex flex-col items-start gap-2 md:flex-row md:items-center">
 						<FormControl
 							size="small"
-							sx={{ minWidth: { xs: 230, md: 250 } }}
+							sx={{ minWidth: { xs: 220, md: 240 } }}
 						>
-							<InputLabel id="workspace-project-label">Project</InputLabel>
+							<InputLabel id="workspace-select-label">Workspace</InputLabel>
 							<Select
-								labelId="workspace-project-label"
-								label="Project"
-								value={projectId ?? ''}
-								onChange={(event) => onSelectProject(String(event.target.value))}
+								labelId="workspace-select-label"
+								label="Workspace"
+								value={workspaceId ?? ''}
+								onChange={(event) => onSelectWorkspace(String(event.target.value))}
 							>
-								{projects.map((project) => (
+								{workspaces.map((workspace) => (
 									<MenuItem
-										key={project.id}
-										value={project.id}
+										key={workspace.id}
+										value={workspace.id}
 									>
-										{project.name}
+										{workspace.name}
+									</MenuItem>
+								))}
+							</Select>
+						</FormControl>
+
+						<FormControl
+							size="small"
+							sx={{ minWidth: { xs: 200, md: 220 } }}
+							disabled={!workspaceId || boards.length === 0}
+						>
+							<InputLabel id="board-select-label">Board</InputLabel>
+							<Select
+								labelId="board-select-label"
+								label="Board"
+								value={boardId ?? ''}
+								onChange={(event) => onSelectBoard(String(event.target.value))}
+							>
+								{boards.map((board) => (
+									<MenuItem
+										key={board.id}
+										value={board.id}
+									>
+										{board.name}
 									</MenuItem>
 								))}
 							</Select>
@@ -194,16 +192,16 @@ function WorkspaceHeader({
 									onCreateTask();
 								}
 							}}
-							sx={{ minWidth: { xs: 220, md: 260 } }}
+							sx={{ minWidth: { xs: 220, md: 280 } }}
 						/>
 
 						<Button
 							variant="contained"
-							disabled={!capture.trim() || !projectId || creating}
+							disabled={!capture.trim() || !workspaceId || creating}
 							onClick={onCreateTask}
 							startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>}
 						>
-							{creating ? 'Adding...' : 'Add'}
+							{creating ? 'Adding...' : 'Add Task'}
 						</Button>
 					</div>
 				</div>
@@ -217,232 +215,285 @@ export default function WorkspaceView() {
 	const location = useLocation();
 	const navigate = useNavigate();
 	const qc = useQueryClient();
+	const [{ workspaceId, boardId }, setSelection] = useState(() => parseSelection(location.search));
 	const [capture, setCapture] = useState('');
-	const [tabValue, setTabValue] = useState('overview');
+	const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+	const [drawerTab, setDrawerTab] = useState<'brief' | 'chat' | 'runs' | 'approvals' | 'context'>('brief');
+	const [chatInput, setChatInput] = useState('');
+	const [checklistInput, setChecklistInput] = useState('');
+	const [memoryDraft, setMemoryDraft] = useState('');
+	const [titleDraft, setTitleDraft] = useState('');
+	const [descriptionDraft, setDescriptionDraft] = useState('');
+	const [statusDraft, setStatusDraft] = useState<TaskStatus>('ideas');
 
-	const params = new URLSearchParams(location.search);
-	const projectId = params.get('projectId');
+	useEffect(() => {
+		setSelection(parseSelection(location.search));
+	}, [location.search]);
 
-	const projectsQ = useQuery({ queryKey: ['projects'], queryFn: () => listProjects({ archived: 'active' }) });
+	const workspacesQ = useQuery({
+		queryKey: ['workspaces', 'active'],
+		queryFn: () => listProjects({ archived: 'active' })
+	});
 
-	const sectionsQ = useQuery({
-		queryKey: ['sections', projectId, 'workspace'],
+	const boardsQ = useQuery({
+		queryKey: ['boards', workspaceId],
 		queryFn: () => {
-			if (!projectId) return Promise.resolve([] as Section[]);
-
-			return listSections(projectId);
+			if (!workspaceId) return Promise.resolve([] as any[]);
+			return listSections(workspaceId);
 		},
-		enabled: !!projectId
+		enabled: !!workspaceId
 	});
 
 	const tasksQ = useQuery({
-		queryKey: ['tasks', projectId, 'workspace'],
+		queryKey: ['tasks', workspaceId, boardId],
 		queryFn: () => {
-			if (!projectId) return Promise.resolve([] as Task[]);
-
-			return listTasks({ projectId });
+			if (!workspaceId) return Promise.resolve([] as Task[]);
+			return listTasks({ workspaceId, boardId: boardId ?? undefined });
 		},
-		enabled: !!projectId
+		enabled: !!workspaceId
 	});
 
 	const approvalsQ = useQuery({
-		queryKey: ['approvals', 'pending', projectId],
-		queryFn: () => listApprovals({ status: 'pending', projectId: projectId ?? undefined })
+		queryKey: ['approvals', workspaceId, 'pending'],
+		queryFn: () => listApprovals({ workspaceId: workspaceId ?? undefined, status: 'pending' }),
+		enabled: !!workspaceId
 	});
 
-	const stuckQ = useQuery({
-		queryKey: ['runs', 'stuck', projectId],
-		queryFn: () => listRuns({ status: 'running', stuckMinutes: 10, projectId: projectId ?? undefined })
+	const selectedTask = useMemo(
+		() => (tasksQ.data ?? []).find((task) => task.id === selectedTaskId) ?? null,
+		[selectedTaskId, tasksQ.data]
+	);
+
+	const taskDetailsQ = useQuery({
+		queryKey: ['task', selectedTaskId],
+		queryFn: () => getTaskDetails(selectedTaskId as string),
+		enabled: !!selectedTaskId
 	});
 
-	const failedQ = useQuery({
-		queryKey: ['runs', 'failed', projectId],
-		queryFn: () => listRuns({ status: 'failed', projectId: projectId ?? undefined })
+	const sessionQ = useQuery({
+		queryKey: ['task-session', selectedTaskId],
+		queryFn: async () => {
+			try {
+				return await getTaskSession(selectedTaskId as string);
+			} catch {
+				return null as TaskSession | null;
+			}
+		},
+		enabled: !!selectedTaskId
 	});
+
+	const chatQ = useQuery({
+		queryKey: ['task-chat', selectedTaskId],
+		queryFn: () => getTaskChat(selectedTaskId as string, { limit: 200 }),
+		enabled: !!selectedTaskId
+	});
+
+	const runsQ = useQuery({
+		queryKey: ['task-runs', selectedTaskId],
+		queryFn: () => listTaskRuns(selectedTaskId as string, { limit: 50 }),
+		enabled: !!selectedTaskId
+	});
+
+	const checklistQ = useQuery({
+		queryKey: ['task-checklist', selectedTaskId],
+		queryFn: () => listChecklist(selectedTaskId as string),
+		enabled: !!selectedTaskId
+	});
+
+	const memoryQ = useQuery({
+		queryKey: ['board-memory', boardId],
+		queryFn: () => getMemoryDoc({ scope: 'board', id: boardId as string }),
+		enabled: !!boardId
+	});
+
+	useEffect(() => {
+		if (!workspaceId && workspacesQ.data?.length) {
+			const next = new URLSearchParams(location.search);
+			next.set('workspaceId', workspacesQ.data[0].id);
+			next.delete('projectId');
+			next.delete('sectionId');
+			navigate(`/workspace?${next.toString()}`, { replace: true });
+		}
+	}, [location.search, navigate, workspaceId, workspacesQ.data]);
+
+	useEffect(() => {
+		if (!workspaceId || !boardsQ.data?.length) return;
+		const exists = boardId ? boardsQ.data.some((board) => board.id === boardId) : false;
+		if (!exists) {
+			const next = new URLSearchParams(location.search);
+			next.set('workspaceId', workspaceId);
+			next.set('boardId', boardsQ.data[0].id);
+			next.delete('projectId');
+			next.delete('sectionId');
+			navigate(`/workspace?${next.toString()}`, { replace: true });
+		}
+	}, [boardId, boardsQ.data, location.search, navigate, workspaceId]);
+
+	useEffect(() => {
+		if (selectedTaskId && !(tasksQ.data ?? []).some((task) => task.id === selectedTaskId)) {
+			setSelectedTaskId(null);
+		}
+	}, [selectedTaskId, tasksQ.data]);
+
+	useEffect(() => {
+		const task = taskDetailsQ.data ?? selectedTask;
+		if (!task) return;
+		setTitleDraft(task.title ?? '');
+		setDescriptionDraft(task.description ?? '');
+		setStatusDraft((task.status as TaskStatus) ?? 'ideas');
+	}, [selectedTask, taskDetailsQ.data]);
+
+	useEffect(() => {
+		setMemoryDraft(memoryQ.data?.content ?? '');
+	}, [memoryQ.data?.content]);
+
+	const invalidateTaskViews = async () => {
+		await qc.invalidateQueries({ queryKey: ['tasks'] });
+		await qc.invalidateQueries({ queryKey: ['task'] });
+		await qc.invalidateQueries({ queryKey: ['task-runs'] });
+		await qc.invalidateQueries({ queryKey: ['task-session'] });
+		await qc.invalidateQueries({ queryKey: ['approvals'] });
+	};
 
 	const createTaskM = useMutation({
-		mutationFn: async (title: string) => {
-			if (!projectId) throw new Error('Project is not selected');
-
-			const inbox =
-				(sectionsQ.data ?? []).find((section) => section.section_kind === 'inbox') ??
-				sectionsQ.data?.[0] ??
-				null;
+		mutationFn: async () => {
+			if (!workspaceId) throw new Error('Workspace not selected');
 			return createTask({
-				projectId,
-				sectionId: inbox?.id,
-				title,
+				workspaceId,
+				boardId: boardId ?? undefined,
+				title: capture.trim(),
 				status: 'ideas'
 			});
 		},
 		onSuccess: async () => {
 			setCapture('');
 			await qc.invalidateQueries({ queryKey: ['tasks'] });
-			await qc.invalidateQueries({ queryKey: ['projects-tree'] });
 		}
+	});
+
+	const patchTaskM = useMutation({
+		mutationFn: async (payload: { id: string; patch: Partial<Pick<Task, 'title' | 'description' | 'status'>> }) =>
+			patchTask(payload.id, payload.patch),
+		onSuccess: invalidateTaskViews
+	});
+
+	const sendChatM = useMutation({
+		mutationFn: async () => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return sendTaskChat(selectedTaskId, { text: chatInput.trim() });
+		},
+		onSuccess: async () => {
+			setChatInput('');
+			await qc.invalidateQueries({ queryKey: ['task-chat'] });
+		}
+	});
+
+	const runTaskM = useMutation({
+		mutationFn: async (mode: 'plan' | 'execute' | 'report') => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return runTask(selectedTaskId, { mode });
+		},
+		onSuccess: invalidateTaskViews
+	});
+
+	const stopTaskM = useMutation({
+		mutationFn: async () => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return stopTask(selectedTaskId);
+		},
+		onSuccess: invalidateTaskViews
+	});
+
+	const upsertSessionM = useMutation({
+		mutationFn: async (input: { executionMode?: 'single' | 'squad'; reasoningLevel?: ReasoningLevel }) => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return upsertTaskSession(selectedTaskId, input);
+		},
+		onSuccess: invalidateTaskViews
+	});
+
+	const requestApprovalM = useMutation({
+		mutationFn: async () => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return requestTaskApproval(selectedTaskId, { title: `Approval: ${titleDraft || selectedTask?.title || 'Task'}` });
+		},
+		onSuccess: invalidateTaskViews
 	});
 
 	const approveM = useMutation({
 		mutationFn: async (approvalId: string) => approveApproval(approvalId, { decidedBy: 'workspace' }),
-		onSuccess: async () => {
-			await qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
-			await qc.invalidateQueries({ queryKey: ['projects-tree'] });
-		}
+		onSuccess: invalidateTaskViews
 	});
 
 	const rejectM = useMutation({
 		mutationFn: async (approvalId: string) => rejectApproval(approvalId, { decidedBy: 'workspace' }),
+		onSuccess: invalidateTaskViews
+	});
+
+	const createChecklistM = useMutation({
+		mutationFn: async () => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return createChecklistItem(selectedTaskId, { title: checklistInput.trim(), state: 'todo' });
+		},
 		onSuccess: async () => {
-			await qc.invalidateQueries({ queryKey: ['approvals', 'pending'] });
-			await qc.invalidateQueries({ queryKey: ['projects-tree'] });
+			setChecklistInput('');
+			await qc.invalidateQueries({ queryKey: ['task-checklist'] });
 		}
 	});
 
-	useEffect(() => {
-		if (!projectId && projectsQ.data?.length) {
-			const next = new URLSearchParams(location.search);
-			next.set('projectId', projectsQ.data[0].id);
-			navigate(`/workspace?${next.toString()}`, { replace: true });
+	const updateChecklistM = useMutation({
+		mutationFn: async (payload: { itemId: string; state: ChecklistState }) => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return updateChecklistItem(selectedTaskId, payload.itemId, { state: payload.state });
+		},
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: ['task-checklist'] });
 		}
-	}, [location.search, navigate, projectId, projectsQ.data]);
+	});
 
-	const tasks = useMemo(() => tasksQ.data ?? [], [tasksQ.data]);
-	const sections = useMemo(() => sectionsQ.data ?? [], [sectionsQ.data]);
-	const approvals = useMemo(() => approvalsQ.data ?? [], [approvalsQ.data]);
-	const stuckRuns = useMemo(() => stuckQ.data ?? [], [stuckQ.data]);
-	const failedRuns = useMemo(() => failedQ.data ?? [], [failedQ.data]);
-
-	const summaryCounts = useMemo(() => {
-		const out: Record<string, number> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			out[key] = tasks.filter((task) => inRange(task.updated_at, key)).length;
+	const deleteChecklistM = useMutation({
+		mutationFn: async (itemId: string) => {
+			if (!selectedTaskId) throw new Error('Task is not selected');
+			return deleteChecklistItem(selectedTaskId, itemId);
+		},
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: ['task-checklist'] });
 		}
-		return out;
-	}, [tasks]);
+	});
 
-	const summaryExtra = useMemo(() => {
-		const out: Record<string, number> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			out[key] = tasks.filter(
-				(task) =>
-					inRange(task.updated_at, key) &&
-					(task.status === 'doing' || task.status === 'review' || task.status === 'release')
-			).length;
+	const updateMemoryM = useMutation({
+		mutationFn: async () => {
+			if (!boardId) throw new Error('Board is not selected');
+			return updateMemoryDoc({ scope: 'board', id: boardId, content: memoryDraft, updatedBy: 'workspace-ui' });
+		},
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: ['board-memory'] });
 		}
-		return out;
-	}, [tasks]);
+	});
 
-	const overdueCount = useMemo(
-		() => tasks.filter((task) => task.status === 'review' || task.status === 'release').length,
-		[tasks]
-	);
-	const issuesCount = useMemo(() => failedRuns.length, [failedRuns]);
-	const featuresCount = sections.length;
-	const completedCount = useMemo(() => tasks.filter((task) => task.status === 'done').length, [tasks]);
-
-	const labels = useMemo(() => dayLabelsLast7(), []);
-
-	const githubSeries = useMemo(() => {
-		const out: Record<string, Array<{ name: string; type?: 'line' | 'bar'; data: number[] }>> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
-			const newData = bucketByLast7Days(
-				scoped
-					.filter((task) => task.status === 'ideas' || task.status === 'todo')
-					.map((task) => ({ at: task.updated_at }))
+	const groupedTasks = useMemo(() => {
+		const map = new Map<TaskStatus, Task[]>();
+		for (const status of STATUS_ORDER) map.set(status, []);
+		for (const task of tasksQ.data ?? []) {
+			const bucket = map.get(task.status as TaskStatus);
+			if (bucket) bucket.push(task);
+		}
+		for (const status of STATUS_ORDER) {
+			map.set(
+				status,
+				(map.get(status) ?? []).slice().sort((a, b) => a.position - b.position || Date.parse(b.updated_at) - Date.parse(a.updated_at))
 			);
-			const closedData = bucketByLast7Days(
-				scoped
-					.filter((task) => task.status === 'done' || task.status === 'archived')
-					.map((task) => ({ at: task.updated_at }))
-			);
-			out[key] = [
-				{ name: 'New', type: 'line', data: newData },
-				{ name: 'Closed', type: 'bar', data: closedData }
-			];
 		}
-		return out;
-	}, [tasks]);
+		return map;
+	}, [tasksQ.data]);
 
-	const githubOverview = useMemo(() => {
-		const out: Record<string, GithubOverview> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
-			out[key] = {
-				'new-issues': scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').length,
-				'closed-issues': scoped.filter((task) => task.status === 'done').length,
-				fixed: scoped.filter((task) => task.status === 'done').length,
-				'wont-fix': scoped.filter((task) => task.status === 'archived').length,
-				're-opened': scoped.filter((task) => task.status === 'review').length,
-				'needs-triage': approvals.filter((approval) => inRange(approval.requested_at, key)).length
-			};
-		}
-		return out;
-	}, [approvals, tasks]);
-
-	const distributionSeries = useMemo(() => {
-		const out: Record<string, number[]> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
-			out[key] = [
-				scoped.filter((task) => task.status === 'ideas').length,
-				scoped.filter((task) => task.status === 'todo').length,
-				scoped.filter((task) => task.status === 'doing').length,
-				scoped.filter((task) => task.status === 'review' || task.status === 'release').length,
-				scoped.filter((task) => task.status === 'done').length,
-				scoped.filter((task) => task.status === 'archived').length
-			];
-		}
-		return out;
-	}, [tasks]);
-
-	const distributionOverview = useMemo(() => {
-		const out: Record<string, { new: number; completed: number }> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
-			out[key] = {
-				new: scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').length,
-				completed: scoped.filter((task) => task.status === 'done').length
-			};
-		}
-		return out;
-	}, [tasks]);
-
-	const projectById = useMemo(
-		() => Object.fromEntries((projectsQ.data ?? []).map((project) => [project.id, project.name])),
-		[projectsQ.data]
+	const selectedTaskApprovals = useMemo(
+		() => (approvalsQ.data ?? []).filter((approval) => approval.task_id === selectedTaskId),
+		[approvalsQ.data, selectedTaskId]
 	);
 
-	const scheduleSeries = useMemo(() => {
-		const out: Record<string, ScheduleEntry[]> = {};
-		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			const approvalsEntries = approvals
-				.filter((approval) => inRange(approval.requested_at, key))
-				.slice(0, 4)
-				.map((approval) => ({
-					title: approval.request_title ?? approval.task_title ?? 'Pending approval',
-					time: new Date(approval.requested_at).toLocaleTimeString([], {
-						hour: '2-digit',
-						minute: '2-digit'
-					}),
-					location: approval.project_id ? projectById[approval.project_id] : 'Workspace'
-				}));
-			const taskEntries = tasks
-				.filter((task) => inRange(task.updated_at, key))
-				.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at))
-				.slice(0, 4)
-				.map((task) => ({
-					title: task.title,
-					time: new Date(task.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-					location: STATUS_LABEL[task.status]
-				}));
-			out[key] = [...approvalsEntries, ...taskEntries].slice(0, 8);
-		}
-		return out;
-	}, [approvals, projectById, tasks]);
-
-	const statusCounts = useMemo(() => {
-		const output: Record<TaskStatus, number> = {
+	const taskCounts = useMemo(() => {
+		const out: Record<TaskStatus, number> = {
 			ideas: 0,
 			todo: 0,
 			doing: 0,
@@ -451,225 +502,483 @@ export default function WorkspaceView() {
 			done: 0,
 			archived: 0
 		};
-		for (const task of tasks) {
-			output[task.status] = (output[task.status] ?? 0) + 1;
+		for (const task of tasksQ.data ?? []) {
+			out[task.status] = (out[task.status] ?? 0) + 1;
 		}
-		return output;
-	}, [tasks]);
-
-	const recentTasks = useMemo(
-		() => [...tasks].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, 12),
-		[tasks]
-	);
-
-	const failed24h = useMemo(() => failedRuns.filter((run) => inRange(run.created_at, 'today')), [failedRuns]);
+		return out;
+	}, [tasksQ.data]);
 
 	const content = (
 		<div className="flex w-full flex-col p-4 md:p-6">
-			<div className="flex w-full flex-col justify-between gap-2 sm:flex-row sm:items-center">
-				<Tabs
-					value={tabValue}
-					onChange={(_event, value: string) => setTabValue(value)}
-				>
-					<Tab
-						value="overview"
-						label="Overview"
+			<Stack
+				direction="row"
+				spacing={1}
+				useFlexGap
+				flexWrap="wrap"
+			>
+				{STATUS_ORDER.map((status) => (
+					<Chip
+						key={status}
+						size="small"
+						label={`${STATUS_LABEL[status]}: ${taskCounts[status]}`}
 					/>
-					<Tab
-						value="approvals"
-						label="Approvals"
-					/>
-					<Tab
-						value="health"
-						label="Health"
-					/>
-				</Tabs>
-			</div>
+				))}
+			</Stack>
 
-			{tabValue === 'overview' ? (
-				<div className="grid w-full min-w-0 grid-cols-1 gap-4 py-4 sm:grid-cols-2 md:grid-cols-4">
-					<SummaryWidget
-						ranges={DASHBOARD_RANGES}
-						counts={summaryCounts}
-						extraCounts={summaryExtra}
-						name="Tasks"
-						extraName="Active"
-					/>
-					<MetricWidget
-						title="Overdue"
-						value={overdueCount}
-						name="Need review"
-						extraName="Pending approvals"
-						extraCount={approvals.length}
-					/>
-					<MetricWidget
-						title="Issues"
-						value={issuesCount}
-						name="Failed runs"
-						extraName="Stuck runs"
-						extraCount={stuckRuns.length}
-					/>
-					<MetricWidget
-						title="Features"
-						value={featuresCount}
-						name="Sections"
-						extraName="Completed tasks"
-						extraCount={completedCount}
-					/>
-					<div className="sm:col-span-2 md:col-span-4">
-						<GithubIssuesWidget
-							ranges={DASHBOARD_RANGES}
-							labels={labels}
-							series={githubSeries}
-							overview={githubOverview}
-							title="Execution Summary"
-						/>
-					</div>
-					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<TaskDistributionWidget
-							ranges={DASHBOARD_RANGES}
-							labels={['Ideas', 'Todo', 'Doing', 'Review', 'Done', 'Archived']}
-							series={distributionSeries}
-							overview={distributionOverview}
-						/>
-					</div>
-					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<ScheduleWidget
-							ranges={DASHBOARD_RANGES}
-							series={scheduleSeries}
-						/>
-					</div>
-				</div>
-			) : null}
-
-			{tabValue === 'approvals' ? (
-				<Paper className="overflow-hidden rounded-xl shadow-sm">
-					<Typography className="px-5 pt-5 text-xl font-semibold">Pending Approvals</Typography>
-					<Divider className="mt-4" />
-					<List className="divide-y py-0">
-						{approvals.length === 0 ? (
-							<ListItem>
-								<ListItemText primary="No pending approvals" />
-							</ListItem>
-						) : (
-							approvals.slice(0, 14).map((approval: Approval) => (
-								<ListItemButton
-									key={approval.id}
-									className="items-start px-5 py-4"
-									disableGutters
-								>
-									<ListItemText
-										primary={approval.request_title ?? approval.task_title ?? approval.id}
-										secondary={new Date(approval.requested_at).toLocaleString()}
-									/>
-									<Stack
-										direction="row"
-										spacing={1}
-									>
-										<Button
-											size="small"
-											variant="outlined"
-											disabled={approveM.isPending || !approval.task_id}
-											onClick={() => approveM.mutate(approval.id)}
-										>
-											Approve
-										</Button>
-										<Button
-											size="small"
-											color="error"
-											variant="outlined"
-											disabled={rejectM.isPending || !approval.task_id}
-											onClick={() => rejectM.mutate(approval.id)}
-										>
-											Reject
-										</Button>
-									</Stack>
-								</ListItemButton>
-							))
-						)}
-					</List>
-				</Paper>
-			) : null}
-
-			{tabValue === 'health' ? (
-				<div className="grid w-full grid-cols-1 gap-4 py-4 md:grid-cols-2">
-					<Paper className="rounded-xl p-6 shadow-sm">
-						<Typography className="text-xl leading-6 font-medium tracking-tight">
-							Status Breakdown
-						</Typography>
+			<Box
+				sx={{
+					display: 'grid',
+					gridTemplateColumns: { xs: '1fr', md: 'repeat(3, minmax(0, 1fr))', xl: 'repeat(6, minmax(0, 1fr))' },
+					gap: 2,
+					mt: 2
+				}}
+			>
+				{STATUS_ORDER.map((status) => (
+					<Paper
+						key={status}
+						className="rounded-xl p-3 shadow-sm"
+					>
 						<Stack
 							direction="row"
-							spacing={1}
-							useFlexGap
-							flexWrap="wrap"
-							className="mt-4"
+							justifyContent="space-between"
+							alignItems="center"
 						>
-							{(Object.keys(STATUS_LABEL) as TaskStatus[]).map((status) => (
-								<Button
-									key={status}
-									size="small"
-									variant="outlined"
-									disabled
-								>
-									{STATUS_LABEL[status]}: {statusCounts[status]}
-								</Button>
-							))}
+							<Typography className="text-sm font-semibold">{STATUS_LABEL[status]}</Typography>
+							<Chip
+								size="small"
+								label={groupedTasks.get(status)?.length ?? 0}
+							/>
 						</Stack>
-					</Paper>
-
-					<Paper className="rounded-xl p-6 shadow-sm">
-						<Typography className="text-xl leading-6 font-medium tracking-tight">Run Health</Typography>
-						<List className="mt-3 divide-y py-0">
-							<ListItemText
-								className="py-2"
-								primary={`Stuck runs: ${stuckRuns.length}`}
-							/>
-							<ListItemText
-								className="py-2"
-								primary={`Failed (24h): ${failed24h.length}`}
-							/>
-							<ListItemText
-								className="py-2"
-								primary={`Sections: ${sections.length}`}
-							/>
-							<ListItemText
-								className="py-2"
-								primary={`Recent tasks shown: ${recentTasks.length}`}
-							/>
+						<List className="mt-2 divide-y py-0">
+							{(groupedTasks.get(status) ?? []).map((task) => (
+								<ListItemButton
+									key={task.id}
+									className="px-2 py-2"
+									onClick={() => {
+										setSelectedTaskId(task.id);
+										setDrawerTab('brief');
+									}}
+								>
+									<ListItemText
+										primary={task.title}
+										secondary={new Date(task.updated_at).toLocaleString()}
+									/>
+								</ListItemButton>
+							))}
+							{(groupedTasks.get(status) ?? []).length === 0 ? (
+								<ListItem className="px-2 py-2">
+									<ListItemText
+										primary="No tasks"
+										primaryTypographyProps={{ color: 'text.secondary', fontSize: 13 }}
+									/>
+								</ListItem>
+							) : null}
 						</List>
 					</Paper>
-				</div>
-			) : null}
+				))}
+			</Box>
 
-			{createTaskM.isError ? (
+			{tasksQ.isError ? (
 				<Alert
 					severity="error"
 					sx={{ mt: 2 }}
 				>
-					{String(createTaskM.error)}
+					{String(tasksQ.error)}
 				</Alert>
 			) : null}
 		</div>
 	);
 
+	const activeTask = taskDetailsQ.data ?? selectedTask;
+	const chatMessages = chatQ.data ?? [];
+	const checklist = checklistQ.data ?? [];
+	const runs = runsQ.data ?? [];
+	const executionMode = sessionQ.data?.execution_mode ?? 'single';
+	const reasoningLevel = (sessionQ.data?.reasoning_level as ReasoningLevel) ?? 'auto';
+
 	return (
 		<Root
 			header={
 				<WorkspaceHeader
-					projectId={projectId}
-					projects={(projectsQ.data ?? []).map((project) => ({ id: project.id, name: project.name }))}
+					workspaceId={workspaceId}
+					boardId={boardId}
+					workspaces={(workspacesQ.data ?? []).map((workspace) => ({ id: workspace.id, name: workspace.name }))}
+					boards={(boardsQ.data ?? []).map((board) => ({ id: board.id, name: board.name }))}
 					capture={capture}
 					onSetCapture={setCapture}
-					onSelectProject={(id) => {
+					onSelectWorkspace={(id) => {
 						const next = new URLSearchParams(location.search);
-						next.set('projectId', id);
+						next.set('workspaceId', id);
+						next.delete('projectId');
+						next.delete('sectionId');
+						next.delete('boardId');
 						navigate(`/workspace?${next.toString()}`);
 					}}
-					onCreateTask={() => createTaskM.mutate(capture.trim())}
+					onSelectBoard={(id) => {
+						const next = new URLSearchParams(location.search);
+						next.set('workspaceId', workspaceId ?? '');
+						next.set('boardId', id);
+						next.delete('projectId');
+						next.delete('sectionId');
+						navigate(`/workspace?${next.toString()}`);
+					}}
+					onCreateTask={() => createTaskM.mutate()}
 					creating={createTaskM.isPending}
 				/>
 			}
 			content={content}
+			rightSidebarProps={{
+				content: (
+					<Box
+						sx={{ width: isMobile ? '100vw' : 560, maxWidth: '100vw', p: 2, pb: 3 }}
+					>
+						<Stack
+							direction="row"
+							justifyContent="space-between"
+							alignItems="center"
+						>
+							<Typography className="text-xl font-semibold">{activeTask?.title ?? 'Task'}</Typography>
+							<IconButton onClick={() => setSelectedTaskId(null)}>
+								<FuseSvgIcon>lucide:x</FuseSvgIcon>
+							</IconButton>
+						</Stack>
+						<Tabs
+							value={drawerTab}
+							onChange={(_event, value) => setDrawerTab(value)}
+							sx={{ mt: 1 }}
+						>
+							<Tab
+								value="brief"
+								label="Brief"
+							/>
+							<Tab
+								value="chat"
+								label="Chat"
+							/>
+							<Tab
+								value="runs"
+								label="Runs"
+							/>
+							<Tab
+								value="approvals"
+								label="Approvals"
+							/>
+							<Tab
+								value="context"
+								label="Context"
+							/>
+						</Tabs>
+						<Divider className="my-2" />
+
+							{drawerTab === 'brief' ? (
+								<Stack spacing={2}>
+									<TextField
+										label="Title"
+										value={titleDraft}
+										onChange={(event) => setTitleDraft(event.target.value)}
+									/>
+									<TextField
+										label="Description"
+										multiline
+										minRows={4}
+										value={descriptionDraft}
+										onChange={(event) => setDescriptionDraft(event.target.value)}
+									/>
+									<FormControl size="small">
+										<InputLabel id="task-status-label">Status</InputLabel>
+										<Select
+											labelId="task-status-label"
+											label="Status"
+											value={statusDraft}
+											onChange={(event) => setStatusDraft(event.target.value as TaskStatus)}
+										>
+											{STATUS_ORDER.map((status) => (
+												<MenuItem
+													key={status}
+													value={status}
+												>
+													{STATUS_LABEL[status]}
+												</MenuItem>
+											))}
+										</Select>
+									</FormControl>
+										<FormControl size="small">
+											<InputLabel id="execution-mode-label">Execution Mode</InputLabel>
+											<Select
+												labelId="execution-mode-label"
+												label="Execution Mode"
+												value={executionMode}
+												onChange={(event) =>
+													upsertSessionM.mutate({ executionMode: event.target.value as 'single' | 'squad' })
+												}
+											>
+												<MenuItem value="single">single</MenuItem>
+												<MenuItem value="squad">squad</MenuItem>
+											</Select>
+										</FormControl>
+										<FormControl size="small">
+											<InputLabel id="reasoning-level-label">Reasoning</InputLabel>
+											<Select
+												labelId="reasoning-level-label"
+												label="Reasoning"
+												value={reasoningLevel}
+												onChange={(event) =>
+													upsertSessionM.mutate({ reasoningLevel: event.target.value as ReasoningLevel })
+												}
+											>
+												<MenuItem value="off">off</MenuItem>
+												<MenuItem value="low">low</MenuItem>
+												<MenuItem value="medium">medium</MenuItem>
+												<MenuItem value="high">high</MenuItem>
+												<MenuItem value="auto">auto</MenuItem>
+											</Select>
+										</FormControl>
+									<Stack
+										direction="row"
+										spacing={1}
+										useFlexGap
+										flexWrap="wrap"
+									>
+										<Button
+											variant="contained"
+											onClick={() => {
+												if (!selectedTaskId) return;
+												patchTaskM.mutate({
+													id: selectedTaskId,
+													patch: { title: titleDraft, description: descriptionDraft, status: statusDraft }
+												});
+											}}
+										>
+											Save
+										</Button>
+										<Button
+											variant="outlined"
+											onClick={() => runTaskM.mutate('plan')}
+										>
+											Plan
+										</Button>
+										<Button
+											variant="outlined"
+											onClick={() => runTaskM.mutate('execute')}
+										>
+											Execute
+										</Button>
+										<Button
+											variant="outlined"
+											onClick={() => runTaskM.mutate('report')}
+										>
+											Report
+										</Button>
+										<Button
+											color="error"
+											variant="outlined"
+											onClick={() => stopTaskM.mutate()}
+										>
+											Stop
+										</Button>
+									</Stack>
+									<Typography color="text.secondary">Session: {sessionQ.data?.status ?? 'not initialized'}</Typography>
+								</Stack>
+							) : null}
+
+							{drawerTab === 'chat' ? (
+								<Stack spacing={2}>
+									<Paper
+										variant="outlined"
+										sx={{ maxHeight: 360, overflow: 'auto', p: 1 }}
+									>
+										<List className="py-0">
+											{chatMessages.map((message: TaskMessage) => (
+												<ListItem key={message.id} className="px-2 py-1">
+													<ListItemText
+														primary={message.role}
+														secondary={message.content}
+													/>
+												</ListItem>
+											))}
+											{chatMessages.length === 0 ? (
+												<ListItem className="px-2 py-1">
+													<ListItemText primary="No messages yet" />
+												</ListItem>
+											) : null}
+										</List>
+									</Paper>
+									<TextField
+										label="Message"
+										multiline
+										minRows={3}
+										value={chatInput}
+										onChange={(event) => setChatInput(event.target.value)}
+									/>
+									<Button
+										variant="contained"
+										disabled={!chatInput.trim() || sendChatM.isPending}
+										onClick={() => sendChatM.mutate()}
+									>
+										Send
+									</Button>
+								</Stack>
+							) : null}
+
+							{drawerTab === 'runs' ? (
+								<Stack spacing={1}>
+									{runs.map((run) => (
+										<Paper
+											key={run.id}
+											variant="outlined"
+											className="rounded-lg p-2"
+										>
+											<Stack
+												direction="row"
+												justifyContent="space-between"
+											>
+												<Typography className="text-sm font-medium">{run.status}</Typography>
+												<Typography color="text.secondary" className="text-xs">
+													{new Date(run.created_at).toLocaleString()}
+												</Typography>
+											</Stack>
+											<Typography color="text.secondary" className="text-xs">
+												Tokens: {run.total_tokens ?? 0}
+											</Typography>
+										</Paper>
+									))}
+									{runs.length === 0 ? <Typography color="text.secondary">No runs yet.</Typography> : null}
+							</Stack>
+							) : null}
+
+							{drawerTab === 'approvals' ? (
+								<Stack spacing={1.5}>
+									<Button
+										variant="outlined"
+										onClick={() => requestApprovalM.mutate()}
+									>
+										Request approval
+									</Button>
+									{selectedTaskApprovals.map((approval: Approval) => (
+										<Paper
+											key={approval.id}
+											variant="outlined"
+											className="rounded-lg p-2"
+										>
+											<Typography className="text-sm font-medium">{approval.request_title ?? approval.id}</Typography>
+											<Typography color="text.secondary" className="text-xs">
+												{approval.status} · {new Date(approval.requested_at).toLocaleString()}
+											</Typography>
+											{approval.status === 'pending' ? (
+												<Stack direction="row" spacing={1} className="mt-2">
+													<Button
+														size="small"
+														variant="outlined"
+														onClick={() => approveM.mutate(approval.id)}
+													>
+														Approve
+													</Button>
+													<Button
+														size="small"
+														color="error"
+														variant="outlined"
+														onClick={() => rejectM.mutate(approval.id)}
+													>
+														Reject
+													</Button>
+												</Stack>
+											) : null}
+										</Paper>
+									))}
+									{selectedTaskApprovals.length === 0 ? (
+										<Typography color="text.secondary">No approvals for this task.</Typography>
+									) : null}
+								</Stack>
+							) : null}
+
+							{drawerTab === 'context' ? (
+								<Stack spacing={2}>
+									<Paper
+										variant="outlined"
+										className="rounded-lg p-2"
+									>
+										<Typography className="text-sm font-semibold">Checklist</Typography>
+										<List className="py-0">
+											{checklist.map((item: TaskChecklistItem) => (
+												<ListItem
+													key={item.id}
+													className="px-0"
+													secondaryAction={
+														<Stack
+															direction="row"
+															spacing={1}
+														>
+															<Button
+																size="small"
+																variant="text"
+																onClick={() => {
+																	const next: ChecklistState = item.state === 'todo' ? 'doing' : item.state === 'doing' ? 'done' : 'todo';
+																	updateChecklistM.mutate({ itemId: item.id, state: next });
+																}}
+															>
+																{item.state}
+															</Button>
+															<Button
+																size="small"
+																color="error"
+																variant="text"
+																onClick={() => deleteChecklistM.mutate(item.id)}
+															>
+																del
+															</Button>
+														</Stack>
+													}
+												>
+													<ListItemText primary={item.title} secondary={item.state} />
+												</ListItem>
+											))}
+										</List>
+										<Stack direction="row" spacing={1}>
+											<TextField
+												size="small"
+												fullWidth
+												placeholder="Add checklist item"
+												value={checklistInput}
+												onChange={(event) => setChecklistInput(event.target.value)}
+											/>
+											<Button
+												variant="contained"
+												disabled={!checklistInput.trim()}
+												onClick={() => createChecklistM.mutate()}
+											>
+												Add
+											</Button>
+										</Stack>
+									</Paper>
+
+									<TextField
+										label="Board context (MEMORY)"
+										multiline
+										minRows={8}
+										value={memoryDraft}
+										onChange={(event) => setMemoryDraft(event.target.value)}
+									/>
+									<Button
+										variant="contained"
+										onClick={() => updateMemoryM.mutate()}
+										disabled={!boardId}
+									>
+										Save context
+									</Button>
+								</Stack>
+							) : null}
+
+							{runTaskM.isError || sendChatM.isError || patchTaskM.isError ? (
+								<Alert severity="error" sx={{ mt: 2 }}>
+									{String(runTaskM.error ?? sendChatM.error ?? patchTaskM.error)}
+								</Alert>
+							) : null}
+					</Box>
+				),
+				open: Boolean(selectedTaskId),
+				onClose: () => setSelectedTaskId(null),
+				width: isMobile ? 420 : 560
+			}}
 			scroll={isMobile ? 'page' : 'content'}
 		/>
 	);

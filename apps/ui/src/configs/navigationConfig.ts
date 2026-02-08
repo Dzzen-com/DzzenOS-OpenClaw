@@ -34,6 +34,20 @@ const navigationConfig: FuseNavItemType[] = [
 		url: '/agents'
 	},
 	{
+		id: 'team-access',
+		title: 'Team & Access',
+		type: 'item',
+		icon: 'lucide:users-round',
+		url: '/team-access'
+	},
+	{
+		id: 'openclaw-settings',
+		title: 'OpenClaw Settings',
+		type: 'item',
+		icon: 'lucide:settings-2',
+		url: '/openclaw-settings'
+	},
+	{
 		id: 'docs',
 		title: 'Docs',
 		type: 'item',

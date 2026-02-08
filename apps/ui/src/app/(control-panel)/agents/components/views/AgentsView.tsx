@@ -1,18 +1,24 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
 	Avatar,
+	Button,
 	Box,
 	Chip,
+	FormControl,
 	Input,
+	InputLabel,
 	List,
 	ListItemAvatar,
 	ListItemButton,
 	ListItem,
 	ListItemText,
+	MenuItem,
 	Paper,
+	Select,
 	Stack,
 	Alert,
+	TextField,
 	Typography
 } from '@mui/material';
 import { styled } from '@mui/material/styles';
@@ -21,8 +27,8 @@ import { motion } from 'motion/react';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
 import useThemeMediaQuery from '@fuse/hooks/useThemeMediaQuery';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
-import { listAgents } from '@/api/queries';
-import type { Agent } from '@/api/types';
+import { listAgents, reviewAgent, updateAgentOnboarding } from '@/api/queries';
+import type { Agent, AgentLevel, OnboardingState } from '@/api/types';
 
 const Root = styled(FusePageSimple)(({ theme }) => ({
 	'& .container': {
@@ -119,7 +125,39 @@ function AgentsHeader({
 	);
 }
 
-function AgentSidebarContent({ agent, maxRuns7d }: { agent: Agent | null; maxRuns7d: number }) {
+function AgentSidebarContent({
+	agent,
+	maxRuns7d,
+	saving,
+	onSaveGovernance
+}: {
+	agent: Agent | null;
+	maxRuns7d: number;
+	saving: boolean;
+	onSaveGovernance: (input: {
+		agentId: string;
+		agentLevel: AgentLevel;
+		onboardingState: OnboardingState;
+		reviewScore: number | null;
+		reviewCycleDays: number;
+		promotionBlockReason: string | null;
+	}) => void;
+}) {
+	const [level, setLevel] = useState<AgentLevel>('L1');
+	const [onboarding, setOnboarding] = useState<OnboardingState>('pending');
+	const [reviewScore, setReviewScore] = useState<string>('');
+	const [reviewCycleDays, setReviewCycleDays] = useState<string>('7');
+	const [promotionBlockReason, setPromotionBlockReason] = useState('');
+
+	useEffect(() => {
+		if (!agent) return;
+		setLevel((agent.agent_level as AgentLevel) ?? 'L1');
+		setOnboarding((agent.onboarding_state as OnboardingState) ?? 'pending');
+		setReviewScore(agent.review_score == null ? '' : String(agent.review_score));
+		setReviewCycleDays(String(agent.review_cycle_days ?? 7));
+		setPromotionBlockReason(agent.promotion_block_reason ?? '');
+	}, [agent?.id, agent?.agent_level, agent?.onboarding_state, agent?.review_score, agent?.review_cycle_days, agent?.promotion_block_reason]);
+
 	if (!agent) {
 		return (
 			<div className="flex h-full items-center justify-center p-6">
@@ -165,12 +203,99 @@ function AgentSidebarContent({ agent, maxRuns7d }: { agent: Agent | null; maxRun
 						size="small"
 						label={agent.category || 'general'}
 					/>
+					<Chip
+						size="small"
+						label={level}
+					/>
+					<Chip
+						size="small"
+						label={onboarding}
+					/>
 					{agent.model ? (
 						<Chip
 							size="small"
 							label={agent.model}
 						/>
 					) : null}
+				</Stack>
+			</Paper>
+
+			<Paper className="rounded-xl p-4 shadow-sm">
+				<Typography
+					className="text-sm font-medium"
+					color="text.secondary"
+				>
+					Governance
+				</Typography>
+				<Stack
+					spacing={1.5}
+					className="mt-2"
+				>
+					<FormControl size="small">
+						<InputLabel id="agent-level-label">Level</InputLabel>
+						<Select
+							labelId="agent-level-label"
+							label="Level"
+							value={level}
+							onChange={(event) => setLevel(event.target.value as AgentLevel)}
+						>
+							<MenuItem value="L1">L1</MenuItem>
+							<MenuItem value="L2">L2</MenuItem>
+							<MenuItem value="L3">L3</MenuItem>
+							<MenuItem value="L4">L4</MenuItem>
+						</Select>
+					</FormControl>
+					<FormControl size="small">
+						<InputLabel id="agent-onboarding-label">Onboarding</InputLabel>
+						<Select
+							labelId="agent-onboarding-label"
+							label="Onboarding"
+							value={onboarding}
+							onChange={(event) => setOnboarding(event.target.value as OnboardingState)}
+						>
+							<MenuItem value="pending">pending</MenuItem>
+							<MenuItem value="in_progress">in_progress</MenuItem>
+							<MenuItem value="done">done</MenuItem>
+							<MenuItem value="blocked">blocked</MenuItem>
+						</Select>
+					</FormControl>
+					<TextField
+						size="small"
+						label="Review score"
+						value={reviewScore}
+						onChange={(event) => setReviewScore(event.target.value)}
+						placeholder="e.g. 4.5"
+					/>
+					<TextField
+						size="small"
+						label="Review cycle days"
+						value={reviewCycleDays}
+						onChange={(event) => setReviewCycleDays(event.target.value)}
+					/>
+					<TextField
+						size="small"
+						label="Promotion block reason"
+						value={promotionBlockReason}
+						onChange={(event) => setPromotionBlockReason(event.target.value)}
+					/>
+					<Button
+						variant="contained"
+						disabled={saving}
+						onClick={() =>
+							onSaveGovernance({
+								agentId: agent.id,
+								agentLevel: level,
+								onboardingState: onboarding,
+								reviewScore: reviewScore.trim() ? Number(reviewScore) : null,
+								reviewCycleDays: Number.isFinite(Number(reviewCycleDays))
+									? Math.max(1, Math.floor(Number(reviewCycleDays)))
+									: 7,
+								promotionBlockReason: promotionBlockReason.trim() ? promotionBlockReason.trim() : null
+							})
+						}
+					>
+						{saving ? 'Saving...' : 'Save governance'}
+					</Button>
 				</Stack>
 			</Paper>
 
@@ -255,6 +380,7 @@ function AgentSidebarContent({ agent, maxRuns7d }: { agent: Agent | null; maxRun
 
 export default function AgentsView() {
 	const isMobile = useThemeMediaQuery((theme) => theme.breakpoints.down('lg'));
+	const qc = useQueryClient();
 	const [searchText, setSearchText] = useState('');
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
@@ -300,6 +426,31 @@ export default function AgentsView() {
 	const disabledCount = Math.max(allAgents.length - enabledCount, 0);
 	const totalRuns7d = allAgents.reduce((sum, agent) => sum + (agent.run_count_7d ?? 0), 0);
 	const maxRuns7d = allAgents.reduce((max, agent) => Math.max(max, agent.run_count_7d ?? 0), 1);
+
+	const saveGovernanceM = useMutation({
+		mutationFn: async (input: {
+			agentId: string;
+			agentLevel: AgentLevel;
+			onboardingState: OnboardingState;
+			reviewScore: number | null;
+			reviewCycleDays: number;
+			promotionBlockReason: string | null;
+		}) => {
+			await updateAgentOnboarding(input.agentId, {
+				onboardingState: input.onboardingState,
+				promotionBlockReason: input.promotionBlockReason
+			});
+			return reviewAgent(input.agentId, {
+				agentLevel: input.agentLevel,
+				reviewScore: input.reviewScore,
+				reviewCycleDays: input.reviewCycleDays,
+				promotionBlockReason: input.promotionBlockReason
+			});
+		},
+		onSuccess: async () => {
+			await qc.invalidateQueries({ queryKey: ['agents'] });
+		}
+	});
 
 	const content = (
 		<div className="flex w-full flex-col p-4 md:p-6">
@@ -397,6 +548,8 @@ export default function AgentsView() {
 					<AgentSidebarContent
 						agent={selectedAgent}
 						maxRuns7d={maxRuns7d}
+						saving={saveGovernanceM.isPending}
+						onSaveGovernance={(input) => saveGovernanceM.mutate(input)}
 					/>
 				),
 				open: rightSidebarOpen,
