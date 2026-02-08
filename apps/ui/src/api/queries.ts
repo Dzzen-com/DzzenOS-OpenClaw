@@ -39,6 +39,14 @@ import type {
   TaskStatus,
   SubAgentLink,
   TaskSession,
+  WorkspaceMember,
+  BoardMember,
+  Invite,
+  AuditEvent,
+  OpenClawSettingsStatus,
+  MemberRole,
+  AgentLevel,
+  OnboardingState,
 } from './types';
 
 type AgentScopeInput = {
@@ -55,16 +63,25 @@ function withAgentScope(path: string, scope?: AgentScopeInput): string {
   return s ? `${path}?${s}` : path;
 }
 
+async function resolveBoardWorkspaceId(boardId: string): Promise<string> {
+  const tree = await getProjectsTree({ includeArchived: true, limitPerSection: 1 });
+  for (const workspace of tree.projects ?? []) {
+    const found = (workspace.sections ?? []).find((section) => section.id === boardId);
+    if (found) return found.workspace_id ?? found.project_id;
+  }
+  throw new Error(`Cannot resolve workspace for board ${boardId}`);
+}
+
 export function listProjects(input?: { archived?: 'active' | 'only' | 'all' }): Promise<Project[]> {
   const qs = new URLSearchParams();
   if (input?.archived === 'only') qs.set('archived', 'only');
   if (input?.archived === 'all') qs.set('archived', 'all');
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiFetch(`/projects${suffix}`);
+  return apiFetch(`/workspaces${suffix}`);
 }
 
 export function createProject(input: { name: string; description?: string | null }): Promise<Project> {
-  return apiFetch('/projects', {
+  return apiFetch('/workspaces', {
     method: 'POST',
     body: JSON.stringify({ name: input.name, description: input.description ?? null }),
   });
@@ -74,27 +91,27 @@ export function patchProject(
   id: string,
   patch: { name?: string; description?: string | null; position?: number; isArchived?: boolean }
 ): Promise<Project> {
-  return apiFetch(`/projects/${encodeURIComponent(id)}`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
 export function reorderProjects(input: { orderedIds: string[] }): Promise<{ ok: boolean }> {
-  return apiFetch('/projects/reorder', {
+  return apiFetch('/workspaces/reorder', {
     method: 'POST',
     body: JSON.stringify(input),
   });
 }
 
 export function deleteProject(id: string): Promise<{ ok: boolean }> {
-  return apiFetch(`/projects/${encodeURIComponent(id)}`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
 }
 
 export function listSections(projectId: string): Promise<Section[]> {
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections`);
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/boards`);
 }
 
 export function createSection(
@@ -107,7 +124,7 @@ export function createSection(
     sectionKind?: 'section' | 'inbox';
   }
 ): Promise<Section> {
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/boards`, {
     method: 'POST',
     body: JSON.stringify({
       name: input.name,
@@ -130,27 +147,27 @@ export function patchSection(
     sectionKind?: 'section' | 'inbox';
   }
 ): Promise<Section> {
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections/${encodeURIComponent(sectionId)}`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/boards/${encodeURIComponent(sectionId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
 export function deleteSection(projectId: string, sectionId: string): Promise<{ ok: boolean }> {
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/sections/${encodeURIComponent(sectionId)}`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/boards/${encodeURIComponent(sectionId)}`, {
     method: 'DELETE',
   });
 }
 
 export function listProjectStatuses(projectId: string): Promise<ProjectStatus[]> {
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/statuses`);
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/statuses`);
 }
 
 export function createProjectStatus(
   projectId: string,
   input: { statusKey: string; label: string; position?: number }
 ): Promise<ProjectStatus> {
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/statuses`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/statuses`, {
     method: 'POST',
     body: JSON.stringify({ status_key: input.statusKey, label: input.label, position: input.position ?? 0 }),
   });
@@ -165,24 +182,32 @@ export function patchProjectStatus(
   if (patch.statusKey !== undefined) body.status_key = patch.statusKey;
   if (patch.label !== undefined) body.label = patch.label;
   if (patch.position !== undefined) body.position = patch.position;
-  return apiFetch(`/projects/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`, {
+  return apiFetch(`/workspaces/${encodeURIComponent(projectId)}/statuses/${encodeURIComponent(statusId)}`, {
     method: 'PATCH',
     body: JSON.stringify(body),
   });
 }
 
-export function getProjectsTree(input?: { projectId?: string; limitPerSection?: number; includeArchived?: boolean }): Promise<NavigationTree> {
+export function getProjectsTree(input?: {
+  workspaceId?: string;
+  projectId?: string;
+  limitPerSection?: number;
+  includeArchived?: boolean;
+}): Promise<NavigationTree> {
   const qs = new URLSearchParams();
-  if (input?.projectId) qs.set('projectId', input.projectId);
+  if (input?.workspaceId ?? input?.projectId) qs.set('workspaceId', input?.workspaceId ?? input?.projectId ?? '');
   if (input?.limitPerSection != null) qs.set('limitPerSection', String(input.limitPerSection));
   if (input?.includeArchived) qs.set('includeArchived', '1');
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
-  return apiFetch(`/navigation/projects-tree${suffix}`);
+  return apiFetch(`/workspaces-tree${suffix}`);
 }
 
 // Legacy wrappers (board -> section).
-export function listBoards(): Promise<Board[]> {
-  return apiFetch('/boards');
+export async function listBoards(input?: { workspaceId?: string | null; projectId?: string | null }): Promise<Board[]> {
+  const workspaceId = input?.workspaceId ?? input?.projectId ?? null;
+  if (workspaceId) return listSections(workspaceId);
+  const tree = await getProjectsTree({ includeArchived: true, limitPerSection: 1 });
+  return tree.projects.flatMap((workspace) => workspace.sections ?? []);
 }
 
 export function createBoard(input: {
@@ -194,21 +219,18 @@ export function createBoard(input: {
   viewMode?: 'kanban' | 'threads';
   sectionKind?: 'section' | 'inbox';
 }): Promise<Board> {
-  return apiFetch('/boards', {
-    method: 'POST',
-    body: JSON.stringify({
-      name: input.name,
-      description: input.description ?? null,
-      position: input.position ?? 0,
-      projectId: input.projectId ?? input.workspaceId ?? null,
-      workspaceId: input.projectId ?? input.workspaceId ?? null,
-      viewMode: input.viewMode,
-      sectionKind: input.sectionKind,
-    }),
+  const workspaceId = input.projectId ?? input.workspaceId ?? null;
+  if (!workspaceId) throw new Error('workspaceId is required');
+  return createSection(workspaceId, {
+    name: input.name,
+    description: input.description,
+    position: input.position,
+    viewMode: input.viewMode,
+    sectionKind: input.sectionKind,
   });
 }
 
-export function patchBoard(
+export async function patchBoard(
   id: string,
   patch: {
     name?: string;
@@ -216,25 +238,29 @@ export function patchBoard(
     position?: number;
     viewMode?: 'kanban' | 'threads';
     sectionKind?: 'section' | 'inbox';
-  }
+  },
+  workspaceId?: string
 ): Promise<Board> {
-  return apiFetch(`/boards/${encodeURIComponent(id)}`, {
+  const wid = workspaceId ?? (await resolveBoardWorkspaceId(id));
+  return apiFetch(`/workspaces/${encodeURIComponent(wid)}/boards/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
 }
 
-export function deleteBoard(id: string): Promise<{ ok: boolean }> {
-  return apiFetch(`/boards/${encodeURIComponent(id)}`, {
+export async function deleteBoard(id: string, workspaceId?: string): Promise<{ ok: boolean }> {
+  const wid = workspaceId ?? (await resolveBoardWorkspaceId(id));
+  return apiFetch(`/workspaces/${encodeURIComponent(wid)}/boards/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
 }
 
-export function getBoardAgentSettings(boardId: string): Promise<BoardAgentSettings> {
-  return apiFetch(`/boards/${encodeURIComponent(boardId)}/agent-settings`);
+export async function getBoardAgentSettings(boardId: string, workspaceId?: string): Promise<BoardAgentSettings> {
+  const wid = workspaceId ?? (await resolveBoardWorkspaceId(boardId));
+  return apiFetch(`/workspaces/${encodeURIComponent(wid)}/boards/${encodeURIComponent(boardId)}/agent-settings`);
 }
 
-export function upsertBoardAgentSettings(
+export async function upsertBoardAgentSettings(
   boardId: string,
   input: {
     preferred_agent_id?: string | null;
@@ -252,9 +278,11 @@ export function upsertBoardAgentSettings(
       model?: string | null;
       enabled?: boolean;
     }>;
-  }
+  },
+  workspaceId?: string
 ): Promise<BoardAgentSettings> {
-  return apiFetch(`/boards/${encodeURIComponent(boardId)}/agent-settings`, {
+  const wid = workspaceId ?? (await resolveBoardWorkspaceId(boardId));
+  return apiFetch(`/workspaces/${encodeURIComponent(wid)}/boards/${encodeURIComponent(boardId)}/agent-settings`, {
     method: 'PUT',
     body: JSON.stringify(input),
   });
@@ -319,6 +347,10 @@ export function deleteOpenClawCronJob(jobId: string): Promise<any> {
   return apiFetch(`/openclaw/cron/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
 }
 
+export function getOpenClawSettingsStatus(): Promise<OpenClawSettingsStatus> {
+  return apiFetch('/openclaw/settings/status');
+}
+
 export function getAgentHeartbeatSettings(agentId: string): Promise<AgentHeartbeatSettings> {
   return apiFetch(`/agents/${encodeURIComponent(agentId)}/heartbeat-settings`);
 }
@@ -373,6 +405,8 @@ export function listTasks(
   input:
     | string
     | {
+        workspaceId?: string;
+        boardId?: string;
         projectId?: string;
         sectionId?: string;
         viewMode?: 'kanban' | 'threads';
@@ -382,10 +416,12 @@ export function listTasks(
 ): Promise<Task[]> {
   const qs = new URLSearchParams();
   if (typeof input === 'string') {
-    qs.set('sectionId', input);
+    qs.set('boardId', input);
   } else {
-    if (input.projectId) qs.set('projectId', input.projectId);
-    if (input.sectionId) qs.set('sectionId', input.sectionId);
+    const workspaceId = input.workspaceId ?? input.projectId;
+    const boardId = input.boardId ?? input.sectionId;
+    if (workspaceId) qs.set('workspaceId', workspaceId);
+    if (boardId) qs.set('boardId', boardId);
     if (input.viewMode) qs.set('viewMode', input.viewMode);
     if (input.statuses?.length) qs.set('statuses', input.statuses.join(','));
     if (input.q) qs.set('q', input.q);
@@ -400,19 +436,21 @@ export function getTaskDetails(taskId: string): Promise<TaskDetails> {
 export function createTask(input: {
   title: string;
   description?: string;
+  workspaceId?: string;
+  boardId?: string;
   projectId?: string;
   sectionId?: string;
-  boardId?: string;
   status?: TaskStatus;
 }): Promise<Task> {
+  const workspaceId = input.workspaceId ?? input.projectId ?? null;
+  const boardId = input.boardId ?? input.sectionId ?? null;
   return apiFetch('/tasks', {
     method: 'POST',
     body: JSON.stringify({
       title: input.title,
       description: input.description ?? null,
-      projectId: input.projectId ?? null,
-      sectionId: input.sectionId ?? input.boardId ?? null,
-      boardId: input.sectionId ?? input.boardId ?? null,
+      workspaceId,
+      boardId,
       status: input.status,
     }),
   });
@@ -439,7 +477,6 @@ export function reorderTasks(input: { boardId: string; orderedIds: string[] }): 
   return apiFetch('/tasks/reorder', {
     method: 'POST',
     body: JSON.stringify({
-      sectionId: input.boardId,
       boardId: input.boardId,
       orderedIds: input.orderedIds,
     }),
@@ -479,11 +516,15 @@ export function getTaskSession(taskId: string): Promise<TaskSession> {
 
 export function upsertTaskSession(
   taskId: string,
-  input: { agentId?: string | null; reasoningLevel?: string | null }
+  input: { agentId?: string | null; reasoningLevel?: string | null; executionMode?: 'single' | 'squad' | null }
 ): Promise<TaskSession> {
+  const body: Record<string, unknown> = {};
+  if (Object.prototype.hasOwnProperty.call(input, 'agentId')) body.agentId = input.agentId ?? null;
+  if (Object.prototype.hasOwnProperty.call(input, 'reasoningLevel')) body.reasoningLevel = input.reasoningLevel ?? null;
+  if (Object.prototype.hasOwnProperty.call(input, 'executionMode')) body.execution_mode = input.executionMode ?? null;
   return apiFetch(`/tasks/${encodeURIComponent(taskId)}/session`, {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify(body),
   });
 }
 
@@ -540,6 +581,7 @@ export function listRuns(
   input?: {
     status?: AgentRunStatus;
     stuckMinutes?: number;
+    workspaceId?: string;
     projectId?: string;
     limit?: number;
     before?: string;
@@ -548,17 +590,17 @@ export function listRuns(
   const qs = new URLSearchParams();
   if (input?.status) qs.set('status', input.status);
   if (input?.stuckMinutes != null) qs.set('stuckMinutes', String(input.stuckMinutes));
-  if (input?.projectId) qs.set('projectId', input.projectId);
+  if (input?.workspaceId ?? input?.projectId) qs.set('workspaceId', input?.workspaceId ?? input?.projectId ?? '');
   if (input?.limit != null) qs.set('limit', String(input.limit));
   if (input?.before) qs.set('before', input.before);
   const suf = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/runs${suf}`);
 }
 
-export function listApprovals(input?: { status?: ApprovalStatus; projectId?: string }): Promise<Approval[]> {
+export function listApprovals(input?: { status?: ApprovalStatus; workspaceId?: string; projectId?: string }): Promise<Approval[]> {
   const qs = new URLSearchParams();
   if (input?.status) qs.set('status', input.status);
-  if (input?.projectId) qs.set('projectId', input.projectId);
+  if (input?.workspaceId ?? input?.projectId) qs.set('workspaceId', input?.workspaceId ?? input?.projectId ?? '');
   const suf = qs.toString() ? `?${qs.toString()}` : '';
   return apiFetch(`/approvals${suf}`);
 }
@@ -585,6 +627,92 @@ export function requestTaskApproval(
     method: 'POST',
     body: JSON.stringify({ title: input?.title ?? null, body: input?.body ?? null, stepId: input?.stepId ?? null }),
   });
+}
+
+export function listWorkspaceMembers(workspaceId: string): Promise<WorkspaceMember[]> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/members`);
+}
+
+export function addWorkspaceMember(
+  workspaceId: string,
+  input: { username: string; role?: MemberRole }
+): Promise<WorkspaceMember> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/members`, {
+    method: 'POST',
+    body: JSON.stringify({ username: input.username, role: input.role ?? 'contributor' }),
+  });
+}
+
+export function updateWorkspaceMember(
+  workspaceId: string,
+  userId: string,
+  input: { role: MemberRole }
+): Promise<WorkspaceMember> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role: input.role }),
+  });
+}
+
+export function removeWorkspaceMember(workspaceId: string, userId: string): Promise<{ ok: boolean }> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(userId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export function listBoardMembers(workspaceId: string, boardId: string): Promise<BoardMember[]> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/boards/${encodeURIComponent(boardId)}/members`);
+}
+
+export function addBoardMember(
+  workspaceId: string,
+  boardId: string,
+  input: { username: string; role?: MemberRole }
+): Promise<BoardMember> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/boards/${encodeURIComponent(boardId)}/members`, {
+    method: 'POST',
+    body: JSON.stringify({ username: input.username, role: input.role ?? 'contributor' }),
+  });
+}
+
+export function createWorkspaceInvite(
+  workspaceId: string,
+  input: { boardId?: string | null; email?: string | null; username?: string | null; role?: MemberRole; expiresInDays?: number }
+): Promise<Invite> {
+  return apiFetch(`/workspaces/${encodeURIComponent(workspaceId)}/invites`, {
+    method: 'POST',
+    body: JSON.stringify({
+      board_id: input.boardId ?? null,
+      email: input.email ?? null,
+      username: input.username ?? null,
+      role: input.role ?? 'contributor',
+      expires_in_days: input.expiresInDays ?? 7,
+    }),
+  });
+}
+
+export function acceptInvite(token: string): Promise<{ ok: boolean; invite: Invite }> {
+  return apiFetch(`/invites/${encodeURIComponent(token)}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function listAuditEvents(input?: {
+  workspaceId?: string;
+  boardId?: string;
+  taskId?: string;
+  eventType?: string;
+  limit?: number;
+}): Promise<AuditEvent[]> {
+  const qs = new URLSearchParams();
+  if (input?.workspaceId) qs.set('workspaceId', input.workspaceId);
+  if (input?.boardId) qs.set('boardId', input.boardId);
+  if (input?.taskId) qs.set('taskId', input.taskId);
+  if (input?.eventType) qs.set('eventType', input.eventType);
+  if (input?.limit != null) qs.set('limit', String(input.limit));
+  const suf = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch(`/audit/events${suf}`);
 }
 
 // --- Automations ---
@@ -674,6 +802,39 @@ export function patchAgent(
   return apiFetch(withAgentScope(`/agents/${encodeURIComponent(id)}`, scope), {
     method: 'PATCH',
     body: JSON.stringify(patch),
+  });
+}
+
+export function updateAgentOnboarding(
+  id: string,
+  input: { onboardingState: OnboardingState; promotionBlockReason?: string | null }
+): Promise<Agent> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}/onboarding`, {
+    method: 'POST',
+    body: JSON.stringify({
+      onboarding_state: input.onboardingState,
+      promotion_block_reason: input.promotionBlockReason ?? null,
+    }),
+  });
+}
+
+export function reviewAgent(
+  id: string,
+  input: {
+    reviewScore?: number | null;
+    agentLevel?: AgentLevel;
+    reviewCycleDays?: number;
+    promotionBlockReason?: string | null;
+  }
+): Promise<Agent> {
+  return apiFetch(`/agents/${encodeURIComponent(id)}/review`, {
+    method: 'POST',
+    body: JSON.stringify({
+      review_score: input.reviewScore ?? null,
+      agent_level: input.agentLevel,
+      review_cycle_days: input.reviewCycleDays,
+      promotion_block_reason: input.promotionBlockReason,
+    }),
   });
 }
 
@@ -834,7 +995,7 @@ export function listMemoryScopes(): Promise<MemoryScopes> {
 }
 
 export function getMemoryDoc(input: {
-  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  scope: 'overview' | 'workspace' | 'board' | 'agent' | 'task';
   id?: string;
 }): Promise<MemoryDoc> {
   const qs = new URLSearchParams();
@@ -844,7 +1005,7 @@ export function getMemoryDoc(input: {
 }
 
 export function updateMemoryDoc(input: {
-  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  scope: 'overview' | 'workspace' | 'board' | 'agent' | 'task';
   id?: string;
   content: string;
   updatedBy?: string;

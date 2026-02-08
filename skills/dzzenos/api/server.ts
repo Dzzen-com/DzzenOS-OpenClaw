@@ -26,7 +26,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 type SseClient = {
@@ -148,7 +148,11 @@ type AllowedOrigins = {
 };
 
 type ReasoningLevel = 'auto' | 'off' | 'low' | 'medium' | 'high';
+type ExecutionMode = 'single' | 'squad';
 type HeartbeatMode = 'isolated' | 'main';
+type AgentLevel = 'L1' | 'L2' | 'L3' | 'L4';
+type OnboardingState = 'pending' | 'in_progress' | 'done' | 'blocked';
+type MemberRole = 'owner' | 'admin' | 'operator' | 'contributor' | 'viewer';
 type BoardAgentSubAgent = {
   key: string;
   label: string;
@@ -414,6 +418,10 @@ function pickCronNextRunAt(raw: any): string | null {
 const TASK_STATUSES = new Set(['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived']);
 const CHECKLIST_STATES = new Set(['todo', 'doing', 'done']);
 const REASONING_LEVELS = new Set<ReasoningLevel>(['auto', 'off', 'low', 'medium', 'high']);
+const EXECUTION_MODES = new Set<ExecutionMode>(['single', 'squad']);
+const AGENT_LEVELS = new Set<AgentLevel>(['L1', 'L2', 'L3', 'L4']);
+const ONBOARDING_STATES = new Set<OnboardingState>(['pending', 'in_progress', 'done', 'blocked']);
+const MEMBER_ROLES = new Set<MemberRole>(['owner', 'admin', 'operator', 'contributor', 'viewer']);
 const DEFAULT_PROJECT_STATUSES: Array<{ key: string; label: string; position: number }> = [
   { key: 'ideas', label: 'Ideas', position: 0 },
   { key: 'todo', label: 'To do', position: 1 },
@@ -436,6 +444,47 @@ const DEFAULT_PROJECT_SECTIONS: Array<{
   { name: 'Content', description: 'Content pipeline and assets', viewMode: 'threads', kind: 'section', position: 3 },
   { name: 'Ops', description: 'Operations and admin tasks', viewMode: 'kanban', kind: 'section', position: 4 },
 ];
+
+function memberRoleRank(role: string | null | undefined): number {
+  const v = normalizeString(role);
+  if (v === 'owner') return 5;
+  if (v === 'admin') return 4;
+  if (v === 'operator') return 3;
+  if (v === 'contributor') return 2;
+  if (v === 'viewer') return 1;
+  return 0;
+}
+
+function roleAtLeast(actual: string | null | undefined, minimum: MemberRole): boolean {
+  return memberRoleRank(actual) >= memberRoleRank(minimum);
+}
+
+function normalizeMemberRole(value: any, fallback: MemberRole = 'contributor'): MemberRole {
+  const v = normalizeString(value).toLowerCase();
+  if (MEMBER_ROLES.has(v as MemberRole)) return v as MemberRole;
+  return fallback;
+}
+
+function normalizeAgentLevel(value: any, fallback: AgentLevel = 'L1'): AgentLevel {
+  const v = normalizeString(value).toUpperCase();
+  if (AGENT_LEVELS.has(v as AgentLevel)) return v as AgentLevel;
+  return fallback;
+}
+
+function normalizeOnboardingState(value: any, fallback: OnboardingState = 'pending'): OnboardingState {
+  const v = normalizeString(value).toLowerCase();
+  if (ONBOARDING_STATES.has(v as OnboardingState)) return v as OnboardingState;
+  return fallback;
+}
+
+function sha256Hex(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+function createInviteToken(): { token: string; tokenHash: string } {
+  const token = randomBytes(24).toString('base64url');
+  return { token, tokenHash: sha256Hex(token) };
+}
 
 function ensureDir(dirPath: string) {
   fs.mkdirSync(dirPath, { recursive: true });
@@ -893,6 +942,12 @@ function agentRowToDto(r: any) {
     openclaw_agent_id: String(r.openclaw_agent_id ?? ''),
     enabled: Boolean(r.enabled),
     role: r.role ?? null,
+    agent_level: normalizeAgentLevel(r.agent_level, 'L1'),
+    onboarding_state: normalizeOnboardingState(r.onboarding_state, 'pending'),
+    review_score: r.review_score == null ? null : Number(r.review_score),
+    review_cycle_days: Number(r.review_cycle_days ?? 7),
+    promotion_block_reason: r.promotion_block_reason ?? null,
+    last_reviewed_at: r.last_reviewed_at ?? null,
     description: r.description ?? null,
     category: String(r.category ?? 'general'),
     tags: parseStringArrayJson(r.tags_json),
@@ -1022,13 +1077,20 @@ function main() {
   const sseClients = new Map<string, SseClient>();
 
   function sseBroadcast(event: { type: string; payload?: any }) {
-    const data = JSON.stringify({ ts: Date.now(), ...event });
-    for (const c of sseClients.values()) {
-      try {
-        c.res.write(`event: dzzenos\n`);
-        c.res.write(`data: ${data}\n\n`);
-      } catch {
-        // ignore
+    const queue: Array<{ type: string; payload?: any }> = [event];
+    if (event.type === 'projects.changed') queue.push({ type: 'workspaces.changed', payload: event.payload });
+    if (event.type === 'sections.changed') queue.push({ type: 'boards.changed', payload: event.payload });
+    if (event.type === 'workspaces.changed') queue.push({ type: 'projects.changed', payload: event.payload });
+    if (event.type === 'boards.changed') queue.push({ type: 'sections.changed', payload: event.payload });
+    for (const emitted of queue) {
+      const data = JSON.stringify({ ts: Date.now(), ...emitted });
+      for (const c of sseClients.values()) {
+        try {
+          c.res.write(`event: dzzenos\n`);
+          c.res.write(`data: ${data}\n\n`);
+        } catch {
+          // ignore
+        }
       }
     }
   }
@@ -1287,6 +1349,67 @@ function main() {
     return path.join(memoryDir, 'sections', `${sectionId}.md`);
   }
 
+  function workspaceRootPath(workspaceId: string) {
+    return path.join(workspaceDir, 'workspaces', workspaceId);
+  }
+
+  function workspaceAgentFilePath(workspaceId: string, fileName: string) {
+    return path.join(workspaceRootPath(workspaceId), fileName);
+  }
+
+  function workspaceMemoryFilePath(workspaceId: string, relPath: string) {
+    return path.join(workspaceRootPath(workspaceId), 'memory', relPath);
+  }
+
+  function workspaceBoardContextPath(workspaceId: string, boardId: string) {
+    return path.join(workspaceRootPath(workspaceId), 'boards', boardId, 'CONTEXT.md');
+  }
+
+  function workspaceBoardAccessPath(workspaceId: string, boardId: string) {
+    return path.join(workspaceRootPath(workspaceId), 'boards', boardId, 'ACCESS.md');
+  }
+
+  function withLastUpdatedHeader(content: string, updatedBy: string | null | undefined): string {
+    const actor = normalizeString(updatedBy) || 'system';
+    const ts = new Date().toISOString();
+    const header = `<!-- Last updated by: ${actor} at ${ts} -->`;
+    const stripped = content.replace(/^<!-- Last updated by:[^\n]*-->\n?/m, '').trimStart();
+    return `${header}\n${stripped}`;
+  }
+
+  function ensureWorkspaceFilesScaffold(workspaceId: string) {
+    const files: Array<{ path: string; content: string }> = [
+      { path: workspaceAgentFilePath(workspaceId, 'AGENTS.md'), content: '# AGENTS\\n\\nWorkspace operating rules.\\n' },
+      { path: workspaceAgentFilePath(workspaceId, 'SOUL.md'), content: '# SOUL\\n\\nAgent identity, style, and guardrails.\\n' },
+      { path: workspaceAgentFilePath(workspaceId, 'USER.md'), content: '# USER\\n\\nFounder and team context.\\n' },
+      { path: workspaceAgentFilePath(workspaceId, 'IDENTITY.md'), content: '# IDENTITY\\n\\nStable identity notes.\\n' },
+      { path: workspaceAgentFilePath(workspaceId, 'MEMORY.md'), content: '# MEMORY\\n\\nDurable decisions and facts.\\n' },
+      { path: workspaceMemoryFilePath(workspaceId, 'WORKING.md'), content: '# WORKING\\n\\nCurrent active focus.\\n' },
+      { path: workspaceMemoryFilePath(workspaceId, path.join('daily', `${new Date().toISOString().slice(0, 10)}.md`)), content: '# Daily Notes\\n\\n' },
+    ];
+    for (const f of files) {
+      if (!fs.existsSync(f.path)) writeTextFile(f.path, withLastUpdatedHeader(f.content, 'bootstrap'));
+    }
+  }
+
+  function ensureBoardFilesScaffold(workspaceId: string, boardId: string, boardName?: string | null) {
+    const label = normalizeString(boardName) || 'Board';
+    const contextPath = workspaceBoardContextPath(workspaceId, boardId);
+    const accessPath = workspaceBoardAccessPath(workspaceId, boardId);
+    if (!fs.existsSync(contextPath)) {
+      writeTextFile(
+        contextPath,
+        withLastUpdatedHeader(`# CONTEXT\\n\\nDefault context for **${label}** board.\\n`, 'bootstrap')
+      );
+    }
+    if (!fs.existsSync(accessPath)) {
+      writeTextFile(
+        accessPath,
+        withLastUpdatedHeader('# ACCESS\\n\\nWorkspace members can read this board unless restricted by policy.\\n', 'bootstrap')
+      );
+    }
+  }
+
   function scopeMemoryPath(scope: string, scopeId: string) {
     if (scope === 'overview') return path.join(memoryDir, 'overview.md');
     if (scope === 'project') return path.join(memoryDir, 'projects', `${scopeId}.md`);
@@ -1294,6 +1417,20 @@ function main() {
     if (scope === 'agent') return path.join(memoryDir, 'agents', `${scopeId}.md`);
     if (scope === 'task') return path.join(memoryDir, 'tasks', `${scopeId}.md`);
     return path.join(memoryDir, `${scope}-${scopeId}.md`);
+  }
+
+  function normalizeMemoryScope(scopeRaw: string): 'overview' | 'project' | 'section' | 'agent' | 'task' {
+    const scope = normalizeString(scopeRaw).toLowerCase();
+    if (scope === 'workspace') return 'project';
+    if (scope === 'board') return 'section';
+    if (scope === 'project' || scope === 'section' || scope === 'agent' || scope === 'task') return scope;
+    return 'overview';
+  }
+
+  function publicMemoryScope(scope: string): string {
+    if (scope === 'project') return 'workspace';
+    if (scope === 'section') return 'board';
+    return scope;
   }
 
   // Legacy aliases for internal compatibility.
@@ -1433,6 +1570,86 @@ function main() {
   db.exec('PRAGMA temp_store = MEMORY;');
 
   seedIfEmpty(db);
+
+  function getUserByUsername(username: string) {
+    const uname = normalizeString(username);
+    if (!uname) return null;
+    return rowOrNull<{ id: string; username: string; display_name: string | null; email: string | null; status: string }>(
+      db
+        .prepare('SELECT id, username, display_name, email, status FROM users WHERE username = ?')
+        .all(uname) as any
+    );
+  }
+
+  function ensureUserByUsername(username: string) {
+    const uname = normalizeString(username);
+    if (!uname) return null;
+    const existing = getUserByUsername(uname);
+    if (existing) return existing;
+    const id = randomUUID();
+    db.prepare(
+      'INSERT INTO users(id, username, display_name, status) VALUES (?, ?, ?, ?)'
+    ).run(id, uname, uname, 'active');
+    return getUserByUsername(uname);
+  }
+
+  function getWorkspaceMemberRole(workspaceId: string, userId: string): MemberRole | null {
+    const row = rowOrNull<{ role: string }>(
+      db
+        .prepare('SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ?')
+        .all(workspaceId, userId) as any
+    );
+    if (!row) return null;
+    return normalizeMemberRole(row.role, 'viewer');
+  }
+
+  function getBoardMemberRole(boardId: string, userId: string): MemberRole | null {
+    const boardRow = rowOrNull<{ workspace_id: string }>(
+      db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
+    );
+    if (!boardRow) return null;
+    const boardRoleRow = rowOrNull<{ role: string }>(
+      db
+        .prepare('SELECT role FROM board_members WHERE board_id = ? AND user_id = ?')
+        .all(boardId, userId) as any
+    );
+    if (boardRoleRow) return normalizeMemberRole(boardRoleRow.role, 'viewer');
+    return getWorkspaceMemberRole(boardRow.workspace_id, userId);
+  }
+
+  function bootstrapWorkspaceOwnerIfEmpty(workspaceId: string, userId: string) {
+    const count = Number(
+      rowOrNull<{ c: number }>(
+        db.prepare('SELECT COUNT(*) as c FROM workspace_members WHERE workspace_id = ?').all(workspaceId) as any
+      )?.c ?? 0
+    );
+    if (count > 0) return;
+    db.prepare(
+      'INSERT OR IGNORE INTO workspace_members(workspace_id, user_id, role) VALUES (?, ?, ?)'
+    ).run(workspaceId, userId, 'owner');
+  }
+
+  function logAudit(input: {
+    actorUserId?: string | null;
+    workspaceId?: string | null;
+    boardId?: string | null;
+    taskId?: string | null;
+    eventType: string;
+    payload?: Record<string, unknown> | null;
+  }) {
+    db.prepare(
+      `INSERT INTO audit_events(id, actor_user_id, workspace_id, board_id, task_id, event_type, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      input.actorUserId ?? null,
+      input.workspaceId ?? null,
+      input.boardId ?? null,
+      input.taskId ?? null,
+      input.eventType,
+      input.payload ? JSON.stringify(input.payload) : null
+    );
+  }
 
   const retention: RetentionConfig = {
     taskMessagesPerTask: parseNonNegativeInt(process.env.DZZENOS_RETENTION_TASK_MESSAGES_PER_TASK, 2000),
@@ -1857,12 +2074,87 @@ function main() {
 
   function memoryScopeFallback(scope: string, scopeId: string) {
     if (scope === 'overview') return readTextFile(overviewDocPath);
+    if (scope === 'project') {
+      const filePath = workspaceAgentFilePath(scopeId, 'MEMORY.md');
+      const content = readTextFile(filePath);
+      if (content.trim()) return content;
+    }
     if (scope === 'section') {
+      const workspaceId = getWorkspaceIdByBoardId(db, scopeId);
+      if (workspaceId) {
+        const boardContext = workspaceBoardContextPath(workspaceId, scopeId);
+        const content = readTextFile(boardContext);
+        if (content.trim()) return content;
+      }
       const fromDb = readTextFile(sectionMemoryPath(scopeId));
       if (fromDb.trim()) return fromDb;
       return readTextFile(sectionDocPath(scopeId));
     }
+    if (scope === 'agent') {
+      const agentRow = rowOrNull<{ workspace_id: string }>(
+        db.prepare('SELECT workspace_id FROM agents WHERE id = ?').all(scopeId) as any
+      );
+      const workspaceId = normalizeString(agentRow?.workspace_id);
+      if (workspaceId) {
+        const content = readTextFile(workspaceAgentFilePath(workspaceId, 'AGENTS.md'));
+        if (content.trim()) return content;
+      }
+    }
+    if (scope === 'task') {
+      const taskRow = rowOrNull<{ workspace_id: string; board_id: string }>(
+        db
+          .prepare(
+            `SELECT COALESCE(t.workspace_id, b.workspace_id) as workspace_id, t.board_id as board_id
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE t.id = ?`
+          )
+          .all(scopeId) as any
+      );
+      const workspaceId = normalizeString(taskRow?.workspace_id);
+      const boardId = normalizeString(taskRow?.board_id);
+      if (workspaceId && boardId) {
+        const content = readTextFile(path.join(workspaceRootPath(workspaceId), 'boards', boardId, 'tasks', `${scopeId}.md`));
+        if (content.trim()) return content;
+      }
+    }
     return readTextFile(scopeMemoryPath(scope, scopeId));
+  }
+
+  function memoryScopeFilePath(scope: string, scopeId: string): string {
+    if (scope === 'overview') return overviewDocPath;
+    if (scope === 'project') return workspaceAgentFilePath(scopeId, 'MEMORY.md');
+    if (scope === 'section') {
+      const workspaceId = getWorkspaceIdByBoardId(db, scopeId);
+      if (workspaceId) return workspaceBoardContextPath(workspaceId, scopeId);
+      return sectionMemoryPath(scopeId);
+    }
+    if (scope === 'agent') {
+      const agentRow = rowOrNull<{ workspace_id: string }>(
+        db.prepare('SELECT workspace_id FROM agents WHERE id = ?').all(scopeId) as any
+      );
+      const workspaceId = normalizeString(agentRow?.workspace_id);
+      if (workspaceId) return workspaceAgentFilePath(workspaceId, 'AGENTS.md');
+      return scopeMemoryPath(scope, scopeId);
+    }
+    if (scope === 'task') {
+      const taskRow = rowOrNull<{ workspace_id: string; board_id: string }>(
+        db
+          .prepare(
+            `SELECT COALESCE(t.workspace_id, b.workspace_id) as workspace_id, t.board_id as board_id
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE t.id = ?`
+          )
+          .all(scopeId) as any
+      );
+      const workspaceId = normalizeString(taskRow?.workspace_id);
+      const boardId = normalizeString(taskRow?.board_id);
+      if (workspaceId && boardId) {
+        return path.join(workspaceRootPath(workspaceId), 'boards', boardId, 'tasks', `${scopeId}.md`);
+      }
+    }
+    return scopeMemoryPath(scope, scopeId);
   }
 
   function getMemoryDoc(scope: string, scopeId: string) {
@@ -1878,7 +2170,7 @@ function main() {
     if (row) {
       return {
         id: String(row.id),
-        scope: String(row.scope),
+        scope: publicMemoryScope(String(row.scope)),
         scope_id: String(row.scope_id),
         content: String(row.content ?? ''),
         updated_by: row.updated_by == null ? null : String(row.updated_by),
@@ -1889,7 +2181,7 @@ function main() {
     const content = memoryScopeFallback(scope, scopeId);
     return {
       id: null,
-      scope,
+      scope: publicMemoryScope(scope),
       scope_id: scopeId,
       content,
       updated_by: null,
@@ -1908,19 +2200,27 @@ function main() {
          updated_by = excluded.updated_by`
     ).run(randomUUID(), scope, scopeId, content, updatedBy);
 
-    if (scope === 'overview') {
-      writeTextFile(overviewDocPath, content);
+    if (scope === 'project') {
+      ensureWorkspaceFilesScaffold(scopeId);
     } else if (scope === 'section') {
-      writeTextFile(sectionMemoryPath(scopeId), content);
-      writeTextFile(sectionDocPath(scopeId), content);
-    } else {
-      writeTextFile(scopeMemoryPath(scope, scopeId), content);
+      const workspaceId = getWorkspaceIdByBoardId(db, scopeId);
+      if (workspaceId) ensureBoardFilesScaffold(workspaceId, scopeId);
+    }
+    const persisted = withLastUpdatedHeader(content, updatedBy);
+    const canonicalPath = memoryScopeFilePath(scope, scopeId);
+    writeTextFile(canonicalPath, persisted);
+    if (scope === 'section') {
+      writeTextFile(sectionMemoryPath(scopeId), persisted);
+      writeTextFile(sectionDocPath(scopeId), persisted);
+    }
+    if (scope === 'project') {
+      writeTextFile(scopeMemoryPath(scope, scopeId), persisted);
     }
   }
 
   function ensureTaskSession(
     task: { id: string; board_id: string; workspace_id: string },
-    opts?: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null }
+    opts?: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null; executionMode?: ExecutionMode | null }
   ) {
     const taskId = task.id;
     const existing = rowOrNull<{
@@ -1928,9 +2228,10 @@ function main() {
       agent_id: string | null;
       session_key: string;
       reasoning_level: ReasoningLevel | null;
+      execution_mode: ExecutionMode | null;
     }>(
       db
-        .prepare('SELECT task_id, agent_id, session_key, reasoning_level FROM task_sessions WHERE task_id = ?')
+        .prepare('SELECT task_id, agent_id, session_key, reasoning_level, execution_mode FROM task_sessions WHERE task_id = ?')
         .all(taskId) as any
     );
     if (existing) {
@@ -1949,6 +2250,13 @@ function main() {
           shouldRefresh = true;
         }
       }
+      if (opts && Object.prototype.hasOwnProperty.call(opts, 'executionMode')) {
+        const nextMode = (opts.executionMode ?? 'single') as ExecutionMode;
+        if (existing.execution_mode !== nextMode) {
+          db.prepare('UPDATE task_sessions SET execution_mode = ? WHERE task_id = ?').run(nextMode, taskId);
+          shouldRefresh = true;
+        }
+      }
       const expectedSessionKey = `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
       if (existing.session_key !== expectedSessionKey) {
         db.prepare('UPDATE task_sessions SET session_key = ? WHERE task_id = ?').run(expectedSessionKey, taskId);
@@ -1962,29 +2270,33 @@ function main() {
         agent_id: string | null;
         session_key: string;
         reasoning_level: ReasoningLevel | null;
+        execution_mode: ExecutionMode | null;
       }>(
         db
-          .prepare('SELECT task_id, agent_id, session_key, reasoning_level FROM task_sessions WHERE task_id = ?')
+          .prepare('SELECT task_id, agent_id, session_key, reasoning_level, execution_mode FROM task_sessions WHERE task_id = ?')
           .all(taskId) as any
       );
     }
 
     const sessionKey = `project:${task.workspace_id}:board:${task.board_id}:task:${task.id}`;
     const reasoningLevel = opts?.reasoningLevel ?? 'auto';
-    db.prepare('INSERT INTO task_sessions(task_id, agent_id, session_key, reasoning_level) VALUES (?, ?, ?, ?)').run(
+    const executionMode = opts?.executionMode ?? 'single';
+    db.prepare('INSERT INTO task_sessions(task_id, agent_id, session_key, reasoning_level, execution_mode) VALUES (?, ?, ?, ?, ?)').run(
       taskId,
       opts?.agentId ?? null,
       sessionKey,
-      reasoningLevel
+      reasoningLevel,
+      executionMode
     );
     return rowOrNull<{
       task_id: string;
       agent_id: string | null;
       session_key: string;
       reasoning_level: ReasoningLevel | null;
+      execution_mode: ExecutionMode | null;
     }>(
       db
-        .prepare('SELECT task_id, agent_id, session_key, reasoning_level FROM task_sessions WHERE task_id = ?')
+        .prepare('SELECT task_id, agent_id, session_key, reasoning_level, execution_mode FROM task_sessions WHERE task_id = ?')
         .all(taskId) as any
     );
   }
@@ -2406,6 +2718,9 @@ function main() {
     const workspaceMeta = getWorkspaceMeta(task.workspace_id);
     const session =
       opts.agentId !== undefined ? ensureTaskSession(task, { agentId: opts.agentId }) : ensureTaskSession(task);
+    const executionMode = EXECUTION_MODES.has((session?.execution_mode ?? 'single') as ExecutionMode)
+      ? (session?.execution_mode as ExecutionMode)
+      : 'single';
     const agentRow = resolvePreferredTaskAgent({
       task,
       sessionAgentId: session?.agent_id ?? null,
@@ -2454,6 +2769,7 @@ function main() {
         preferred_agent_id: workspaceSettings.preferred_agent_id ?? null,
         auto_delegate: Boolean(workspaceSettings.auto_delegate),
       },
+      execution_mode: executionMode,
     };
 
     db.prepare('UPDATE task_sessions SET status = ? WHERE task_id = ?').run('running', task.id);
@@ -2510,7 +2826,7 @@ function main() {
       const reasoning = resolveReasoning(session?.reasoning_level ?? 'auto', task.description);
       const reasoningPrefix = reasoning ? `/think ${reasoning}` : '';
 
-      if (opts.mode === 'execute') {
+      if (opts.mode === 'execute' && executionMode === 'squad') {
         const workspaceSubAgents = parseSubAgentsJson(workspaceSettings.sub_agents_json).filter((s) => s.enabled);
         const boardSubAgents = parseSubAgentsJson(boardSettings.sub_agents_json).filter((s) => s.enabled);
         const subAgents = boardSettingsRow ? boardSubAgents : workspaceSubAgents;
@@ -2855,6 +3171,8 @@ const server = http.createServer(async (req, res) => {
     }
 
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+  let currentAuthUsername: string | null = null;
+  let currentUser: { id: string; username: string; display_name: string | null; email: string | null; status: string } | null = null;
 
   try {
     if (!requireAllowedOriginForStateChange(req, res, corsHeaders, allowedOrigins)) return;
@@ -2869,6 +3187,155 @@ const server = http.createServer(async (req, res) => {
         if (!ok) {
           return sendText(res, 401, 'unauthorized', { ...corsHeaders, 'x-auth-login': '/login' });
         }
+        currentAuthUsername = ok.username;
+      }
+    }
+    if (!currentAuthUsername) {
+      const forwardedUser = normalizeString(req.headers['x-auth-user']);
+      if (forwardedUser) currentAuthUsername = forwardedUser;
+    }
+    if (!auth && !currentAuthUsername) {
+      currentAuthUsername = normalizeString(process.env.DZZENOS_DEFAULT_USER) || 'local';
+    }
+    if (currentAuthUsername) {
+      currentUser = ensureUserByUsername(currentAuthUsername);
+    }
+
+    function requireAuthUser(): { id: string; username: string; display_name: string | null; email: string | null; status: string } | null {
+      if (!auth) return currentUser;
+      if (!currentUser) {
+        sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
+        return null;
+      }
+      return currentUser;
+    }
+
+    function requireWorkspaceRole(workspaceId: string, minRole: MemberRole): string | null {
+      const user = requireAuthUser();
+      if (!user) return null;
+      bootstrapWorkspaceOwnerIfEmpty(workspaceId, user.id);
+      const role = getWorkspaceMemberRole(workspaceId, user.id);
+      if (!role || !roleAtLeast(role, minRole)) {
+        sendJson(res, 403, { error: 'Forbidden: workspace membership required' }, corsHeaders);
+        return null;
+      }
+      return role;
+    }
+
+    function requireBoardRole(boardId: string, minRole: MemberRole): string | null {
+      const user = requireAuthUser();
+      if (!user) return null;
+      const board = rowOrNull<{ workspace_id: string }>(
+        db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
+      );
+      if (!board) {
+        sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        return null;
+      }
+      bootstrapWorkspaceOwnerIfEmpty(board.workspace_id, user.id);
+      const role = getBoardMemberRole(boardId, user.id);
+      if (!role || !roleAtLeast(role, minRole)) {
+        sendJson(res, 403, { error: 'Forbidden: board membership required' }, corsHeaders);
+        return null;
+      }
+      return role;
+    }
+
+    function getTaskAccessMeta(taskId: string) {
+      return rowOrNull<{ task_id: string; board_id: string; workspace_id: string }>(
+        db
+          .prepare(
+            `SELECT t.id as task_id, t.board_id as board_id, COALESCE(t.workspace_id, b.workspace_id) as workspace_id
+               FROM tasks t
+               JOIN boards b ON b.id = t.board_id
+              WHERE t.id = ?`
+          )
+          .all(taskId) as any
+      );
+    }
+
+    function requireTaskRole(taskId: string, minRole: MemberRole) {
+      const task = getTaskAccessMeta(taskId);
+      if (!task) {
+        sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
+        return null;
+      }
+      const role = requireBoardRole(task.board_id, minRole);
+      if (!role) return null;
+      return task;
+    }
+
+    const incomingPath = url.pathname;
+    let rewrittenFromCanonical = false;
+
+    if (incomingPath === '/workspaces-tree') {
+      url.pathname = '/navigation/projects-tree';
+      if (url.searchParams.has('workspaceId') && !url.searchParams.has('projectId')) {
+        url.searchParams.set('projectId', String(url.searchParams.get('workspaceId') ?? ''));
+      }
+      rewrittenFromCanonical = true;
+    } else if (incomingPath === '/workspaces') {
+      url.pathname = '/projects';
+      rewrittenFromCanonical = true;
+    } else if (incomingPath === '/workspaces/reorder') {
+      url.pathname = '/projects/reorder';
+      rewrittenFromCanonical = true;
+    } else {
+      const boardAgentSettingsCanonical = incomingPath.match(/^\/workspaces\/([^/]+)\/boards\/([^/]+)\/agent-settings$/);
+      if (boardAgentSettingsCanonical) {
+        url.pathname = `/boards/${boardAgentSettingsCanonical[2]}/agent-settings`;
+        rewrittenFromCanonical = true;
+      } else {
+        const boardsCollection = incomingPath.match(/^\/workspaces\/([^/]+)\/boards$/);
+        if (boardsCollection) {
+          url.pathname = `/projects/${boardsCollection[1]}/sections`;
+          rewrittenFromCanonical = true;
+        } else {
+          const boardItem = incomingPath.match(/^\/workspaces\/([^/]+)\/boards\/([^/]+)$/);
+          if (boardItem) {
+            url.pathname = `/projects/${boardItem[1]}/sections/${boardItem[2]}`;
+            rewrittenFromCanonical = true;
+          } else {
+            const statusesCollection = incomingPath.match(/^\/workspaces\/([^/]+)\/statuses$/);
+            if (statusesCollection) {
+              url.pathname = `/projects/${statusesCollection[1]}/statuses`;
+              rewrittenFromCanonical = true;
+            } else {
+              const statusItem = incomingPath.match(/^\/workspaces\/([^/]+)\/statuses\/([^/]+)$/);
+              if (statusItem) {
+                url.pathname = `/projects/${statusItem[1]}/statuses/${statusItem[2]}`;
+                rewrittenFromCanonical = true;
+              } else {
+                const workspaceItem = incomingPath.match(/^\/workspaces\/([^/]+)$/);
+                if (workspaceItem) {
+                  url.pathname = `/projects/${workspaceItem[1]}`;
+                  rewrittenFromCanonical = true;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!rewrittenFromCanonical) {
+      const isLegacyEndpoint =
+        incomingPath === '/navigation/projects-tree' ||
+        incomingPath === '/projects' ||
+        incomingPath === '/projects/reorder' ||
+        /^\/projects\/[^/]+(?:\/sections(?:\/[^/]+)?|\/statuses(?:\/[^/]+)?|$)/.test(incomingPath) ||
+        incomingPath === '/boards' ||
+        /^\/boards\/[^/]+(?:\/agent-settings)?$/.test(incomingPath);
+      if (isLegacyEndpoint) {
+        return sendJson(
+          res,
+          410,
+          {
+            error:
+              'Legacy endpoint removed. Use canonical Workspace API: /workspaces, /workspaces/:workspaceId/boards, /workspaces-tree.',
+          },
+          corsHeaders
+        );
       }
     }
 
@@ -3068,6 +3535,14 @@ const server = http.createServer(async (req, res) => {
 
         // Successful login: reset attempts for IP.
         attempts.delete(ip);
+        const loginUser = ensureUserByUsername(username);
+        if (loginUser) {
+          logAudit({
+            actorUserId: loginUser.id,
+            eventType: 'auth.login',
+            payload: { username: loginUser.username, ip },
+          });
+        }
 
         const s = signSessionCookie(auth, username);
         const sameSite =
@@ -3115,6 +3590,13 @@ const server = http.createServer(async (req, res) => {
         ];
         if (isRequestSecure(req)) cookieParts.push('Secure');
         const cookie = cookieParts.join('; ');
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            eventType: 'auth.logout',
+            payload: { username: currentUser.username },
+          });
+        }
         res.writeHead(302, { ...corsHeaders, 'set-cookie': cookie, location: '/login' });
         res.end();
         return;
@@ -3406,8 +3888,20 @@ const server = http.createServer(async (req, res) => {
           params.push(status);
         }
         if (projectId) {
+          if (!requireWorkspaceRole(projectId, 'viewer')) return;
           where.push('r.workspace_id = ?');
           params.push(projectId);
+        }
+        if (!projectId && currentUser) {
+          where.push(
+            `EXISTS (
+               SELECT 1
+                 FROM workspace_members wm
+                WHERE wm.workspace_id = r.workspace_id
+                  AND wm.user_id = ?
+             )`
+          );
+          params.push(currentUser.id);
         }
         if (before) {
           where.push('r.created_at < ?');
@@ -3471,8 +3965,20 @@ const server = http.createServer(async (req, res) => {
           params.push(status);
         }
         if (projectId) {
+          if (!requireWorkspaceRole(projectId, 'viewer')) return;
           where.push('r.workspace_id = ?');
           params.push(projectId);
+        }
+        if (!projectId && currentUser) {
+          where.push(
+            `EXISTS (
+               SELECT 1
+                 FROM workspace_members wm
+                WHERE wm.workspace_id = r.workspace_id
+                  AND wm.user_id = ?
+             )`
+          );
+          params.push(currentUser.id);
         }
 
         const approvals = db
@@ -3560,6 +4066,10 @@ const server = http.createServer(async (req, res) => {
             )
             .all(id) as any
         );
+        if (!approvalMeta?.workspace_id || !approvalMeta?.board_id) {
+          return sendJson(res, 404, { error: 'Approval context not found' }, corsHeaders);
+        }
+        if (!requireBoardRole(approvalMeta.board_id, 'operator')) return;
 
         sseBroadcast({
           type: 'approvals.changed',
@@ -3573,6 +4083,16 @@ const server = http.createServer(async (req, res) => {
             workspaceId: approvalMeta?.workspace_id ?? null,
           },
         });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: approvalMeta.workspace_id,
+            boardId: approvalMeta.board_id,
+            taskId: approvalMeta.task_id,
+            eventType: 'approval.decide',
+            payload: { approvalId: id, status: nextStatus, reason },
+          });
+        }
         if (info.changes === 0) {
           return sendJson(res, 409, { error: 'Approval already decided' }, corsHeaders);
         }
@@ -4284,6 +4804,7 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
 
         const installedRows = db
           .prepare('SELECT id, preset_key FROM agents WHERE workspace_id = ? AND preset_key IS NOT NULL')
@@ -4310,6 +4831,7 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
 
         const presetKey = decodeURIComponent(marketplaceInstallMatch[1]);
         const preset = getMarketplaceAgentPreset(presetKey);
@@ -4369,6 +4891,14 @@ const server = http.createServer(async (req, res) => {
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.marketplace.install',
+            payload: { id, preset_key: preset.preset_key },
+          });
+        }
         return sendJson(res, 201, { id }, corsHeaders);
       }
 
@@ -4378,12 +4908,14 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
 
         const rows = db
           .prepare(
             `SELECT
               a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
               a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+              a.agent_level, a.onboarding_state, a.review_score, a.review_cycle_days, a.promotion_block_reason, a.last_reviewed_at,
               a.preset_key, a.sort_order, a.created_at, a.updated_at,
               (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
               (SELECT MAX(ar.started_at)
@@ -4432,6 +4964,7 @@ const server = http.createServer(async (req, res) => {
           boardId: typeof body?.boardId === 'string' ? body.boardId : null,
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
 
         db.prepare(
           `INSERT INTO agents(
@@ -4461,6 +4994,7 @@ const server = http.createServer(async (req, res) => {
               `SELECT
                 a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+                a.agent_level, a.onboarding_state, a.review_score, a.review_cycle_days, a.promotion_block_reason, a.last_reviewed_at,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
                 (SELECT MAX(ar.started_at)
@@ -4479,6 +5013,14 @@ const server = http.createServer(async (req, res) => {
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.create',
+            payload: { id, display_name: displayName, openclaw_agent_id: openclawAgentId },
+          });
+        }
         return sendJson(res, 201, row ? agentRowToDto(row) : { id }, corsHeaders);
       }
 
@@ -4489,9 +5031,22 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
 
         const id = decodeURIComponent(agentPatchMatch[1]);
         const body = await readJson(req);
+        const updatesGovernance =
+          body?.agent_level !== undefined ||
+          body?.agentLevel !== undefined ||
+          body?.onboarding_state !== undefined ||
+          body?.onboardingState !== undefined ||
+          body?.review_score !== undefined ||
+          body?.reviewScore !== undefined ||
+          body?.review_cycle_days !== undefined ||
+          body?.reviewCycleDays !== undefined ||
+          body?.promotion_block_reason !== undefined ||
+          body?.promotionBlockReason !== undefined;
+        if (updatesGovernance && !requireWorkspaceRole(workspaceId, 'admin')) return;
 
         const updates: string[] = [];
         const params: any[] = [];
@@ -4566,6 +5121,44 @@ const server = http.createServer(async (req, res) => {
           updates.push('sort_order = ?');
           params.push(sortOrder);
         }
+        if (body?.agent_level !== undefined || body?.agentLevel !== undefined) {
+          const level = normalizeAgentLevel(body?.agent_level ?? body?.agentLevel);
+          updates.push('agent_level = ?');
+          params.push(level);
+        }
+        if (body?.onboarding_state !== undefined || body?.onboardingState !== undefined) {
+          const onboarding = normalizeOnboardingState(body?.onboarding_state ?? body?.onboardingState);
+          updates.push('onboarding_state = ?');
+          params.push(onboarding);
+        }
+        if (body?.review_score !== undefined || body?.reviewScore !== undefined) {
+          const reviewScoreRaw = body?.review_score ?? body?.reviewScore;
+          if (reviewScoreRaw === null) {
+            updates.push('review_score = NULL');
+          } else {
+            const reviewScore = Number(reviewScoreRaw);
+            if (!Number.isFinite(reviewScore)) return sendJson(res, 400, { error: 'review_score must be a number or null' }, corsHeaders);
+            updates.push('review_score = ?');
+            params.push(reviewScore);
+          }
+          updates.push("last_reviewed_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))");
+        }
+        if (body?.review_cycle_days !== undefined || body?.reviewCycleDays !== undefined) {
+          const cycleDays = Number(body?.review_cycle_days ?? body?.reviewCycleDays);
+          if (!Number.isFinite(cycleDays) || cycleDays <= 0) {
+            return sendJson(res, 400, { error: 'review_cycle_days must be a positive number' }, corsHeaders);
+          }
+          updates.push('review_cycle_days = ?');
+          params.push(Math.floor(cycleDays));
+        }
+        if (body?.promotion_block_reason !== undefined || body?.promotionBlockReason !== undefined) {
+          const reason = body?.promotion_block_reason ?? body?.promotionBlockReason;
+          if (reason !== null && typeof reason !== 'string') {
+            return sendJson(res, 400, { error: 'promotion_block_reason must be a string or null' }, corsHeaders);
+          }
+          updates.push('promotion_block_reason = ?');
+          params.push(reason === null ? null : String(reason));
+        }
 
         if (!updates.length) return sendJson(res, 400, { error: 'No valid fields to update' }, corsHeaders);
 
@@ -4579,6 +5172,7 @@ const server = http.createServer(async (req, res) => {
               `SELECT
                 a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+                a.agent_level, a.onboarding_state, a.review_score, a.review_cycle_days, a.promotion_block_reason, a.last_reviewed_at,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
                 (SELECT MAX(ar.started_at)
@@ -4598,7 +5192,115 @@ const server = http.createServer(async (req, res) => {
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.update',
+            payload: { id, patch: body ?? {} },
+          });
+        }
         return sendJson(res, 200, row ? agentRowToDto(row) : { id }, corsHeaders);
+      }
+
+      const agentOnboardingMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/onboarding$/) : null;
+      if (agentOnboardingMatch) {
+        const agentId = decodeURIComponent(agentOnboardingMatch[1]);
+        const agent = rowOrNull<{ id: string; workspace_id: string }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!requireWorkspaceRole(agent.workspace_id, 'admin')) return;
+        const body = await readJson(req);
+        const state = normalizeOnboardingState(body?.onboarding_state ?? body?.onboardingState, 'pending');
+        const reasonRaw = body?.promotion_block_reason ?? body?.promotionBlockReason;
+        if (reasonRaw !== undefined && reasonRaw !== null && typeof reasonRaw !== 'string') {
+          return sendJson(res, 400, { error: 'promotion_block_reason must be a string or null' }, corsHeaders);
+        }
+        const reason = reasonRaw === undefined ? undefined : reasonRaw === null ? null : String(reasonRaw);
+        if (reason === undefined) {
+          db.prepare('UPDATE agents SET onboarding_state = ? WHERE id = ?').run(state, agentId);
+        } else {
+          db.prepare('UPDATE agents SET onboarding_state = ?, promotion_block_reason = ? WHERE id = ?').run(state, reason, agentId);
+        }
+        const row = rowOrNull<any>(db.prepare('SELECT * FROM agents WHERE id = ?').all(agentId) as any);
+        sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: agent.workspace_id,
+            eventType: 'agent.onboarding.update',
+            payload: { agentId, onboarding_state: state, promotion_block_reason: reason ?? null },
+          });
+        }
+        return sendJson(res, 200, row ? agentRowToDto(row) : { id: agentId }, corsHeaders);
+      }
+
+      const agentReviewMatch = req.method === 'POST' ? url.pathname.match(/^\/agents\/([^/]+)\/review$/) : null;
+      if (agentReviewMatch) {
+        const agentId = decodeURIComponent(agentReviewMatch[1]);
+        const agent = rowOrNull<{ id: string; workspace_id: string }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
+        if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!requireWorkspaceRole(agent.workspace_id, 'admin')) return;
+        const body = await readJson(req);
+        const scoreRaw = body?.review_score ?? body?.score ?? body?.reviewScore;
+        if (scoreRaw !== undefined && scoreRaw !== null && !Number.isFinite(Number(scoreRaw))) {
+          return sendJson(res, 400, { error: 'review_score must be a number or null' }, corsHeaders);
+        }
+        const levelRaw = body?.agent_level ?? body?.agentLevel;
+        const cycleRaw = body?.review_cycle_days ?? body?.reviewCycleDays;
+        const reasonRaw = body?.promotion_block_reason ?? body?.promotionBlockReason;
+        if (reasonRaw !== undefined && reasonRaw !== null && typeof reasonRaw !== 'string') {
+          return sendJson(res, 400, { error: 'promotion_block_reason must be a string or null' }, corsHeaders);
+        }
+        const updates: string[] = [];
+        const params: any[] = [];
+        if (scoreRaw === null) updates.push('review_score = NULL');
+        if (scoreRaw !== undefined && scoreRaw !== null) {
+          updates.push('review_score = ?');
+          params.push(Number(scoreRaw));
+        }
+        if (levelRaw !== undefined) {
+          updates.push('agent_level = ?');
+          params.push(normalizeAgentLevel(levelRaw, 'L1'));
+        }
+        if (cycleRaw !== undefined) {
+          const cycleDays = Number(cycleRaw);
+          if (!Number.isFinite(cycleDays) || cycleDays <= 0) {
+            return sendJson(res, 400, { error: 'review_cycle_days must be a positive number' }, corsHeaders);
+          }
+          updates.push('review_cycle_days = ?');
+          params.push(Math.floor(cycleDays));
+        }
+        if (reasonRaw !== undefined) {
+          updates.push('promotion_block_reason = ?');
+          params.push(reasonRaw === null ? null : String(reasonRaw));
+        }
+        updates.push("last_reviewed_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))");
+        if (updates.length === 1) {
+          return sendJson(res, 400, { error: 'At least one review field is required' }, corsHeaders);
+        }
+        params.push(agentId);
+        db.prepare(`UPDATE agents SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+        const row = rowOrNull<any>(db.prepare('SELECT * FROM agents WHERE id = ?').all(agentId) as any);
+        sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: agent.workspace_id,
+            eventType: 'agent.review',
+            payload: {
+              agentId,
+              review_score: scoreRaw ?? null,
+              agent_level: levelRaw ?? null,
+              review_cycle_days: cycleRaw ?? null,
+              promotion_block_reason: reasonRaw ?? null,
+            },
+          });
+        }
+        return sendJson(res, 200, row ? agentRowToDto(row) : { id: agentId }, corsHeaders);
       }
 
       const listSubagentsMatch = req.method === 'GET'
@@ -4606,8 +5308,11 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (listSubagentsMatch) {
         const agentId = decodeURIComponent(listSubagentsMatch[1]);
-        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        const agent = rowOrNull<{ id: string; workspace_id: string }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
         if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!requireWorkspaceRole(agent.workspace_id, 'viewer')) return;
         return sendJson(res, 200, getAgentSubagents(agentId), corsHeaders);
       }
 
@@ -4616,8 +5321,11 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (replaceSubagentsMatch) {
         const agentId = decodeURIComponent(replaceSubagentsMatch[1]);
-        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        const agent = rowOrNull<{ id: string; workspace_id: string }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
         if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!requireWorkspaceRole(agent.workspace_id, 'operator')) return;
         const body = await readJson(req);
         const items = Array.isArray(body) ? body : Array.isArray(body?.items) ? body.items : null;
         if (!items) return sendJson(res, 400, { error: 'Expected array payload' }, corsHeaders);
@@ -4651,6 +5359,14 @@ const server = http.createServer(async (req, res) => {
           throw err;
         }
         sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: agent.workspace_id,
+            eventType: 'agent.subagents.replace',
+            payload: { agentId, count: items.length },
+          });
+        }
         return sendJson(res, 200, { ok: true, items: getAgentSubagents(agentId) }, corsHeaders);
       }
 
@@ -4659,8 +5375,11 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (patchOrchestrationMatch) {
         const agentId = decodeURIComponent(patchOrchestrationMatch[1]);
-        const agent = rowOrNull<{ id: string }>(db.prepare('SELECT id FROM agents WHERE id = ?').all(agentId) as any);
+        const agent = rowOrNull<{ id: string; workspace_id: string }>(
+          db.prepare('SELECT id, workspace_id FROM agents WHERE id = ?').all(agentId) as any
+        );
         if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!requireWorkspaceRole(agent.workspace_id, 'operator')) return;
         const body = await readJson(req);
         const mode = normalizeString(body?.mode || 'openclaw') || 'openclaw';
         if (mode !== 'openclaw') return sendJson(res, 400, { error: 'mode must be openclaw' }, corsHeaders);
@@ -4679,6 +5398,14 @@ const server = http.createServer(async (req, res) => {
         ).run(agentId, mode, JSON.stringify(delegationBudget), JSON.stringify(escalationRules));
 
         sseBroadcast({ type: 'agents.changed', payload: { agentId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: agent.workspace_id,
+            eventType: 'agent.orchestration.update',
+            payload: { agentId, mode },
+          });
+        }
         return sendJson(res, 200, getOrchestrationPolicy(agentId), corsHeaders);
       }
 
@@ -4687,12 +5414,13 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (orchestrationPreviewMatch) {
         const agentId = decodeURIComponent(orchestrationPreviewMatch[1]);
-        const agent = rowOrNull<{ id: string; display_name: string; openclaw_agent_id: string }>(
+        const agent = rowOrNull<{ id: string; workspace_id: string; display_name: string; openclaw_agent_id: string }>(
           db
-            .prepare('SELECT id, display_name, openclaw_agent_id FROM agents WHERE id = ?')
+            .prepare('SELECT id, workspace_id, display_name, openclaw_agent_id FROM agents WHERE id = ?')
             .all(agentId) as any
         );
         if (!agent) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+        if (!requireWorkspaceRole(agent.workspace_id, 'viewer')) return;
         const subagents = getAgentSubagents(agentId);
         const policy = getOrchestrationPolicy(agentId);
         const preview = [
@@ -4717,6 +5445,7 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
 
         const id = decodeURIComponent(agentResetMatch[1]);
         const row = rowOrNull<{ preset_key: string | null; preset_defaults_json: string | null }>(
@@ -4775,6 +5504,7 @@ const server = http.createServer(async (req, res) => {
               `SELECT
                 a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
                 a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+                a.agent_level, a.onboarding_state, a.review_score, a.review_cycle_days, a.promotion_block_reason, a.last_reviewed_at,
                 a.preset_key, a.sort_order, a.created_at, a.updated_at,
                 (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
                 (SELECT MAX(ar.started_at)
@@ -4794,6 +5524,14 @@ const server = http.createServer(async (req, res) => {
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.reset',
+            payload: { id },
+          });
+        }
         return sendJson(res, 200, updated ? agentRowToDto(updated) : { id }, corsHeaders);
       }
 
@@ -4804,6 +5542,7 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
 
         const id = decodeURIComponent(agentDuplicateMatch[1]);
         const src = rowOrNull<any>(
@@ -4846,6 +5585,14 @@ const server = http.createServer(async (req, res) => {
         );
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.duplicate',
+            payload: { source_id: id, id: newId },
+          });
+        }
         return sendJson(res, 201, { id: newId }, corsHeaders);
       }
 
@@ -4856,6 +5603,7 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'admin')) return;
 
         const id = decodeURIComponent(deleteAgentMatch[1]);
         const row = rowOrNull<{ preset_key: string | null }>(
@@ -4869,6 +5617,14 @@ const server = http.createServer(async (req, res) => {
         const info = db.prepare('DELETE FROM agents WHERE id = ? AND workspace_id = ?').run(id, workspaceId);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.delete',
+            payload: { id },
+          });
+        }
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -4881,6 +5637,7 @@ const server = http.createServer(async (req, res) => {
           boardId: url.searchParams.get('boardId'),
         });
         if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
 
         const upsert = db.prepare(
           `INSERT INTO agents(id, workspace_id, display_name, emoji, openclaw_agent_id, enabled, role)
@@ -4920,6 +5677,7 @@ const server = http.createServer(async (req, res) => {
             `SELECT
               a.id, a.workspace_id, a.display_name, a.emoji, a.openclaw_agent_id, a.enabled, a.role,
               a.description, a.category, a.tags_json, a.skills_json, a.prompt_overrides_json,
+              a.agent_level, a.onboarding_state, a.review_score, a.review_cycle_days, a.promotion_block_reason, a.last_reviewed_at,
               a.preset_key, a.sort_order, a.created_at, a.updated_at,
               (SELECT COUNT(*) FROM task_sessions ts WHERE ts.agent_id = a.id) as assigned_task_count,
               (SELECT MAX(ar.started_at)
@@ -4938,15 +5696,25 @@ const server = http.createServer(async (req, res) => {
           .all(workspaceId) as any[];
 
         sseBroadcast({ type: 'agents.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'agent.bulk.upsert',
+            payload: { count: body.length },
+          });
+        }
         return sendJson(res, 200, rows.map(agentRowToDto), corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/docs/overview') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
         const doc = getMemoryDoc('overview', '');
         return sendJson(res, 200, { content: doc.content }, corsHeaders);
       }
 
       if (req.method === 'PUT' && url.pathname === '/docs/overview') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
         upsertMemoryDoc('overview', '', content, 'docs-overview');
@@ -4958,6 +5726,7 @@ const server = http.createServer(async (req, res) => {
       const sectionDocsGet = req.method === 'GET' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
       if (sectionDocsGet) {
         const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsGet[1]), 'sectionId');
+        if (!requireBoardRole(sectionId, 'viewer')) return;
         const doc = getMemoryDoc('section', sectionId);
         return sendJson(res, 200, { content: doc.content }, corsHeaders);
       }
@@ -4965,6 +5734,7 @@ const server = http.createServer(async (req, res) => {
       const sectionDocsPut = req.method === 'PUT' ? url.pathname.match(/^\/docs\/(?:sections|boards)\/([^/]+)$/) : null;
       if (sectionDocsPut) {
         const sectionId = requireUuid(safeDecodeURIComponent(sectionDocsPut[1]), 'sectionId');
+        if (!requireBoardRole(sectionId, 'contributor')) return;
         const body = await readJson(req);
         const content = typeof body?.content === 'string' ? body.content : '';
         upsertMemoryDoc('section', sectionId, content, 'docs-section');
@@ -4978,6 +5748,7 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (sectionChangelogGet) {
         const sectionId = requireUuid(safeDecodeURIComponent(sectionChangelogGet[1]), 'sectionId');
+        if (!requireBoardRole(sectionId, 'viewer')) return;
         return sendJson(res, 200, { content: readTextFile(sectionChangelogPath(sectionId)) }, corsHeaders);
       }
 
@@ -4986,6 +5757,7 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (sectionSummaryPost) {
         const sectionId = requireUuid(safeDecodeURIComponent(sectionSummaryPost[1]), 'sectionId');
+        if (!requireBoardRole(sectionId, 'operator')) return;
         const body = await readJson(req);
         const title = typeof body?.title === 'string' ? body.title.trim() : 'Untitled';
         const summary = typeof body?.summary === 'string' ? body.summary.trim() : '';
@@ -4998,7 +5770,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/memory/scopes') {
-        const projects = db
+        let projects = db
           .prepare(
             `SELECT
                id,
@@ -5012,59 +5784,125 @@ const server = http.createServer(async (req, res) => {
              FROM workspaces
              ORDER BY COALESCE(is_archived, 0) ASC, position ASC, created_at ASC`
           )
-          .all();
-        const sections = db
+          .all() as any[];
+        let sections = db
           .prepare(
             `SELECT id, workspace_id as project_id, name, description, position, section_kind, view_mode, created_at, updated_at
                FROM boards
               ORDER BY workspace_id ASC, position ASC, created_at ASC`
           )
-          .all();
-        const agents = db
+          .all() as any[];
+        let agents = db
           .prepare(
             `SELECT id, display_name, openclaw_agent_id, enabled, category, created_at, updated_at
                FROM agents
               ORDER BY enabled DESC, sort_order ASC, display_name ASC`
           )
-          .all();
-        const tasks = db
+          .all() as any[];
+        let tasks = db
           .prepare(
             `SELECT id, board_id as section_id, workspace_id as project_id, title, status, created_at, updated_at
                FROM tasks
               ORDER BY updated_at DESC
               LIMIT 500`
           )
-          .all();
-        return sendJson(res, 200, { projects, sections, agents, tasks }, corsHeaders);
+          .all() as any[];
+        if (currentUser) {
+          const allowed = new Set<string>(
+            (db
+              .prepare('SELECT workspace_id FROM workspace_members WHERE user_id = ?')
+              .all(currentUser.id) as any[]).map((r) => String((r as any).workspace_id))
+          );
+          projects = projects.filter((p) => allowed.has(String((p as any).id)));
+          sections = sections.filter((s) => allowed.has(String((s as any).project_id)));
+          agents = agents.filter((a) => allowed.has(String((a as any).workspace_id ?? '')));
+          tasks = tasks.filter((t) => allowed.has(String((t as any).project_id)));
+        }
+        return sendJson(
+          res,
+          200,
+          { projects, sections, workspaces: projects, boards: sections, agents, tasks },
+          corsHeaders
+        );
       }
 
       if (req.method === 'GET' && url.pathname === '/memory/docs') {
-        const scope = normalizeString(url.searchParams.get('scope'));
-        if (!new Set(['overview', 'project', 'section', 'agent', 'task']).has(scope)) {
-          return sendJson(res, 400, { error: 'scope must be one of overview|project|section|agent|task' }, corsHeaders);
+        const rawScope = normalizeString(url.searchParams.get('scope')).toLowerCase();
+        if (!new Set(['overview', 'project', 'section', 'workspace', 'board', 'agent', 'task']).has(rawScope)) {
+          return sendJson(res, 400, { error: 'scope must be one of overview|workspace|board|agent|task' }, corsHeaders);
         }
+        const scope = normalizeMemoryScope(rawScope);
         const scopeId = scope === 'overview' ? '' : normalizeString(url.searchParams.get('id'));
         if (scope !== 'overview' && !scopeId) return sendJson(res, 400, { error: 'id is required for this scope' }, corsHeaders);
+        if (scope === 'project' && !requireWorkspaceRole(scopeId, 'viewer')) return;
+        if (scope === 'section' && !requireBoardRole(scopeId, 'viewer')) return;
+        if (scope === 'task' && !requireTaskRole(scopeId, 'viewer')) return;
+        if (scope === 'agent') {
+          const agentRow = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM agents WHERE id = ?').all(scopeId) as any
+          );
+          const workspaceId = normalizeString(agentRow?.workspace_id);
+          if (!workspaceId) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+          if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
+        }
         return sendJson(res, 200, getMemoryDoc(scope, scopeId), corsHeaders);
       }
 
       if (req.method === 'PUT' && url.pathname === '/memory/docs') {
         const body = await readJson(req);
-        const scope = normalizeString(body?.scope ?? url.searchParams.get('scope'));
-        if (!new Set(['overview', 'project', 'section', 'agent', 'task']).has(scope)) {
-          return sendJson(res, 400, { error: 'scope must be one of overview|project|section|agent|task' }, corsHeaders);
+        const rawScope = normalizeString(body?.scope ?? url.searchParams.get('scope')).toLowerCase();
+        if (!new Set(['overview', 'project', 'section', 'workspace', 'board', 'agent', 'task']).has(rawScope)) {
+          return sendJson(res, 400, { error: 'scope must be one of overview|workspace|board|agent|task' }, corsHeaders);
         }
+        const scope = normalizeMemoryScope(rawScope);
         const scopeId =
           scope === 'overview'
             ? ''
             : normalizeString(body?.id ?? body?.scopeId ?? url.searchParams.get('id'));
         if (scope !== 'overview' && !scopeId) return sendJson(res, 400, { error: 'id is required for this scope' }, corsHeaders);
+        let resolvedWorkspaceId: string | null = null;
+        let resolvedBoardId: string | null = null;
+        if (scope === 'project') {
+          if (!requireWorkspaceRole(scopeId, 'contributor')) return;
+          resolvedWorkspaceId = scopeId;
+        }
+        if (scope === 'section') {
+          if (!requireBoardRole(scopeId, 'contributor')) return;
+          const boardRow = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(scopeId) as any);
+          resolvedBoardId = scopeId;
+          resolvedWorkspaceId = boardRow?.workspace_id ?? null;
+        }
+        if (scope === 'task') {
+          const taskMeta = requireTaskRole(scopeId, 'contributor');
+          if (!taskMeta) return;
+          resolvedBoardId = taskMeta.board_id;
+          resolvedWorkspaceId = taskMeta.workspace_id;
+        }
+        if (scope === 'agent') {
+          const agentRow = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM agents WHERE id = ?').all(scopeId) as any
+          );
+          const workspaceId = normalizeString(agentRow?.workspace_id);
+          if (!workspaceId) return sendJson(res, 404, { error: 'Agent not found' }, corsHeaders);
+          if (!requireWorkspaceRole(workspaceId, 'contributor')) return;
+          resolvedWorkspaceId = workspaceId;
+        }
         const content = typeof body?.content === 'string' ? body.content : '';
         const updatedBy = normalizeString(body?.updatedBy) || 'ui';
         upsertMemoryDoc(scope, scopeId, content, updatedBy);
         sseBroadcast({ type: 'memory.changed', payload: { scope, scopeId } });
         if (scope === 'overview') sseBroadcast({ type: 'docs.changed', payload: { scope: 'overview' } });
         if (scope === 'section') sseBroadcast({ type: 'docs.changed', payload: { sectionId: scopeId, boardId: scopeId } });
+        if (currentUser && scope !== 'overview') {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: resolvedWorkspaceId,
+            boardId: resolvedBoardId,
+            taskId: scope === 'task' ? scopeId : null,
+            eventType: 'memory.doc.update',
+            payload: { scope: publicMemoryScope(scope), scopeId },
+          });
+        }
         return sendJson(res, 200, { ok: true, doc: getMemoryDoc(scope, scopeId) }, corsHeaders);
       }
 
@@ -5193,13 +6031,453 @@ const server = http.createServer(async (req, res) => {
         );
       }
 
+      const workspaceMembersGetMatch = req.method === 'GET' ? url.pathname.match(/^\/workspaces\/([^/]+)\/members$/) : null;
+      if (workspaceMembersGetMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceMembersGetMatch[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
+        const rows = db
+          .prepare(
+            `SELECT
+               wm.workspace_id,
+               wm.user_id,
+               wm.role,
+               wm.created_at,
+               wm.updated_at,
+               u.username,
+               u.display_name,
+               u.email,
+               u.status
+             FROM workspace_members wm
+             JOIN users u ON u.id = wm.user_id
+             WHERE wm.workspace_id = ?
+             ORDER BY CASE wm.role
+               WHEN 'owner' THEN 1
+               WHEN 'admin' THEN 2
+               WHEN 'operator' THEN 3
+               WHEN 'contributor' THEN 4
+               ELSE 5
+             END, u.username ASC`
+          )
+          .all(workspaceId) as any[];
+        return sendJson(res, 200, rows, corsHeaders);
+      }
+
+      const workspaceMembersPostMatch = req.method === 'POST' ? url.pathname.match(/^\/workspaces\/([^/]+)\/members$/) : null;
+      if (workspaceMembersPostMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceMembersPostMatch[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'admin')) return;
+        const actor = requireAuthUser();
+        if (!actor) return;
+        const body = await readJson(req);
+        const username = normalizeString(body?.username);
+        if (!username) return sendJson(res, 400, { error: 'username is required' }, corsHeaders);
+        const role = normalizeMemberRole(body?.role, 'contributor');
+        const target = ensureUserByUsername(username);
+        if (!target) return sendJson(res, 400, { error: 'Failed to resolve user' }, corsHeaders);
+        db.prepare(
+          `INSERT INTO workspace_members(workspace_id, user_id, role, invited_by_user_id)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(workspace_id, user_id) DO UPDATE SET
+             role = excluded.role,
+             invited_by_user_id = excluded.invited_by_user_id`
+        ).run(workspaceId, target.id, role, actor.id);
+        logAudit({
+          actorUserId: actor.id,
+          workspaceId,
+          eventType: 'workspace.member.upsert',
+          payload: { user_id: target.id, username: target.username, role },
+        });
+        sseBroadcast({ type: 'workspaces.members.changed', payload: { workspaceId } });
+        return sendJson(
+          res,
+          201,
+          {
+            workspace_id: workspaceId,
+            user_id: target.id,
+            username: target.username,
+            role,
+          },
+          corsHeaders
+        );
+      }
+
+      const workspaceMemberPatchMatch = req.method === 'PATCH'
+        ? url.pathname.match(/^\/workspaces\/([^/]+)\/members\/([^/]+)$/)
+        : null;
+      if (workspaceMemberPatchMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceMemberPatchMatch[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'admin')) return;
+        const actor = requireAuthUser();
+        if (!actor) return;
+        const userId = requireUuid(safeDecodeURIComponent(workspaceMemberPatchMatch[2]), 'userId');
+        const body = await readJson(req);
+        const role = normalizeMemberRole(body?.role, 'contributor');
+        const info = db.prepare(
+          `UPDATE workspace_members SET role = ? WHERE workspace_id = ? AND user_id = ?`
+        ).run(role, workspaceId, userId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Workspace member not found' }, corsHeaders);
+        logAudit({
+          actorUserId: actor.id,
+          workspaceId,
+          eventType: 'workspace.member.role',
+          payload: { user_id: userId, role },
+        });
+        sseBroadcast({ type: 'workspaces.members.changed', payload: { workspaceId } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const workspaceMemberDeleteMatch = req.method === 'DELETE'
+        ? url.pathname.match(/^\/workspaces\/([^/]+)\/members\/([^/]+)$/)
+        : null;
+      if (workspaceMemberDeleteMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceMemberDeleteMatch[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'admin')) return;
+        const actor = requireAuthUser();
+        if (!actor) return;
+        const userId = requireUuid(safeDecodeURIComponent(workspaceMemberDeleteMatch[2]), 'userId');
+        const info = db.prepare('DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?').run(workspaceId, userId);
+        if (info.changes === 0) return sendJson(res, 404, { error: 'Workspace member not found' }, corsHeaders);
+        db.prepare('DELETE FROM board_members WHERE user_id = ? AND board_id IN (SELECT id FROM boards WHERE workspace_id = ?)').run(userId, workspaceId);
+        logAudit({
+          actorUserId: actor.id,
+          workspaceId,
+          eventType: 'workspace.member.remove',
+          payload: { user_id: userId },
+        });
+        sseBroadcast({ type: 'workspaces.members.changed', payload: { workspaceId } });
+        return sendJson(res, 200, { ok: true }, corsHeaders);
+      }
+
+      const boardMembersGetMatch = req.method === 'GET'
+        ? url.pathname.match(/^\/workspaces\/([^/]+)\/boards\/([^/]+)\/members$/)
+        : null;
+      if (boardMembersGetMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(boardMembersGetMatch[1]), 'workspaceId');
+        const boardId = requireUuid(safeDecodeURIComponent(boardMembersGetMatch[2]), 'boardId');
+        if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
+        const board = rowOrNull<{ id: string }>(
+          db.prepare('SELECT id FROM boards WHERE id = ? AND workspace_id = ?').all(boardId, workspaceId) as any
+        );
+        if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        const rows = db
+          .prepare(
+            `SELECT
+               bm.board_id,
+               bm.user_id,
+               bm.role,
+               bm.created_at,
+               bm.updated_at,
+               u.username,
+               u.display_name,
+               u.email,
+               u.status
+             FROM board_members bm
+             JOIN users u ON u.id = bm.user_id
+             WHERE bm.board_id = ?
+             ORDER BY CASE bm.role
+               WHEN 'owner' THEN 1
+               WHEN 'admin' THEN 2
+               WHEN 'operator' THEN 3
+               WHEN 'contributor' THEN 4
+               ELSE 5
+             END, u.username ASC`
+          )
+          .all(boardId) as any[];
+        return sendJson(res, 200, rows, corsHeaders);
+      }
+
+      const boardMembersPostMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/workspaces\/([^/]+)\/boards\/([^/]+)\/members$/)
+        : null;
+      if (boardMembersPostMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(boardMembersPostMatch[1]), 'workspaceId');
+        const boardId = requireUuid(safeDecodeURIComponent(boardMembersPostMatch[2]), 'boardId');
+        if (!requireWorkspaceRole(workspaceId, 'admin')) return;
+        const actor = requireAuthUser();
+        if (!actor) return;
+        const board = rowOrNull<{ id: string }>(
+          db.prepare('SELECT id FROM boards WHERE id = ? AND workspace_id = ?').all(boardId, workspaceId) as any
+        );
+        if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        const body = await readJson(req);
+        const username = normalizeString(body?.username);
+        if (!username) return sendJson(res, 400, { error: 'username is required' }, corsHeaders);
+        const role = normalizeMemberRole(body?.role, 'contributor');
+        const target = ensureUserByUsername(username);
+        if (!target) return sendJson(res, 400, { error: 'Failed to resolve user' }, corsHeaders);
+        if (!getWorkspaceMemberRole(workspaceId, target.id)) {
+          db.prepare(
+            `INSERT OR IGNORE INTO workspace_members(workspace_id, user_id, role, invited_by_user_id) VALUES (?, ?, ?, ?)`
+          ).run(workspaceId, target.id, 'contributor', actor.id);
+        }
+        db.prepare(
+          `INSERT INTO board_members(board_id, user_id, role, invited_by_user_id)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(board_id, user_id) DO UPDATE SET
+             role = excluded.role,
+             invited_by_user_id = excluded.invited_by_user_id`
+        ).run(boardId, target.id, role, actor.id);
+        logAudit({
+          actorUserId: actor.id,
+          workspaceId,
+          boardId,
+          eventType: 'board.member.upsert',
+          payload: { user_id: target.id, username: target.username, role },
+        });
+        sseBroadcast({ type: 'boards.members.changed', payload: { workspaceId, boardId } });
+        return sendJson(res, 201, { board_id: boardId, user_id: target.id, role }, corsHeaders);
+      }
+
+      const workspaceInvitesPostMatch = req.method === 'POST'
+        ? url.pathname.match(/^\/workspaces\/([^/]+)\/invites$/)
+        : null;
+      if (workspaceInvitesPostMatch) {
+        const workspaceId = requireUuid(safeDecodeURIComponent(workspaceInvitesPostMatch[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'admin')) return;
+        const actor = requireAuthUser();
+        if (!actor) return;
+        const body = await readJson(req);
+        const role = normalizeMemberRole(body?.role, 'contributor');
+        const username = normalizeString(body?.username) || null;
+        const email = normalizeString(body?.email) || null;
+        const boardId = normalizeString(body?.boardId) || null;
+        if (!username && !email) {
+          return sendJson(res, 400, { error: 'username or email is required' }, corsHeaders);
+        }
+        if (boardId) {
+          const board = rowOrNull<{ id: string }>(
+            db.prepare('SELECT id FROM boards WHERE id = ? AND workspace_id = ?').all(boardId, workspaceId) as any
+          );
+          if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        }
+        const { token, tokenHash } = createInviteToken();
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        const inviteId = randomUUID();
+        db.prepare(
+          `INSERT INTO invites(
+             id, workspace_id, board_id, email, username, role, token_hash, status, expires_at, created_by_user_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`
+        ).run(inviteId, workspaceId, boardId, email, username, role, tokenHash, expiresAt, actor.id);
+        logAudit({
+          actorUserId: actor.id,
+          workspaceId,
+          boardId,
+          eventType: 'invite.create',
+          payload: { invite_id: inviteId, role, username, email },
+        });
+        return sendJson(
+          res,
+          201,
+          {
+            id: inviteId,
+            workspace_id: workspaceId,
+            board_id: boardId,
+            role,
+            username,
+            email,
+            status: 'pending',
+            expires_at: expiresAt,
+            token,
+            invite_url: `/invites/${encodeURIComponent(token)}/accept`,
+          },
+          corsHeaders
+        );
+      }
+
+      const inviteAcceptMatch = req.method === 'POST' ? url.pathname.match(/^\/invites\/([^/]+)\/accept$/) : null;
+      if (inviteAcceptMatch) {
+        const token = safeDecodeURIComponent(inviteAcceptMatch[1]);
+        const tokenHash = sha256Hex(token);
+        const invite = rowOrNull<{
+          id: string;
+          workspace_id: string;
+          board_id: string | null;
+          username: string | null;
+          role: string;
+          status: string;
+          expires_at: string | null;
+        }>(
+          db
+            .prepare(
+              `SELECT id, workspace_id, board_id, username, role, status, expires_at
+                 FROM invites
+                WHERE token_hash = ?`
+            )
+            .all(tokenHash) as any
+        );
+        if (!invite) return sendJson(res, 404, { error: 'Invite not found' }, corsHeaders);
+        if (invite.status !== 'pending') return sendJson(res, 400, { error: 'Invite is not pending' }, corsHeaders);
+        if (invite.expires_at && Date.parse(invite.expires_at) < Date.now()) {
+          db.prepare('UPDATE invites SET status = ? WHERE id = ?').run('expired', invite.id);
+          return sendJson(res, 400, { error: 'Invite expired' }, corsHeaders);
+        }
+        const body = await readJson(req);
+        const usernameFromBody = normalizeString(body?.username);
+        const user = currentUser ?? ensureUserByUsername(invite.username ?? usernameFromBody);
+        if (!user) return sendJson(res, 400, { error: 'User context required to accept invite' }, corsHeaders);
+        if (invite.username && user.username.toLowerCase() !== invite.username.toLowerCase()) {
+          return sendJson(res, 403, { error: 'Invite username mismatch' }, corsHeaders);
+        }
+        const role = normalizeMemberRole(invite.role, 'contributor');
+        db.exec('BEGIN');
+        try {
+          db.prepare(
+            `INSERT INTO workspace_members(workspace_id, user_id, role)
+             VALUES (?, ?, ?)
+             ON CONFLICT(workspace_id, user_id) DO UPDATE SET role = excluded.role`
+          ).run(invite.workspace_id, user.id, role);
+          if (invite.board_id) {
+            db.prepare(
+              `INSERT INTO board_members(board_id, user_id, role)
+               VALUES (?, ?, ?)
+               ON CONFLICT(board_id, user_id) DO UPDATE SET role = excluded.role`
+            ).run(invite.board_id, user.id, role);
+          }
+          db.prepare(
+            `UPDATE invites
+                SET status = 'accepted',
+                    accepted_by_user_id = ?,
+                    accepted_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+              WHERE id = ?`
+          ).run(user.id, invite.id);
+          db.exec('COMMIT');
+        } catch (e) {
+          db.exec('ROLLBACK');
+          throw e;
+        }
+        logAudit({
+          actorUserId: user.id,
+          workspaceId: invite.workspace_id,
+          boardId: invite.board_id,
+          eventType: 'invite.accept',
+          payload: { invite_id: invite.id, role },
+        });
+        sseBroadcast({ type: 'workspaces.members.changed', payload: { workspaceId: invite.workspace_id } });
+        if (invite.board_id) {
+          sseBroadcast({
+            type: 'boards.members.changed',
+            payload: { workspaceId: invite.workspace_id, boardId: invite.board_id },
+          });
+        }
+        return sendJson(res, 200, { ok: true, workspace_id: invite.workspace_id, board_id: invite.board_id }, corsHeaders);
+      }
+
+      if (req.method === 'GET' && url.pathname === '/audit/events') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
+        const workspaceId = normalizeString(url.searchParams.get('workspaceId'));
+        const boardId = normalizeString(url.searchParams.get('boardId'));
+        const limit = parsePageLimit(url.searchParams.get('limit'), 200, 1000);
+        if (workspaceId && !requireWorkspaceRole(workspaceId, 'viewer')) return;
+        if (boardId && !requireBoardRole(boardId, 'viewer')) return;
+
+        const where: string[] = [];
+        const params: any[] = [];
+        if (workspaceId) {
+          where.push('workspace_id = ?');
+          params.push(workspaceId);
+        }
+        if (boardId) {
+          where.push('board_id = ?');
+          params.push(boardId);
+        }
+        const rows = db
+          .prepare(
+            `SELECT
+               ae.id,
+               ae.actor_user_id,
+               ae.workspace_id,
+               ae.board_id,
+               ae.task_id,
+               ae.event_type,
+               ae.payload_json,
+               ae.created_at,
+               u.username as actor_username
+             FROM audit_events ae
+             LEFT JOIN users u ON u.id = ae.actor_user_id
+             ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY ae.created_at DESC
+             LIMIT ?`
+          )
+          .all(...params, limit) as any[];
+        return sendJson(
+          res,
+          200,
+          rows.map((r) => ({
+            ...r,
+            payload: parseJsonRecord(r.payload_json, {}),
+          })),
+          corsHeaders
+        );
+      }
+
+      if (req.method === 'GET' && url.pathname === '/openclaw/settings/status') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
+        try {
+          const gateway = makeGatewayClient(req);
+          const [models, cronStatus] = await Promise.all([gateway.modelsOverview(), Promise.resolve(openClawCronStatus())]);
+          const base = gatewayBaseUrl.replace(/\/+$/, '');
+          return sendJson(
+            res,
+            200,
+            {
+              ok: true,
+              dashboard_url: gatewayBaseUrl,
+              models,
+              cron: cronStatus,
+              deep_links: {
+                providers: `${base}/models`,
+                agents: `${base}/agents`,
+                cron: `${base}/cron`,
+              },
+            },
+            corsHeaders
+          );
+        } catch (err: any) {
+          return sendJson(
+            res,
+            502,
+            {
+              ok: false,
+              error: String(err?.message ?? err),
+              dashboard_url: gatewayBaseUrl,
+            },
+            corsHeaders
+          );
+        }
+      }
+
       if (req.method === 'GET' && url.pathname === '/navigation/projects-tree') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
         const projectIdFilter = normalizeString(url.searchParams.get('projectId') ?? '');
         const includeArchived = normalizeString(url.searchParams.get('includeArchived')) === '1';
         const limitRaw = Number(url.searchParams.get('limitPerSection') ?? '');
         const limitPerSection = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(20, Math.max(1, Math.floor(limitRaw))) : 5;
         const where: string[] = [];
         const params: any[] = [];
+        if (currentUser) {
+          const emptyRows = db
+            .prepare(
+              `SELECT w.id
+                 FROM workspaces w
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = w.id
+                )`
+            )
+            .all() as any[];
+          for (const r of emptyRows) {
+            const wid = normalizeString((r as any)?.id);
+            if (wid) bootstrapWorkspaceOwnerIfEmpty(wid, currentUser.id);
+          }
+          where.push(
+            `EXISTS (
+              SELECT 1
+                FROM workspace_members wm
+               WHERE wm.workspace_id = w.id
+                 AND wm.user_id = ?
+            )`
+          );
+          params.push(currentUser.id);
+        }
         if (projectIdFilter) {
           where.push('w.id = ?');
           params.push(projectIdFilter);
@@ -5378,13 +6656,36 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (req.method === 'GET' && url.pathname === '/projects') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
         const archivedMode = normalizeString(url.searchParams.get('archived'));
-        const where =
-          archivedMode === 'only'
-            ? 'WHERE COALESCE(w.is_archived, 0) = 1'
-            : archivedMode === 'all'
-              ? ''
-              : 'WHERE COALESCE(w.is_archived, 0) = 0';
+        const whereParts: string[] = [];
+        const params: any[] = [];
+        if (archivedMode === 'only') whereParts.push('COALESCE(w.is_archived, 0) = 1');
+        else if (archivedMode !== 'all') whereParts.push('COALESCE(w.is_archived, 0) = 0');
+        if (currentUser) {
+          const emptyRows = db
+            .prepare(
+              `SELECT w.id
+                 FROM workspaces w
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = w.id
+                )`
+            )
+            .all() as any[];
+          for (const r of emptyRows) {
+            const wid = normalizeString((r as any)?.id);
+            if (wid) bootstrapWorkspaceOwnerIfEmpty(wid, currentUser.id);
+          }
+          whereParts.push(
+            `EXISTS (
+               SELECT 1 FROM workspace_members wm
+                WHERE wm.workspace_id = w.id
+                  AND wm.user_id = ?
+             )`
+          );
+          params.push(currentUser.id);
+        }
+        const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
         const projects = db
           .prepare(
             `SELECT
@@ -5402,11 +6703,13 @@ const server = http.createServer(async (req, res) => {
              ${where}
              ORDER BY COALESCE(w.is_archived, 0) ASC, w.position ASC, w.created_at ASC`
           )
-          .all();
+          .all(...params);
         return sendJson(res, 200, projects, corsHeaders);
       }
 
       if (req.method === 'POST' && url.pathname === '/projects') {
+        const actor = requireAuthUser();
+        if (auth && !actor) return;
         const body = await readJson(req);
         const name = typeof body?.name === 'string' ? body.name.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
@@ -5423,6 +6726,11 @@ const server = http.createServer(async (req, res) => {
           db
             .prepare('INSERT INTO workspaces(id, name, description, position, is_archived, archived_at) VALUES (?, ?, ?, ?, 0, NULL)')
             .run(projectId, name, description, nextPosition);
+          if (actor) {
+            db.prepare(
+              `INSERT OR IGNORE INTO workspace_members(workspace_id, user_id, role) VALUES (?, ?, 'owner')`
+            ).run(projectId, actor.id);
+          }
           const insSection = db.prepare(
             'INSERT INTO boards(id, workspace_id, name, description, position, view_mode, section_kind) VALUES (?, ?, ?, ?, ?, ?, ?)'
           );
@@ -5448,6 +6756,15 @@ const server = http.createServer(async (req, res) => {
           db.exec('ROLLBACK');
           throw e;
         }
+        ensureWorkspaceFilesScaffold(projectId);
+        const seededBoards = db
+          .prepare('SELECT id, name FROM boards WHERE workspace_id = ? ORDER BY position ASC')
+          .all(projectId) as any[];
+        for (const b of seededBoards) {
+          const boardId = normalizeString((b as any).id);
+          if (!boardId) continue;
+          ensureBoardFilesScaffold(projectId, boardId, String((b as any).name ?? 'Board'));
+        }
 
         const project = rowOrNull<any>(
           db
@@ -5461,13 +6778,31 @@ const server = http.createServer(async (req, res) => {
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
         sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
         sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
+        if (actor) {
+          logAudit({
+            actorUserId: actor.id,
+            workspaceId: projectId,
+            eventType: 'workspace.create',
+            payload: { name },
+          });
+        }
         return sendJson(res, 201, project, corsHeaders);
       }
 
       if (req.method === 'POST' && url.pathname === '/projects/reorder') {
+        if (auth && !currentUser) return sendJson(res, 401, { error: 'Authentication required' }, corsHeaders);
         const body = await readJson(req);
         const orderedIds = Array.isArray(body?.orderedIds) ? body.orderedIds.map((id: any) => String(id)) : [];
         if (orderedIds.length === 0) return sendJson(res, 400, { error: 'orderedIds must be a non-empty array' }, corsHeaders);
+        if (currentUser) {
+          for (const wid of orderedIds) {
+            bootstrapWorkspaceOwnerIfEmpty(wid, currentUser.id);
+            const role = getWorkspaceMemberRole(wid, currentUser.id);
+            if (!role || !roleAtLeast(role, 'operator')) {
+              return sendJson(res, 403, { error: `Forbidden: missing workspace role for ${wid}` }, corsHeaders);
+            }
+          }
+        }
 
         db.exec('BEGIN');
         try {
@@ -5484,12 +6819,20 @@ const server = http.createServer(async (req, res) => {
         }
 
         sseBroadcast({ type: 'projects.changed', payload: {} });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            eventType: 'workspace.reorder',
+            payload: { orderedIds },
+          });
+        }
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       const patchProjectMatch = req.method === 'PATCH' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
       if (patchProjectMatch) {
         const projectId = decodeURIComponent(patchProjectMatch[1]);
+        if (!requireWorkspaceRole(projectId, 'admin')) return;
         const body = await readJson(req);
         const updates: string[] = [];
         const params: any[] = [];
@@ -5550,23 +6893,41 @@ const server = http.createServer(async (req, res) => {
             .all(projectId) as any
         );
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            eventType: 'workspace.update',
+            payload: body,
+          });
+        }
         return sendJson(res, 200, project, corsHeaders);
       }
 
       const deleteProjectMatch = req.method === 'DELETE' ? url.pathname.match(/^\/projects\/([^/]+)$/) : null;
       if (deleteProjectMatch) {
         const projectId = decodeURIComponent(deleteProjectMatch[1]);
+        if (!requireWorkspaceRole(projectId, 'owner')) return;
         const info = db.prepare('DELETE FROM workspaces WHERE id = ?').run(projectId);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Project not found' }, corsHeaders);
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
         sseBroadcast({ type: 'sections.changed', payload: { projectId, workspaceId: projectId } });
         sseBroadcast({ type: 'boards.changed', payload: { workspaceId: projectId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            eventType: 'workspace.delete',
+            payload: { projectId },
+          });
+        }
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       const listSectionsMatch = req.method === 'GET' ? url.pathname.match(/^\/projects\/([^/]+)\/sections$/) : null;
       if (listSectionsMatch) {
         const projectId = decodeURIComponent(listSectionsMatch[1]);
+        if (!requireWorkspaceRole(projectId, 'viewer')) return;
         const sections = db
           .prepare(
             `SELECT
@@ -5591,6 +6952,7 @@ const server = http.createServer(async (req, res) => {
       const createSectionMatch = req.method === 'POST' ? url.pathname.match(/^\/projects\/([^/]+)\/sections$/) : null;
       if (createSectionMatch) {
         const projectId = decodeURIComponent(createSectionMatch[1]);
+        if (!requireWorkspaceRole(projectId, 'operator')) return;
         const body = await readJson(req);
         const name = typeof body?.name === 'string' ? body.name.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
@@ -5629,6 +6991,16 @@ const server = http.createServer(async (req, res) => {
             )
             .all(sectionId) as any
         );
+        ensureBoardFilesScaffold(projectId, sectionId, name);
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            boardId: sectionId,
+            eventType: 'board.create',
+            payload: { name, viewMode, sectionKind },
+          });
+        }
         sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
         sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
         return sendJson(res, 201, section, corsHeaders);
@@ -5640,6 +7012,7 @@ const server = http.createServer(async (req, res) => {
       if (patchSectionMatch) {
         const projectId = decodeURIComponent(patchSectionMatch[1]);
         const sectionId = decodeURIComponent(patchSectionMatch[2]);
+        if (!requireWorkspaceRole(projectId, 'operator')) return;
         const body = await readJson(req);
         const updates: string[] = [];
         const params: any[] = [];
@@ -5694,6 +7067,15 @@ const server = http.createServer(async (req, res) => {
             )
             .all(sectionId) as any
         );
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            boardId: sectionId,
+            eventType: 'board.update',
+            payload: body,
+          });
+        }
         sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
         sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
         return sendJson(res, 200, section, corsHeaders);
@@ -5705,8 +7087,18 @@ const server = http.createServer(async (req, res) => {
       if (deleteSectionMatch) {
         const projectId = decodeURIComponent(deleteSectionMatch[1]);
         const sectionId = decodeURIComponent(deleteSectionMatch[2]);
+        if (!requireWorkspaceRole(projectId, 'admin')) return;
         const info = db.prepare('DELETE FROM boards WHERE id = ? AND workspace_id = ?').run(sectionId, projectId);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            boardId: sectionId,
+            eventType: 'board.delete',
+            payload: { sectionId },
+          });
+        }
         sseBroadcast({ type: 'sections.changed', payload: { projectId, sectionId, boardId: sectionId, workspaceId: projectId } });
         sseBroadcast({ type: 'boards.changed', payload: { boardId: sectionId, workspaceId: projectId } });
         return sendJson(res, 200, { ok: true }, corsHeaders);
@@ -5715,6 +7107,7 @@ const server = http.createServer(async (req, res) => {
       const listProjectStatusesMatch = req.method === 'GET' ? url.pathname.match(/^\/projects\/([^/]+)\/statuses$/) : null;
       if (listProjectStatusesMatch) {
         const projectId = decodeURIComponent(listProjectStatusesMatch[1]);
+        if (!requireWorkspaceRole(projectId, 'viewer')) return;
         const rows = db
           .prepare(
             `SELECT id, workspace_id as project_id, workspace_id, status_key, label, position, created_at, updated_at
@@ -5729,6 +7122,7 @@ const server = http.createServer(async (req, res) => {
       const createProjectStatusMatch = req.method === 'POST' ? url.pathname.match(/^\/projects\/([^/]+)\/statuses$/) : null;
       if (createProjectStatusMatch) {
         const projectId = decodeURIComponent(createProjectStatusMatch[1]);
+        if (!requireWorkspaceRole(projectId, 'admin')) return;
         const body = await readJson(req);
         const statusKey = normalizeString(body?.status_key ?? body?.key ?? body?.statusKey);
         const label = normalizeString(body?.label);
@@ -5749,6 +7143,14 @@ const server = http.createServer(async (req, res) => {
             .all(id) as any
         );
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            eventType: 'workspace.status.create',
+            payload: { status_key: statusKey, label },
+          });
+        }
         return sendJson(res, 201, row, corsHeaders);
       }
 
@@ -5758,6 +7160,7 @@ const server = http.createServer(async (req, res) => {
       if (patchProjectStatusMatch) {
         const projectId = decodeURIComponent(patchProjectStatusMatch[1]);
         const statusId = decodeURIComponent(patchProjectStatusMatch[2]);
+        if (!requireWorkspaceRole(projectId, 'admin')) return;
         const body = await readJson(req);
         const updates: string[] = [];
         const params: any[] = [];
@@ -5796,6 +7199,14 @@ const server = http.createServer(async (req, res) => {
             .all(statusId) as any
         );
         sseBroadcast({ type: 'projects.changed', payload: { projectId, workspaceId: projectId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: projectId,
+            eventType: 'workspace.status.update',
+            payload: { status_id: statusId, ...body },
+          });
+        }
         return sendJson(res, 200, row, corsHeaders);
       }
 
@@ -5933,6 +7344,7 @@ const server = http.createServer(async (req, res) => {
       const boardAgentSettingsGet = req.method === 'GET' ? url.pathname.match(/^\/boards\/([^/]+)\/agent-settings$/) : null;
       if (boardAgentSettingsGet) {
         const boardId = requireUuid(safeDecodeURIComponent(boardAgentSettingsGet[1]), 'boardId');
+        if (!requireBoardRole(boardId, 'viewer')) return;
         const board = getBoardMeta(boardId);
         if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
         const row = getResolvedBoardAgentSettings(boardId);
@@ -5950,6 +7362,7 @@ const server = http.createServer(async (req, res) => {
       const boardAgentSettingsPut = req.method === 'PUT' ? url.pathname.match(/^\/boards\/([^/]+)\/agent-settings$/) : null;
       if (boardAgentSettingsPut) {
         const boardId = requireUuid(safeDecodeURIComponent(boardAgentSettingsPut[1]), 'boardId');
+        if (!requireBoardRole(boardId, 'operator')) return;
         const board = getBoardMeta(boardId);
         if (!board) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
         const body = await readJson(req);
@@ -6005,6 +7418,20 @@ const server = http.createServer(async (req, res) => {
         );
 
         const row = getBoardAgentSettingsRow(boardId);
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: board.workspace_id,
+            boardId,
+            eventType: 'board.agent_settings.update',
+            payload: {
+              preferred_agent_id: preferredAgentId,
+              skills,
+              auto_delegate: autoDelegate,
+              memory_path: memoryPath,
+            },
+          });
+        }
         sseBroadcast({ type: 'boards.agent-settings.changed', payload: { boardId } });
         return sendJson(
           res,
@@ -6020,6 +7447,7 @@ const server = http.createServer(async (req, res) => {
       const workspaceAgentSettingsGet = req.method === 'GET' ? url.pathname.match(/^\/workspaces\/([^/]+)\/agent-settings$/) : null;
       if (workspaceAgentSettingsGet) {
         const workspaceId = requireUuid(safeDecodeURIComponent(workspaceAgentSettingsGet[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
         const workspace = getWorkspaceMeta(workspaceId);
         if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
         const row = getResolvedWorkspaceAgentSettings(workspaceId);
@@ -6029,6 +7457,7 @@ const server = http.createServer(async (req, res) => {
       const workspaceAgentSettingsPut = req.method === 'PUT' ? url.pathname.match(/^\/workspaces\/([^/]+)\/agent-settings$/) : null;
       if (workspaceAgentSettingsPut) {
         const workspaceId = requireUuid(safeDecodeURIComponent(workspaceAgentSettingsPut[1]), 'workspaceId');
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
         const workspace = getWorkspaceMeta(workspaceId);
         if (!workspace) return sendJson(res, 404, { error: 'Workspace not found' }, corsHeaders);
         const body = await readJson(req);
@@ -6084,6 +7513,19 @@ const server = http.createServer(async (req, res) => {
         );
 
         const row = getWorkspaceAgentSettingsRow(workspaceId);
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            eventType: 'workspace.agent_settings.update',
+            payload: {
+              preferred_agent_id: preferredAgentId,
+              skills,
+              auto_delegate: autoDelegate,
+              memory_path: memoryPath,
+            },
+          });
+        }
         sseBroadcast({ type: 'workspaces.agent-settings.changed', payload: { workspaceId } });
         return sendJson(
           res,
@@ -6095,8 +7537,8 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'GET' && url.pathname === '/tasks') {
         const viewMode = normalizeString(url.searchParams.get('viewMode') ?? '');
-        const sectionId = normalizeString(url.searchParams.get('sectionId') ?? url.searchParams.get('boardId') ?? '') || null;
-        let projectId = normalizeString(url.searchParams.get('projectId') ?? url.searchParams.get('workspaceId') ?? '') || null;
+        const boardId = normalizeString(url.searchParams.get('boardId') ?? url.searchParams.get('sectionId') ?? '') || null;
+        let workspaceId = normalizeString(url.searchParams.get('workspaceId') ?? url.searchParams.get('projectId') ?? '') || null;
         const queryText = normalizeString(url.searchParams.get('q') ?? '');
         const statusesRaw = normalizeString(url.searchParams.get('statuses') ?? '');
         const statuses = statusesRaw
@@ -6106,20 +7548,30 @@ const server = http.createServer(async (req, res) => {
               .filter((s) => TASK_STATUSES.has(s))
           : [];
 
-        if (!projectId && sectionId) {
-          const sectionMeta = rowOrNull<{ workspace_id: string }>(
-            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any
+        if (!workspaceId && boardId) {
+          const boardMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
           );
-          projectId = sectionMeta?.workspace_id ?? null;
+          workspaceId = boardMeta?.workspace_id ?? null;
         }
-        if (!projectId) projectId = getDefaultProjectId(db);
-        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no default project exists)' }, corsHeaders);
+        if (!workspaceId) workspaceId = getDefaultWorkspaceId(db);
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no default workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'viewer')) return;
+        if (boardId) {
+          if (!requireBoardRole(boardId, 'viewer')) return;
+          const boardMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
+          );
+          if (boardMeta && boardMeta.workspace_id !== workspaceId) {
+            return sendJson(res, 400, { error: 'boardId does not belong to workspaceId' }, corsHeaders);
+          }
+        }
 
         const where: string[] = ['COALESCE(t.workspace_id, b.workspace_id) = ?'];
-        const params: any[] = [projectId];
-        if (sectionId) {
+        const params: any[] = [workspaceId];
+        if (boardId) {
           where.push('t.board_id = ?');
-          params.push(sectionId);
+          params.push(boardId);
         }
         if (statuses.length > 0) {
           where.push(`t.status IN (${statuses.map(() => '?').join(', ')})`);
@@ -6150,7 +7602,8 @@ const server = http.createServer(async (req, res) => {
                s.agent_id,
                s.status as session_status,
                s.last_run_id,
-               a.display_name as agent_display_name,
+               s.execution_mode,
+                a.display_name as agent_display_name,
                r.status as run_status,
                r.started_at as run_started_at,
                r.updated_at as run_updated_at,
@@ -6176,17 +7629,25 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'POST' && url.pathname === '/tasks/reorder') {
         const body = await readJson(req);
-        const sectionId = normalizeString(body?.sectionId ?? body?.boardId);
-        const projectId = normalizeString(body?.projectId ?? body?.workspaceId);
+        const boardId = normalizeString(body?.boardId ?? body?.sectionId);
+        const workspaceId = normalizeString(body?.workspaceId ?? body?.projectId);
         const orderedIds = Array.isArray(body?.orderedIds) ? body.orderedIds.map((id: any) => String(id)) : [];
-        if (!sectionId) return sendJson(res, 400, { error: 'sectionId is required' }, corsHeaders);
+        if (!boardId) return sendJson(res, 400, { error: 'boardId is required' }, corsHeaders);
         if (orderedIds.length === 0) return sendJson(res, 400, { error: 'orderedIds must be a non-empty array' }, corsHeaders);
+        if (!requireBoardRole(boardId, 'operator')) return;
+        const boardMeta = rowOrNull<{ workspace_id: string }>(
+          db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
+        );
+        if (!boardMeta) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        if (workspaceId && boardMeta.workspace_id !== workspaceId) {
+          return sendJson(res, 400, { error: 'boardId does not belong to workspaceId' }, corsHeaders);
+        }
 
         db.exec('BEGIN');
         try {
           const upd = db.prepare('UPDATE tasks SET position = ? WHERE id = ? AND board_id = ?');
           orderedIds.forEach((id: string, idx: number) => {
-            upd.run(idx, id, sectionId);
+            upd.run(idx, id, boardId);
           });
           db.exec('COMMIT');
         } catch (e) {
@@ -6194,16 +7655,25 @@ const server = http.createServer(async (req, res) => {
           throw e;
         }
 
-        const meta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any);
+        const meta = rowOrNull<{ workspace_id: string }>(db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any);
         sseBroadcast({
           type: 'tasks.changed',
           payload: {
-            sectionId,
-            boardId: sectionId,
-            projectId: projectId || (meta?.workspace_id ?? null),
-            workspaceId: projectId || (meta?.workspace_id ?? null),
+            sectionId: boardId,
+            boardId,
+            projectId: workspaceId || (meta?.workspace_id ?? null),
+            workspaceId: workspaceId || (meta?.workspace_id ?? null),
           },
         });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: boardMeta.workspace_id,
+            boardId,
+            eventType: 'task.reorder',
+            payload: { orderedIds },
+          });
+        }
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
@@ -6212,36 +7682,38 @@ const server = http.createServer(async (req, res) => {
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
         const description = typeof body?.description === 'string' ? body.description : null;
         const status = typeof body?.status === 'string' ? body.status : 'ideas';
-        const requestedSectionId = normalizeString(body?.sectionId ?? body?.boardId) || null;
-        let projectId = normalizeString(body?.projectId ?? body?.workspaceId) || null;
+        const requestedBoardId = normalizeString(body?.boardId ?? body?.sectionId) || null;
+        let workspaceId = normalizeString(body?.workspaceId ?? body?.projectId) || null;
 
         if (!title) return sendJson(res, 400, { error: 'title is required' }, corsHeaders);
 
-        let sectionId = requestedSectionId;
-        if (!projectId && sectionId) {
-          const sectionMeta = rowOrNull<{ workspace_id: string }>(
-            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(sectionId) as any
+        let boardId = requestedBoardId;
+        if (!workspaceId && boardId) {
+          const boardMeta = rowOrNull<{ workspace_id: string }>(
+            db.prepare('SELECT workspace_id FROM boards WHERE id = ?').all(boardId) as any
           );
-          projectId = sectionMeta?.workspace_id ?? null;
+          workspaceId = boardMeta?.workspace_id ?? null;
         }
-        if (!projectId) projectId = getDefaultProjectId(db);
-        if (!projectId) return sendJson(res, 400, { error: 'Missing projectId (and no default project exists)' }, corsHeaders);
-        if (!sectionId) sectionId = getProjectInboxSectionId(db, projectId) ?? getDefaultSectionId(db, projectId);
-        if (!sectionId) return sendJson(res, 400, { error: 'Missing sectionId (and no default section exists)' }, corsHeaders);
+        if (!workspaceId) workspaceId = getDefaultWorkspaceId(db);
+        if (!workspaceId) return sendJson(res, 400, { error: 'Missing workspaceId (and no default workspace exists)' }, corsHeaders);
+        if (!requireWorkspaceRole(workspaceId, 'operator')) return;
+        if (!boardId) boardId = getProjectInboxSectionId(db, workspaceId) ?? getDefaultSectionId(db, workspaceId);
+        if (!boardId) return sendJson(res, 400, { error: 'Missing boardId (and no default board exists)' }, corsHeaders);
+        if (!requireBoardRole(boardId, 'operator')) return;
 
         const sectionRow = rowOrNull<{ id: string; workspace_id: string; section_kind: string }>(
-          db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(sectionId) as any
+          db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(boardId) as any
         );
-        if (!sectionRow) return sendJson(res, 404, { error: 'Section not found' }, corsHeaders);
-        if (sectionRow.workspace_id !== projectId) {
-          return sendJson(res, 400, { error: 'sectionId does not belong to projectId' }, corsHeaders);
+        if (!sectionRow) return sendJson(res, 404, { error: 'Board not found' }, corsHeaders);
+        if (sectionRow.workspace_id !== workspaceId) {
+          return sendJson(res, 400, { error: 'boardId does not belong to workspaceId' }, corsHeaders);
         }
 
         const projectStatusCount = rowOrNull<{ c: number }>(
-          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ?').all(projectId) as any
+          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ?').all(workspaceId) as any
         )?.c ?? 0;
         const hasStatus = rowOrNull<{ c: number }>(
-          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ? AND status_key = ?').all(projectId, status) as any
+          db.prepare('SELECT COUNT(*) as c FROM project_statuses WHERE workspace_id = ? AND status_key = ?').all(workspaceId, status) as any
         )?.c ?? 0;
         if ((projectStatusCount > 0 && hasStatus === 0) || (projectStatusCount === 0 && !TASK_STATUSES.has(status))) {
           return sendJson(res, 400, { error: 'Invalid status' }, corsHeaders);
@@ -6252,8 +7724,8 @@ const server = http.createServer(async (req, res) => {
           'INSERT INTO tasks(id, board_id, workspace_id, title, description, status, position, is_inbox) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         ).run(
           id,
-          sectionId,
-          projectId,
+          boardId,
+          workspaceId,
           title,
           description,
           status,
@@ -6263,8 +7735,18 @@ const server = http.createServer(async (req, res) => {
 
         sseBroadcast({
           type: 'tasks.changed',
-          payload: { sectionId, boardId: sectionId, taskId: id, projectId, workspaceId: projectId },
+          payload: { sectionId: boardId, boardId, taskId: id, projectId: workspaceId, workspaceId },
         });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId,
+            boardId,
+            taskId: id,
+            eventType: 'task.create',
+            payload: { title, status },
+          });
+        }
 
         const task = rowOrNull<any>(
           db.prepare(
@@ -6279,10 +7761,12 @@ const server = http.createServer(async (req, res) => {
       const taskSessionGet = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/session$/) : null;
       if (taskSessionGet) {
         const taskId = decodeURIComponent(taskSessionGet[1]);
+        const taskAccess = requireTaskRole(taskId, 'viewer');
+        if (!taskAccess) return;
         const row = rowOrNull<any>(
           db
             .prepare(
-              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.reasoning_level,
+              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.reasoning_level, s.execution_mode,
                       s.created_at, s.updated_at,
                       a.display_name as agent_display_name, a.openclaw_agent_id as agent_openclaw_id
                FROM task_sessions s
@@ -6292,45 +7776,50 @@ const server = http.createServer(async (req, res) => {
             .all(taskId) as any
         );
         if (!row) return sendJson(res, 404, { error: 'Task session not found' }, corsHeaders);
+        if (!row.execution_mode) row.execution_mode = 'single';
         return sendJson(res, 200, row, corsHeaders);
       }
 
       const taskSessionPost = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/session$/) : null;
       if (taskSessionPost) {
         const taskId = decodeURIComponent(taskSessionPost[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const body = await readJson(req);
         const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
         const hasReasoningLevel = body && Object.prototype.hasOwnProperty.call(body, 'reasoningLevel');
+        const hasExecutionMode =
+          body &&
+          (Object.prototype.hasOwnProperty.call(body, 'execution_mode') ||
+            Object.prototype.hasOwnProperty.call(body, 'executionMode'));
         const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
         const reasoningLevel = hasReasoningLevel ? (typeof body?.reasoningLevel === 'string' ? body.reasoningLevel : null) : undefined;
+        const executionMode = hasExecutionMode
+          ? normalizeString(body?.execution_mode ?? body?.executionMode).toLowerCase()
+          : undefined;
 
-        const task = rowOrNull<{ id: string; board_id: string; workspace_id: string }>(
-          db
-            .prepare(
-              `SELECT t.id as id, t.board_id as board_id, b.workspace_id as workspace_id
-               FROM tasks t
-               JOIN boards b ON b.id = t.board_id
-               WHERE t.id = ?`
-            )
-            .all(taskId) as any
-        );
-        if (!task) return sendJson(res, 404, { error: 'Task not found' }, corsHeaders);
-
-        if (agentId && !getAgentRowById(agentId, task.workspace_id)) {
+        if (agentId && !getAgentRowById(agentId, taskAccess.workspace_id)) {
           return sendJson(res, 400, { error: 'Invalid agentId' }, corsHeaders);
         }
         if (reasoningLevel && !REASONING_LEVELS.has(reasoningLevel as ReasoningLevel)) {
           return sendJson(res, 400, { error: 'Invalid reasoningLevel' }, corsHeaders);
         }
+        if (executionMode && !EXECUTION_MODES.has(executionMode as ExecutionMode)) {
+          return sendJson(res, 400, { error: 'Invalid execution_mode (single|squad)' }, corsHeaders);
+        }
 
-        const sessionOpts: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null } = {};
+        const sessionOpts: { agentId?: string | null; reasoningLevel?: ReasoningLevel | null; executionMode?: ExecutionMode | null } = {};
         if (hasAgentId) sessionOpts.agentId = agentId ?? null;
         if (hasReasoningLevel) sessionOpts.reasoningLevel = (reasoningLevel as ReasoningLevel | null) ?? null;
-        ensureTaskSession(task, Object.keys(sessionOpts).length ? sessionOpts : undefined);
+        if (hasExecutionMode) sessionOpts.executionMode = (executionMode as ExecutionMode | null) ?? null;
+        ensureTaskSession(
+          { id: taskId, board_id: taskAccess.board_id, workspace_id: taskAccess.workspace_id },
+          Object.keys(sessionOpts).length ? sessionOpts : undefined
+        );
         const row = rowOrNull<any>(
           db
             .prepare(
-              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.reasoning_level,
+              `SELECT s.task_id, s.agent_id, s.session_key, s.status, s.last_run_id, s.reasoning_level, s.execution_mode,
                       s.created_at, s.updated_at,
                       a.display_name as agent_display_name, a.openclaw_agent_id as agent_openclaw_id
                FROM task_sessions s
@@ -6339,13 +7828,29 @@ const server = http.createServer(async (req, res) => {
             )
             .all(taskId) as any
         );
-        sseBroadcast({ type: 'task.session.changed', payload: { taskId } });
+        sseBroadcast({ type: 'task.session.changed', payload: { taskId, boardId: taskAccess.board_id, workspaceId: taskAccess.workspace_id } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.session.update',
+            payload: {
+              agentId: hasAgentId ? agentId ?? null : undefined,
+              reasoningLevel: hasReasoningLevel ? reasoningLevel ?? null : undefined,
+              execution_mode: hasExecutionMode ? executionMode ?? null : undefined,
+            },
+          });
+        }
         return sendJson(res, 200, row, corsHeaders);
       }
 
       const taskRunMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/run$/) : null;
       if (taskRunMatch) {
         const taskId = decodeURIComponent(taskRunMatch[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const body = await readJson(req);
         const mode = typeof body?.mode === 'string' ? body.mode : 'execute';
         if (!['plan', 'execute', 'report'].includes(mode)) {
@@ -6355,6 +7860,16 @@ const server = http.createServer(async (req, res) => {
         const agentId = hasAgentId ? (typeof body?.agentId === 'string' ? body.agentId : null) : undefined;
         try {
           const result = await runTask({ taskId, mode: mode as any, agentId });
+          if (currentUser) {
+            logAudit({
+              actorUserId: currentUser.id,
+              workspaceId: taskAccess.workspace_id,
+              boardId: taskAccess.board_id,
+              taskId,
+              eventType: 'task.run',
+              payload: { mode, agentId: agentId ?? null },
+            });
+          }
           return sendJson(res, 200, result, corsHeaders);
         } catch (err: any) {
           if (String(err?.message ?? '') === 'Invalid agentId') {
@@ -6367,6 +7882,8 @@ const server = http.createServer(async (req, res) => {
       const taskStopMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/stop$/) : null;
       if (taskStopMatch) {
         const taskId = decodeURIComponent(taskStopMatch[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const session = rowOrNull<{ task_id: string; last_run_id: string | null }>(
           db.prepare('SELECT task_id, last_run_id FROM task_sessions WHERE task_id = ?').all(taskId) as any
         );
@@ -6397,12 +7914,23 @@ const server = http.createServer(async (req, res) => {
             workspaceId: taskMeta?.workspace_id ?? null,
           },
         });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.stop',
+            payload: { runId: session.last_run_id },
+          });
+        }
         return sendJson(res, 200, { ok: true, stopped: Boolean(controller), runId: session.last_run_id }, corsHeaders);
       }
 
       const checklistGet = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/checklist$/) : null;
       if (checklistGet) {
         const taskId = decodeURIComponent(checklistGet[1]);
+        if (!requireTaskRole(taskId, 'viewer')) return;
         const rows = db
           .prepare(
             'SELECT id, task_id, title, state, position, created_at, updated_at FROM task_checklist_items WHERE task_id = ? ORDER BY position ASC, created_at ASC'
@@ -6414,6 +7942,8 @@ const server = http.createServer(async (req, res) => {
       const checklistPost = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/checklist$/) : null;
       if (checklistPost) {
         const taskId = decodeURIComponent(checklistPost[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const body = await readJson(req);
         const title = typeof body?.title === 'string' ? body.title.trim() : '';
         const state = typeof body?.state === 'string' ? body.state : 'todo';
@@ -6426,6 +7956,16 @@ const server = http.createServer(async (req, res) => {
           'INSERT INTO task_checklist_items(id, task_id, title, state, position) VALUES (?, ?, ?, ?, ?)'
         ).run(id, taskId, title, state, pos);
         sseBroadcast({ type: 'task.checklist.changed', payload: { taskId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.checklist.create',
+            payload: { itemId: id, state },
+          });
+        }
         const row = rowOrNull<any>(
           db
             .prepare(
@@ -6439,6 +7979,8 @@ const server = http.createServer(async (req, res) => {
       const checklistPatch = req.method === 'PATCH' ? url.pathname.match(/^\/tasks\/([^/]+)\/checklist\/([^/]+)$/) : null;
       if (checklistPatch) {
         const taskId = decodeURIComponent(checklistPatch[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const itemId = decodeURIComponent(checklistPatch[2]);
         const body = await readJson(req);
         const updates: string[] = [];
@@ -6472,6 +8014,16 @@ const server = http.createServer(async (req, res) => {
         if (info.changes === 0) return sendJson(res, 404, { error: 'Checklist item not found' }, corsHeaders);
 
         sseBroadcast({ type: 'task.checklist.changed', payload: { taskId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.checklist.update',
+            payload: { itemId, patch: body ?? {} },
+          });
+        }
         const row = rowOrNull<any>(
           db
             .prepare(
@@ -6485,16 +8037,29 @@ const server = http.createServer(async (req, res) => {
       const checklistDelete = req.method === 'DELETE' ? url.pathname.match(/^\/tasks\/([^/]+)\/checklist\/([^/]+)$/) : null;
       if (checklistDelete) {
         const taskId = decodeURIComponent(checklistDelete[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const itemId = decodeURIComponent(checklistDelete[2]);
         const info = db.prepare('DELETE FROM task_checklist_items WHERE id = ? AND task_id = ?').run(itemId, taskId);
         if (info.changes === 0) return sendJson(res, 404, { error: 'Checklist item not found' }, corsHeaders);
         sseBroadcast({ type: 'task.checklist.changed', payload: { taskId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.checklist.delete',
+            payload: { itemId },
+          });
+        }
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       const chatGet = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/chat$/) : null;
       if (chatGet) {
         const taskId = decodeURIComponent(chatGet[1]);
+        if (!requireTaskRole(taskId, 'viewer')) return;
         const before = parseBeforeIsoCursor(url.searchParams.get('before'), 'before');
         const limit = parsePageLimit(
           url.searchParams.get('limit'),
@@ -6523,6 +8088,8 @@ const server = http.createServer(async (req, res) => {
       const chatPost = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/chat$/) : null;
       if (chatPost) {
         const taskId = decodeURIComponent(chatPost[1]);
+        const taskAccess = requireTaskRole(taskId, 'contributor');
+        if (!taskAccess) return;
         const body = await readJson(req);
         const text = typeof body?.text === 'string' ? body.text.trim() : '';
         const hasAgentId = body && Object.prototype.hasOwnProperty.call(body, 'agentId');
@@ -6605,6 +8172,16 @@ const server = http.createServer(async (req, res) => {
         }
 
         sseBroadcast({ type: 'task.chat.changed', payload: { taskId } });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.chat.send',
+            payload: { text_length: text.length, agentId: agentId ?? null },
+          });
+        }
         return sendJson(res, 200, { reply }, corsHeaders);
       }
 
@@ -6613,6 +8190,8 @@ const server = http.createServer(async (req, res) => {
         : null;
       if (requestApprovalMatch) {
         const taskId = decodeURIComponent(requestApprovalMatch[1]);
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
         const body = await readJson(req);
 
         const taskRow = rowOrNull<{ id: string; section_id: string; board_id: string; project_id: string; workspace_id: string; title: string }>(
@@ -6705,6 +8284,16 @@ const server = http.createServer(async (req, res) => {
               )
               .all(approvalId) as any
           );
+          if (currentUser) {
+            logAudit({
+              actorUserId: currentUser.id,
+              workspaceId: taskAccess.workspace_id,
+              boardId: taskAccess.board_id,
+              taskId,
+              eventType: 'task.approval.request',
+              payload: { approvalId, stepId, title: requestTitle },
+            });
+          }
           return sendJson(res, 201, row, corsHeaders);
         } catch (e) {
           db.exec('ROLLBACK');
@@ -6715,6 +8304,8 @@ const server = http.createServer(async (req, res) => {
       const simulateMatch = req.method === 'POST' ? url.pathname.match(/^\/tasks\/([^/]+)\/simulate-run$/) : null;
       if (simulateMatch) {
         const taskId = simulateMatch[1];
+        const taskAccess = requireTaskRole(taskId, 'operator');
+        if (!taskAccess) return;
 
         const taskRow = rowOrNull<{ id: string; section_id: string; board_id: string; project_id: string; workspace_id: string }>(
           db.prepare(
@@ -6788,12 +8379,23 @@ const server = http.createServer(async (req, res) => {
             workspaceId: taskRow.workspace_id,
           },
         });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId,
+            eventType: 'task.run.simulate',
+            payload: { runId },
+          });
+        }
         return sendJson(res, 201, { runId }, corsHeaders);
       }
 
       const runsMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)\/runs$/) : null;
       if (runsMatch) {
         const taskId = runsMatch[1];
+        if (!requireTaskRole(taskId, 'viewer')) return;
         const stuckMinutesRaw = url.searchParams.get('stuckMinutes');
         const stuckMinutes = Number(stuckMinutesRaw ?? 5);
         const before = parseBeforeIsoCursor(url.searchParams.get('before'), 'before');
@@ -6860,6 +8462,7 @@ const server = http.createServer(async (req, res) => {
       const taskDetailsMatch = req.method === 'GET' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
       if (taskDetailsMatch) {
         const taskId = decodeURIComponent(taskDetailsMatch[1]);
+        if (!requireTaskRole(taskId, 'viewer')) return;
         const task = rowOrNull<any>(
           db
             .prepare(
@@ -6882,6 +8485,7 @@ const server = http.createServer(async (req, res) => {
                  s.agent_id,
                  s.status as session_status,
                  s.last_run_id,
+                 s.execution_mode,
                  a.display_name as agent_display_name,
                  r.status as run_status,
                  r.started_at as run_started_at,
@@ -6909,6 +8513,8 @@ const server = http.createServer(async (req, res) => {
       const deleteTaskMatch = req.method === 'DELETE' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
       if (deleteTaskMatch) {
         const id = decodeURIComponent(deleteTaskMatch[1]);
+        const taskAccess = requireTaskRole(id, 'operator');
+        if (!taskAccess) return;
         const meta = rowOrNull<{ section_id: string; board_id: string; project_id: string; workspace_id: string }>(
           db
             .prepare(
@@ -6929,12 +8535,24 @@ const server = http.createServer(async (req, res) => {
             workspaceId: meta?.workspace_id ?? null,
           },
         });
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: taskAccess.workspace_id,
+            boardId: taskAccess.board_id,
+            taskId: id,
+            eventType: 'task.delete',
+            payload: null,
+          });
+        }
         return sendJson(res, 200, { ok: true }, corsHeaders);
       }
 
       const patchMatch = req.method === 'PATCH' ? url.pathname.match(/^\/tasks\/([^/]+)$/) : null;
       if (patchMatch) {
         const id = patchMatch[1];
+        const taskAccess = requireTaskRole(id, 'contributor');
+        if (!taskAccess) return;
         const body = await readJson(req);
         const existing = rowOrNull<{
           status: string;
@@ -7000,6 +8618,7 @@ const server = http.createServer(async (req, res) => {
         if (body?.sectionId !== undefined || body?.boardId !== undefined) {
           const sectionId = normalizeString(body?.sectionId ?? body?.boardId);
           if (!sectionId) return sendJson(res, 400, { error: 'sectionId must be a non-empty string' }, corsHeaders);
+          if (!requireBoardRole(sectionId, 'operator')) return;
           const sectionRow = rowOrNull<{ id: string; workspace_id: string; section_kind: string }>(
             db.prepare('SELECT id, workspace_id, section_kind FROM boards WHERE id = ?').all(sectionId) as any
           );
@@ -7079,11 +8698,21 @@ const server = http.createServer(async (req, res) => {
             console.error('[dzzenos-api] done summary failed', err);
           }
         }
+        if (currentUser) {
+          logAudit({
+            actorUserId: currentUser.id,
+            workspaceId: task?.workspace_id ?? taskAccess.workspace_id,
+            boardId: task?.board_id ?? taskAccess.board_id,
+            taskId: id,
+            eventType: 'task.update',
+            payload: body ?? {},
+          });
+        }
         return sendJson(res, 200, task, corsHeaders);
       }
 
       if (req.method === 'GET' && url.pathname === '/') {
-        return sendText(res, 200, 'DzzenOS API: try GET /projects', corsHeaders);
+        return sendText(res, 200, 'DzzenOS API: try GET /workspaces', corsHeaders);
       }
 
       return sendJson(res, 404, { error: 'Not found' }, corsHeaders);

@@ -1,4 +1,8 @@
 export type SectionViewMode = 'kanban' | 'threads';
+export type AgentLevel = 'L1' | 'L2' | 'L3' | 'L4';
+export type OnboardingState = 'pending' | 'in_progress' | 'done' | 'blocked';
+export type MemberRole = 'owner' | 'admin' | 'operator' | 'contributor' | 'viewer';
+export type ExecutionMode = 'single' | 'squad';
 
 export type Project = {
   id: string;
@@ -191,6 +195,7 @@ export type Task = {
   run_updated_at?: string | null;
   run_finished_at?: string | null;
   run_step_kind?: string | null;
+  execution_mode?: ExecutionMode | null;
 };
 
 export type TaskDetails = Task & {
@@ -204,6 +209,7 @@ export type TaskSession = {
   status: 'idle' | 'running' | 'failed';
   last_run_id: string | null;
   reasoning_level?: ReasoningLevel | null;
+  execution_mode?: ExecutionMode | null;
   created_at: string;
   updated_at: string;
   agent_display_name?: string | null;
@@ -240,6 +246,12 @@ export type Agent = {
   openclaw_agent_id: string;
   enabled: boolean;
   role: string | null;
+  agent_level?: AgentLevel;
+  onboarding_state?: OnboardingState;
+  review_score?: number | null;
+  review_cycle_days?: number;
+  promotion_block_reason?: string | null;
+  last_reviewed_at?: string | null;
   description: string | null;
   category: string;
   tags: string[];
@@ -502,7 +514,7 @@ export type TaskContextItem = {
 
 export type MemoryDoc = {
   id: string | null;
-  scope: 'overview' | 'project' | 'section' | 'agent' | 'task';
+  scope: 'overview' | 'workspace' | 'board' | 'agent' | 'task' | 'project' | 'section';
   scope_id: string;
   content: string;
   updated_by: string | null;
@@ -513,6 +525,8 @@ export type MemoryDoc = {
 export type MemoryScopes = {
   projects: Project[];
   sections: Section[];
+  workspaces?: Project[];
+  boards?: Section[];
   agents: Agent[];
   tasks: Task[];
 };
@@ -537,4 +551,76 @@ export type MemoryModelConfig = {
   model_id: string | null;
   embedding_model_id: string | null;
   updated_at: string | null;
+};
+
+export type UserIdentity = {
+  id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  status: 'active' | 'invited' | 'disabled';
+};
+
+export type WorkspaceMember = {
+  workspace_id: string;
+  user_id: string;
+  role: MemberRole;
+  invited_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  user?: UserIdentity | null;
+};
+
+export type BoardMember = {
+  board_id: string;
+  user_id: string;
+  role: MemberRole;
+  invited_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  user?: UserIdentity | null;
+};
+
+export type Invite = {
+  id: string;
+  workspace_id: string;
+  board_id: string | null;
+  email: string | null;
+  username: string | null;
+  role: MemberRole;
+  status: 'pending' | 'accepted' | 'revoked' | 'expired';
+  expires_at: string | null;
+  accepted_by_user_id: string | null;
+  accepted_at: string | null;
+  created_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+  token?: string;
+  invite_url?: string;
+};
+
+export type AuditEvent = {
+  id: string;
+  actor_user_id: string | null;
+  workspace_id: string | null;
+  board_id: string | null;
+  task_id: string | null;
+  event_type: string;
+  payload: Record<string, unknown>;
+  payload_json?: string | null;
+  created_at: string;
+  actor_username?: string | null;
+};
+
+export type OpenClawSettingsStatus = {
+  ok: boolean;
+  dashboard_url: string;
+  models?: ModelsOverview;
+  cron?: unknown;
+  deep_links?: {
+    providers?: string;
+    agents?: string;
+    cron?: string;
+  };
+  error?: string;
 };
