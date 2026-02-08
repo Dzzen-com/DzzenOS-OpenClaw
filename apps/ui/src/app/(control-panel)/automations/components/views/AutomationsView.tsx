@@ -40,6 +40,8 @@ const Root = styled(FusePageSimple)(({ theme }) => ({
 	}
 }));
 
+const AUTOMATIONS_RUN_ENABLED = false;
+
 function prettyGraph(graphJson: string | undefined): string {
 	if (!graphJson) return 'Graph JSON is not available for this automation.';
 
@@ -116,6 +118,7 @@ function AutomationSidebarContent({
 	tabValue,
 	onTabChange,
 	onRun,
+	runDisabled,
 	running,
 	lastRunId,
 	loading
@@ -125,6 +128,7 @@ function AutomationSidebarContent({
 	tabValue: 'details' | 'graph';
 	onTabChange: (value: 'details' | 'graph') => void;
 	onRun: () => void;
+	runDisabled: boolean;
 	running: boolean;
 	lastRunId: string | null;
 	loading: boolean;
@@ -169,7 +173,7 @@ function AutomationSidebarContent({
 					variant="contained"
 					startIcon={<FuseSvgIcon>lucide:play</FuseSvgIcon>}
 					onClick={onRun}
-					disabled={running}
+					disabled={runDisabled || running}
 				>
 					{running ? 'Starting...' : 'Run now'}
 				</Button>
@@ -326,6 +330,7 @@ export default function AutomationsView() {
 		() => automations.find((automation) => automation.id === selectedId) ?? null,
 		[automations, selectedId]
 	);
+	const runDisabled = !AUTOMATIONS_RUN_ENABLED || !selectedId;
 
 	const content = (
 		<div className="flex w-full flex-col p-4 md:p-6">
@@ -385,8 +390,12 @@ export default function AutomationsView() {
 					selectedName={selectedAutomation?.name ?? ''}
 					searchText={searchText}
 					onSearch={setSearchText}
-					onRun={() => selectedId && runM.mutate(selectedId)}
-					runDisabled={!selectedId}
+					onRun={() => {
+						if (!AUTOMATIONS_RUN_ENABLED || !selectedId) return;
+
+						runM.mutate(selectedId);
+					}}
+					runDisabled={runDisabled}
 					running={runM.isPending}
 				/>
 			}
@@ -398,7 +407,12 @@ export default function AutomationsView() {
 						graphJson={selectedQ.data?.graph_json}
 						tabValue={tabValue}
 						onTabChange={setTabValue}
-						onRun={() => selectedId && runM.mutate(selectedId)}
+						onRun={() => {
+							if (!AUTOMATIONS_RUN_ENABLED || !selectedId) return;
+
+							runM.mutate(selectedId);
+						}}
+						runDisabled={runDisabled}
 						running={runM.isPending}
 						lastRunId={lastRunId}
 						loading={selectedQ.isLoading}
