@@ -44,13 +44,15 @@ function AgentsHeader({
 	onSearch,
 	total,
 	enabled,
-	runs7d
+	runs7d,
+	disabled
 }: {
 	searchText: string;
 	onSearch: (value: string) => void;
 	total: number;
 	enabled: number;
 	runs7d: number;
+	disabled: number;
 }) {
 	return (
 		<div className="container flex w-full border-b">
@@ -77,6 +79,28 @@ function AgentsHeader({
 								{`${total} agents · ${enabled} enabled · ${runs7d} runs / 7d`}
 							</Typography>
 						</motion.span>
+						<Stack
+							direction="row"
+							spacing={1}
+							useFlexGap
+							flexWrap="wrap"
+							className="mt-2"
+						>
+							<Chip
+								size="small"
+								label={`Total: ${total}`}
+							/>
+							<Chip
+								size="small"
+								color="success"
+								label={`Enabled: ${enabled}`}
+							/>
+							<Chip
+								size="small"
+								color={disabled ? 'default' : 'success'}
+								label={`Disabled: ${disabled}`}
+							/>
+						</Stack>
 					</div>
 					<Box className="flex h-10 min-w-56 items-center gap-2 rounded-lg border px-3">
 						<FuseSvgIcon color="action">lucide:search</FuseSvgIcon>
@@ -273,6 +297,7 @@ export default function AgentsView() {
 
 	const selectedAgent = useMemo(() => agents.find((agent) => agent.id === selectedId) ?? null, [agents, selectedId]);
 	const enabledCount = allAgents.filter((agent) => agent.enabled).length;
+	const disabledCount = Math.max(allAgents.length - enabledCount, 0);
 	const totalRuns7d = allAgents.reduce((sum, agent) => sum + (agent.run_count_7d ?? 0), 0);
 	const maxRuns7d = allAgents.reduce((max, agent) => Math.max(max, agent.run_count_7d ?? 0), 1);
 
@@ -323,7 +348,7 @@ export default function AgentsView() {
 										/>
 									</Stack>
 								}
-								secondary={`OpenClaw: ${agent.openclaw_agent_id} · Skills: ${agent.skills.length ? agent.skills.join(', ') : 'none'}`}
+								secondary={`OpenClaw: ${agent.openclaw_agent_id} · ${agent.category || 'general'} · Skills: ${agent.skills.length ? agent.skills.join(', ') : 'none'}`}
 							/>
 							<Stack
 								alignItems="flex-end"
@@ -334,7 +359,9 @@ export default function AgentsView() {
 									className="text-xs"
 									color="text.secondary"
 								>
-									{agent.assigned_task_count ?? 0} tasks
+									{agent.last_used_at
+										? new Date(agent.last_used_at).toLocaleDateString()
+										: 'Never used'}
 								</Typography>
 							</Stack>
 						</ListItemButton>
@@ -361,6 +388,7 @@ export default function AgentsView() {
 					total={allAgents.length}
 					enabled={enabledCount}
 					runs7d={totalRuns7d}
+					disabled={disabledCount}
 				/>
 			}
 			content={content}

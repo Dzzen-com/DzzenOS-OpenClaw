@@ -8,6 +8,7 @@ import {
 	IconButton,
 	List,
 	ListItemButton,
+	ListItemIcon,
 	ListItemText,
 	Paper,
 	Stack,
@@ -49,17 +50,20 @@ const DOCS_SECTIONS = [
 	{
 		id: 'editor',
 		title: 'Editor',
-		subtitle: 'Edit overview content'
+		subtitle: 'Edit overview content',
+		icon: 'lucide:pen-square'
 	},
 	{
 		id: 'preview',
 		title: 'Preview',
-		subtitle: 'Read formatted content'
+		subtitle: 'Read formatted content',
+		icon: 'lucide:eye'
 	},
 	{
 		id: 'info',
 		title: 'Document Info',
-		subtitle: 'Status and metrics'
+		subtitle: 'Status and metrics',
+		icon: 'lucide:info'
 	}
 ] as const;
 
@@ -104,6 +108,9 @@ function DocsSidebarContent({
 						}}
 						className="mb-1 rounded-lg"
 					>
+						<ListItemIcon className="min-w-9">
+							<FuseSvgIcon size={18}>{section.icon}</FuseSvgIcon>
+						</ListItemIcon>
 						<ListItemText
 							primary={section.title}
 							secondary={section.subtitle}
@@ -193,6 +200,11 @@ function DocsContentHeader({
 			>
 				<Chip
 					size="small"
+					color="info"
+					label={section.title}
+				/>
+				<Chip
+					size="small"
 					label={`Words: ${wordCount}`}
 				/>
 				<Chip
@@ -242,33 +254,44 @@ function DocsSectionContent({
 					Keep this page as the single source of truth for workspace context, team conventions, and operating
 					rules for agents.
 				</Typography>
-				<Stack
-					spacing={1}
-					className="mt-4"
-				>
-					<Typography
-						className="text-sm"
-						color="text.secondary"
-					>
-						Suggested sections:
-					</Typography>
-					<Chip
-						size="small"
-						label="Product goals"
-					/>
-					<Chip
-						size="small"
-						label="Team responsibilities"
-					/>
-					<Chip
-						size="small"
-						label="Delivery workflow"
-					/>
-					<Chip
-						size="small"
-						label="Escalation rules"
-					/>
-				</Stack>
+				<div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+					<Paper className="rounded-lg border p-4 shadow-none">
+						<Typography className="text-sm font-semibold">Product goals</Typography>
+						<Typography
+							className="mt-1 text-xs"
+							color="text.secondary"
+						>
+							What success looks like in this workspace.
+						</Typography>
+					</Paper>
+					<Paper className="rounded-lg border p-4 shadow-none">
+						<Typography className="text-sm font-semibold">Team responsibilities</Typography>
+						<Typography
+							className="mt-1 text-xs"
+							color="text.secondary"
+						>
+							Who owns what and escalation contacts.
+						</Typography>
+					</Paper>
+					<Paper className="rounded-lg border p-4 shadow-none">
+						<Typography className="text-sm font-semibold">Delivery workflow</Typography>
+						<Typography
+							className="mt-1 text-xs"
+							color="text.secondary"
+						>
+							From idea to done, with review gates.
+						</Typography>
+					</Paper>
+					<Paper className="rounded-lg border p-4 shadow-none">
+						<Typography className="text-sm font-semibold">Escalation rules</Typography>
+						<Typography
+							className="mt-1 text-xs"
+							color="text.secondary"
+						>
+							When agents should ask for human input.
+						</Typography>
+					</Paper>
+				</div>
 			</Paper>
 		);
 	}
