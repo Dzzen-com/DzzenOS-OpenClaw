@@ -5,80 +5,297 @@ import {
 	Box,
 	Button,
 	Chip,
-	Divider,
+	IconButton,
+	List,
+	ListItemButton,
+	ListItemText,
 	Paper,
 	Stack,
-	Tab,
-	Tabs,
 	TextField,
 	Typography
 } from '@mui/material';
-import { darken, styled } from '@mui/material/styles';
+import { styled } from '@mui/material/styles';
 import FusePageSimple from '@fuse/core/FusePageSimple';
-import { motion } from 'motion/react';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
+import useThemeMediaQuery from '@fuse/hooks/useThemeMediaQuery';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
 import { getOverviewDoc, updateOverviewDoc } from '@/api/queries';
 
-const Root = styled(FusePageSimple)(() => ({
+const Root = styled(FusePageSimple)(({ theme }) => ({
 	'& .container': {
 		maxWidth: '100%!important'
+	},
+	'& .FusePageSimple-contentWrapper': {
+		paddingTop: 2,
+		paddingLeft: 2
+	},
+	'& .FusePageSimple-content': {
+		boxShadow: theme.vars.shadows[2],
+		borderRadius: '12px 0 0 0',
+		backgroundColor: theme.vars.palette.background.paper,
+		[theme.breakpoints.down('md')]: {
+			borderRadius: '12px 12px 0 0'
+		}
+	},
+	'& .FusePageSimple-sidebarWrapper': {
+		border: 'none'
+	},
+	'& .FusePageSimple-sidebarContent': {
+		backgroundColor: theme.vars.palette.background.default
 	}
 }));
 
-function DocsHeader({
-	isDirty,
-	saving,
-	onReset,
-	onSave,
-	wordCount
-}: {
-	isDirty: boolean;
-	saving: boolean;
-	onReset: () => void;
-	onSave: () => void;
-	wordCount: number;
-}) {
-	return (
-		<div className="container flex w-full border-b">
-			<div className="flex flex-auto flex-col p-4 md:px-8">
-				<PageBreadcrumb className="mb-2" />
-				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center">
-					<div className="flex flex-auto items-center gap-3">
-						<Box
-							sx={(theme) => ({
-								background: darken(theme.palette.background.default, 0.05),
-								color: theme.vars.palette.text.secondary
-							})}
-							className="flex h-12 w-12 items-center justify-center rounded-full"
-						>
-							<FuseSvgIcon size={20}>lucide:file-text</FuseSvgIcon>
-						</Box>
-						<div className="min-w-0">
-							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">Docs</Typography>
-							<Typography className="text-md mt-1" color="text.secondary">
-								Overview documentation editor · {wordCount} words
-							</Typography>
-						</div>
-					</div>
+const DOCS_SECTIONS = [
+	{
+		id: 'editor',
+		title: 'Editor',
+		subtitle: 'Edit overview content'
+	},
+	{
+		id: 'preview',
+		title: 'Preview',
+		subtitle: 'Read formatted content'
+	},
+	{
+		id: 'info',
+		title: 'Document Info',
+		subtitle: 'Status and metrics'
+	}
+] as const;
 
-					<Stack direction="row" spacing={1.5}>
-						<Button variant="outlined" disabled={!isDirty || saving} onClick={onReset}>Reset</Button>
-						<Button variant="contained" disabled={!isDirty || saving} onClick={onSave} startIcon={<FuseSvgIcon>lucide:save</FuseSvgIcon>}>
-							{saving ? 'Saving...' : 'Save'}
-						</Button>
-					</Stack>
-				</div>
+type DocsSection = (typeof DOCS_SECTIONS)[number]['id'];
+
+function DocsSidebarContent({
+	activeSection,
+	onSelectSection,
+	onSetSidebarOpen
+}: {
+	activeSection: DocsSection;
+	onSelectSection: (section: DocsSection) => void;
+	onSetSidebarOpen: (open: boolean) => void;
+}) {
+	const isMobile = useThemeMediaQuery((theme) => theme.breakpoints.down('lg'));
+
+	return (
+		<div className="flex h-full flex-col">
+			<div className="flex items-center justify-between p-4">
+				<Typography className="text-3xl leading-none font-bold tracking-tight">Docs</Typography>
+				{isMobile ? (
+					<IconButton
+						onClick={() => onSetSidebarOpen(false)}
+						aria-label="close docs sidebar"
+						size="small"
+					>
+						<FuseSvgIcon size={18}>lucide:x</FuseSvgIcon>
+					</IconButton>
+				) : null}
 			</div>
+			<List className="px-2">
+				{DOCS_SECTIONS.map((section) => (
+					<ListItemButton
+						key={section.id}
+						selected={activeSection === section.id}
+						onClick={() => {
+							onSelectSection(section.id);
+
+							if (isMobile) {
+								onSetSidebarOpen(false);
+							}
+						}}
+						className="mb-1 rounded-lg"
+					>
+						<ListItemText
+							primary={section.title}
+							secondary={section.subtitle}
+						/>
+					</ListItemButton>
+				))}
+			</List>
 		</div>
 	);
 }
 
+function DocsContentHeader({
+	isMobile,
+	activeSection,
+	wordCount,
+	charCount,
+	isDirty,
+	isSaving,
+	onReset,
+	onSave,
+	onOpenSidebar
+}: {
+	isMobile: boolean;
+	activeSection: DocsSection;
+	wordCount: number;
+	charCount: number;
+	isDirty: boolean;
+	isSaving: boolean;
+	onReset: () => void;
+	onSave: () => void;
+	onOpenSidebar: () => void;
+}) {
+	const section = DOCS_SECTIONS.find((item) => item.id === activeSection)!;
+
+	return (
+		<div className="mb-4 flex flex-col gap-3">
+			<PageBreadcrumb className="mb-1" />
+			<div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+				<div className="flex items-center gap-2">
+					{isMobile ? (
+						<IconButton
+							className="border-divider border"
+							onClick={onOpenSidebar}
+							aria-label="open docs sidebar"
+						>
+							<FuseSvgIcon size={18}>lucide:menu</FuseSvgIcon>
+						</IconButton>
+					) : null}
+					<div className="min-w-0">
+						<Typography className="truncate text-3xl leading-none font-bold tracking-tight">
+							{section.title}
+						</Typography>
+						<Typography
+							className="mt-1 text-sm"
+							color="text.secondary"
+						>
+							Overview documentation · {wordCount} words · {charCount} chars
+						</Typography>
+					</div>
+				</div>
+				<Stack
+					direction="row"
+					spacing={1.5}
+				>
+					<Button
+						variant="outlined"
+						disabled={!isDirty || isSaving}
+						onClick={onReset}
+					>
+						Reset
+					</Button>
+					<Button
+						variant="contained"
+						disabled={!isDirty || isSaving}
+						onClick={onSave}
+						startIcon={<FuseSvgIcon>lucide:save</FuseSvgIcon>}
+					>
+						{isSaving ? 'Saving...' : 'Save'}
+					</Button>
+				</Stack>
+			</div>
+			<Stack
+				direction="row"
+				spacing={1}
+				useFlexGap
+				flexWrap="wrap"
+			>
+				<Chip
+					size="small"
+					label={`Words: ${wordCount}`}
+				/>
+				<Chip
+					size="small"
+					label={`Characters: ${charCount}`}
+				/>
+				<Chip
+					size="small"
+					color={isDirty ? 'warning' : 'success'}
+					label={isDirty ? 'Unsaved changes' : 'Saved'}
+				/>
+			</Stack>
+		</div>
+	);
+}
+
+function DocsSectionContent({
+	activeSection,
+	draft,
+	onChangeDraft
+}: {
+	activeSection: DocsSection;
+	draft: string;
+	onChangeDraft: (value: string) => void;
+}) {
+	if (activeSection === 'preview') {
+		return (
+			<Paper className="rounded-xl p-5 shadow-sm">
+				<Typography className="text-lg font-semibold">Preview</Typography>
+				<Box sx={{ mt: 2, minHeight: 520, whiteSpace: 'pre-wrap' }}>
+					<Typography color={draft.trim() ? 'text.primary' : 'text.secondary'}>
+						{draft.trim() ? draft : 'Document is empty.'}
+					</Typography>
+				</Box>
+			</Paper>
+		);
+	}
+
+	if (activeSection === 'info') {
+		return (
+			<Paper className="rounded-xl p-5 shadow-sm">
+				<Typography className="text-lg font-semibold">Document Guidance</Typography>
+				<Typography
+					className="mt-3 text-sm"
+					color="text.secondary"
+				>
+					Keep this page as the single source of truth for workspace context, team conventions, and operating
+					rules for agents.
+				</Typography>
+				<Stack
+					spacing={1}
+					className="mt-4"
+				>
+					<Typography
+						className="text-sm"
+						color="text.secondary"
+					>
+						Suggested sections:
+					</Typography>
+					<Chip
+						size="small"
+						label="Product goals"
+					/>
+					<Chip
+						size="small"
+						label="Team responsibilities"
+					/>
+					<Chip
+						size="small"
+						label="Delivery workflow"
+					/>
+					<Chip
+						size="small"
+						label="Escalation rules"
+					/>
+				</Stack>
+			</Paper>
+		);
+	}
+
+	return (
+		<Paper className="rounded-xl p-5 shadow-sm">
+			<Typography className="text-lg font-semibold">Overview Editor</Typography>
+			<TextField
+				fullWidth
+				multiline
+				minRows={22}
+				value={draft}
+				onChange={(event) => onChangeDraft(event.target.value)}
+				sx={{ mt: 2 }}
+				placeholder="Write your workspace overview, conventions and workflows..."
+			/>
+		</Paper>
+	);
+}
+
 export default function DocsView() {
+	const isMobile = useThemeMediaQuery((theme) => theme.breakpoints.down('lg'));
 	const qc = useQueryClient();
 	const [draft, setDraft] = useState('');
 	const [isDirty, setIsDirty] = useState(false);
-	const [tabValue, setTabValue] = useState('editor');
+	const [activeSection, setActiveSection] = useState<DocsSection>('editor');
+	const [leftSidebarOpen, setLeftSidebarOpen] = useState(!isMobile);
 
 	const docQ = useQuery({
 		queryKey: ['docs', 'overview'],
@@ -91,6 +308,10 @@ export default function DocsView() {
 		}
 	}, [docQ.data?.content, isDirty]);
 
+	useEffect(() => {
+		setLeftSidebarOpen(!isMobile);
+	}, [isMobile]);
+
 	const saveM = useMutation({
 		mutationFn: async () => updateOverviewDoc(draft),
 		onSuccess: async () => {
@@ -100,95 +321,77 @@ export default function DocsView() {
 	});
 
 	const wordCount = useMemo(() => {
-		const words = draft.replace(/<[^>]*>/g, ' ').trim().split(/\s+/).filter(Boolean);
+		const words = draft
+			.replace(/<[^>]*>/g, ' ')
+			.trim()
+			.split(/\s+/)
+			.filter(Boolean);
 		return words.length;
 	}, [draft]);
 
 	const charCount = draft.length;
 
-	const content = (
-		<div className="w-full pt-4 sm:pt-6">
-			<div className="flex w-full flex-col justify-between gap-2 px-4 sm:flex-row sm:items-center md:px-8">
-				<Tabs value={tabValue} onChange={(_event, value: string) => setTabValue(value)}>
-					<Tab value="editor" label="Editor" />
-					<Tab value="preview" label="Preview" />
-				</Tabs>
-			</div>
-
-			<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-[320px,1fr] md:px-8">
-				<Paper className="rounded-xl p-5 shadow-sm">
-					<Typography className="text-lg font-semibold">Document Status</Typography>
-					<Stack spacing={1.5} className="mt-4">
-						<Chip size="small" label={`Words: ${wordCount}`} />
-						<Chip size="small" label={`Characters: ${charCount}`} />
-						<Chip size="small" color={isDirty ? 'warning' : 'success'} label={isDirty ? 'Unsaved changes' : 'Saved'} />
-					</Stack>
-					<Divider className="my-4" />
-					<Typography className="text-sm" color="text.secondary">
-						Use this page as the single source of truth for your product overview, operating rules, and delivery workflow.
-					</Typography>
-				</Paper>
-
-				<motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
-					{tabValue === 'editor' ? (
-						<Paper className="rounded-xl p-5 shadow-sm">
-							<Typography className="text-lg font-semibold">Overview Editor</Typography>
-							<TextField
-								fullWidth
-								multiline
-								minRows={22}
-								value={draft}
-								onChange={(event) => {
-									setDraft(event.target.value);
-									setIsDirty(true);
-								}}
-								sx={{ mt: 2 }}
-								placeholder="Write your workspace overview, conventions and workflows..."
-							/>
-						</Paper>
-					) : (
-						<Paper className="rounded-xl p-5 shadow-sm">
-							<Typography className="text-lg font-semibold">Preview</Typography>
-							<Divider className="my-4" />
-							<Box sx={{ minHeight: 480, whiteSpace: 'pre-wrap' }}>
-								<Typography color={draft.trim() ? 'text.primary' : 'text.secondary'}>
-									{draft.trim() ? draft : 'Document is empty.'}
-								</Typography>
-							</Box>
-						</Paper>
-					)}
-				</motion.div>
-			</div>
-
-			{saveM.isSuccess ? (
-				<Alert severity="success" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
-					Overview document saved.
-				</Alert>
-			) : null}
-			{docQ.isError || saveM.isError ? (
-				<Alert severity="error" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
-					{String(docQ.error ?? saveM.error)}
-				</Alert>
-			) : null}
-		</div>
-	);
-
 	return (
 		<Root
-			header={
-				<DocsHeader
-					isDirty={isDirty}
-					saving={saveM.isPending}
-					onReset={() => {
-						setDraft(docQ.data?.content ?? '');
-						setIsDirty(false);
-					}}
-					onSave={() => saveM.mutate()}
-					wordCount={wordCount}
-				/>
+			content={
+				<div className="flex w-full flex-col p-4 md:p-6">
+					<div className="max-w-4xl">
+						<DocsContentHeader
+							isMobile={isMobile}
+							activeSection={activeSection}
+							wordCount={wordCount}
+							charCount={charCount}
+							isDirty={isDirty}
+							isSaving={saveM.isPending}
+							onReset={() => {
+								setDraft(docQ.data?.content ?? '');
+								setIsDirty(false);
+							}}
+							onSave={() => saveM.mutate()}
+							onOpenSidebar={() => setLeftSidebarOpen(true)}
+						/>
+
+						<DocsSectionContent
+							activeSection={activeSection}
+							draft={draft}
+							onChangeDraft={(value) => {
+								setDraft(value);
+								setIsDirty(true);
+							}}
+						/>
+
+						{saveM.isSuccess ? (
+							<Alert
+								severity="success"
+								sx={{ mt: 2 }}
+							>
+								Overview document saved.
+							</Alert>
+						) : null}
+						{docQ.isError || saveM.isError ? (
+							<Alert
+								severity="error"
+								sx={{ mt: 2 }}
+							>
+								{String(docQ.error ?? saveM.error)}
+							</Alert>
+						) : null}
+					</div>
+				</div>
 			}
-			content={content}
-			scroll="content"
+			leftSidebarProps={{
+				open: leftSidebarOpen,
+				onClose: () => setLeftSidebarOpen(false),
+				content: (
+					<DocsSidebarContent
+						activeSection={activeSection}
+						onSelectSection={setActiveSection}
+						onSetSidebarOpen={setLeftSidebarOpen}
+					/>
+				),
+				width: 300
+			}}
+			scroll={isMobile ? 'page' : 'content'}
 		/>
 	);
 }

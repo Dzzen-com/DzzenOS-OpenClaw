@@ -6,8 +6,9 @@ import {
 	Box,
 	Button,
 	Chip,
-	Divider,
+	Input,
 	List,
+	ListItem,
 	ListItemButton,
 	ListItemText,
 	Paper,
@@ -16,20 +17,32 @@ import {
 	Tabs,
 	Typography
 } from '@mui/material';
-import { darken, styled } from '@mui/material/styles';
+import { styled } from '@mui/material/styles';
 import FusePageSimple from '@fuse/core/FusePageSimple';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
+import useThemeMediaQuery from '@fuse/hooks/useThemeMediaQuery';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
 import { getAutomation, listAutomations, runAutomation } from '@/api/queries';
+import type { Automation } from '@/api/types';
 
-const Root = styled(FusePageSimple)(() => ({
+const Root = styled(FusePageSimple)(({ theme }) => ({
 	'& .container': {
 		maxWidth: '100%!important'
+	},
+	'& .FusePageSimple-contentWrapper': {
+		paddingTop: 2
+	},
+	'& .FusePageSimple-content': {
+		boxShadow: theme.vars.shadows[2]
+	},
+	'& .FusePageSimple-sidebarContent': {
+		backgroundColor: theme.vars.palette.background.paper
 	}
 }));
 
 function prettyGraph(graphJson: string | undefined): string {
-	if (!graphJson) return 'Graph JSON отсутствует для выбранной автоматизации.';
+	if (!graphJson) return 'Graph JSON is not available for this automation.';
+
 	try {
 		return JSON.stringify(JSON.parse(graphJson), null, 2);
 	} catch {
@@ -38,69 +51,265 @@ function prettyGraph(graphJson: string | undefined): string {
 }
 
 function AutomationsHeader({
+	total,
 	selectedName,
+	searchText,
+	onSearch,
 	onRun,
-	disabled,
-	running,
-	total
+	runDisabled,
+	running
 }: {
-	selectedName: string;
-	onRun: () => void;
-	disabled: boolean;
-	running: boolean;
 	total: number;
+	selectedName: string;
+	searchText: string;
+	onSearch: (value: string) => void;
+	onRun: () => void;
+	runDisabled: boolean;
+	running: boolean;
 }) {
 	return (
 		<div className="container flex w-full border-b">
 			<div className="flex flex-auto flex-col p-4 md:px-8">
 				<PageBreadcrumb className="mb-2" />
-				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center">
-					<div className="flex flex-auto items-center gap-3">
-						<Avatar
-							sx={(theme) => ({
-								background: darken(theme.palette.background.default, 0.05),
-								color: theme.vars.palette.text.secondary
-							})}
-							className="h-12 w-12 shrink-0"
+				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center md:justify-between">
+					<div className="min-w-0">
+						<Typography className="truncate text-3xl leading-none font-bold tracking-tight md:text-4xl">
+							Automations
+						</Typography>
+						<Typography
+							className="text-md mt-1"
+							color="text.secondary"
 						>
-							<FuseSvgIcon size={20}>lucide:workflow</FuseSvgIcon>
-						</Avatar>
-						<div className="min-w-0">
-							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">Automations</Typography>
-							<Typography className="text-md mt-1" color="text.secondary">
-								{total} saved workflows · {selectedName || 'No selection'}
-							</Typography>
-						</div>
+							{`${total} workflows · ${selectedName || 'No selection'}`}
+						</Typography>
 					</div>
-					<Button variant="contained" startIcon={<FuseSvgIcon>lucide:play</FuseSvgIcon>} disabled={disabled || running} onClick={onRun}>
-						{running ? 'Starting...' : 'Run now'}
-					</Button>
+					<div className="flex flex-col gap-2 md:flex-row md:items-center">
+						<Box className="flex h-10 min-w-56 items-center gap-2 rounded-lg border px-3">
+							<FuseSvgIcon color="action">lucide:search</FuseSvgIcon>
+							<Input
+								placeholder="Search automations"
+								className="flex-1"
+								disableUnderline
+								value={searchText}
+								onChange={(event) => onSearch(event.target.value)}
+								slotProps={{ input: { 'aria-label': 'Search automations' } }}
+							/>
+						</Box>
+						<Button
+							variant="contained"
+							startIcon={<FuseSvgIcon>lucide:play</FuseSvgIcon>}
+							disabled={runDisabled || running}
+							onClick={onRun}
+						>
+							{running ? 'Starting...' : 'Run now'}
+						</Button>
+					</div>
 				</div>
 			</div>
 		</div>
 	);
 }
 
+function AutomationSidebarContent({
+	automation,
+	graphJson,
+	tabValue,
+	onTabChange,
+	onRun,
+	running,
+	lastRunId,
+	loading
+}: {
+	automation: Automation | null;
+	graphJson?: string;
+	tabValue: 'details' | 'graph';
+	onTabChange: (value: 'details' | 'graph') => void;
+	onRun: () => void;
+	running: boolean;
+	lastRunId: string | null;
+	loading: boolean;
+}) {
+	if (!automation) {
+		return (
+			<div className="flex h-full items-center justify-center p-6">
+				<Typography color="text.secondary">Select an automation to view details.</Typography>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex h-full flex-col">
+			<div className="border-b p-4">
+				<Stack
+					direction="row"
+					spacing={1.5}
+					alignItems="center"
+				>
+					<Avatar>
+						<FuseSvgIcon size={18}>lucide:workflow</FuseSvgIcon>
+					</Avatar>
+					<div className="min-w-0">
+						<Typography className="truncate text-lg font-semibold">{automation.name}</Typography>
+						<Typography
+							className="truncate text-xs"
+							color="text.secondary"
+						>
+							ID: {automation.id}
+						</Typography>
+					</div>
+				</Stack>
+				<Typography
+					className="mt-3 text-sm"
+					color="text.secondary"
+				>
+					{automation.description || 'No description provided.'}
+				</Typography>
+				<Button
+					className="mt-3"
+					variant="contained"
+					startIcon={<FuseSvgIcon>lucide:play</FuseSvgIcon>}
+					onClick={onRun}
+					disabled={running}
+				>
+					{running ? 'Starting...' : 'Run now'}
+				</Button>
+			</div>
+
+			<Tabs
+				value={tabValue}
+				onChange={(_event, value: 'details' | 'graph') => onTabChange(value)}
+			>
+				<Tab
+					value="details"
+					label="Details"
+				/>
+				<Tab
+					value="graph"
+					label="Graph JSON"
+				/>
+			</Tabs>
+
+			<div className="flex-1 overflow-auto p-4">
+				{tabValue === 'details' ? (
+					<Stack spacing={2}>
+						<Paper className="rounded-xl p-4 shadow-sm">
+							<Typography
+								className="text-sm font-medium"
+								color="text.secondary"
+							>
+								Timestamps
+							</Typography>
+							<Stack
+								direction="row"
+								spacing={1}
+								className="mt-2"
+								useFlexGap
+								flexWrap="wrap"
+							>
+								<Chip
+									size="small"
+									label={`Created: ${new Date(automation.created_at).toLocaleString()}`}
+								/>
+								<Chip
+									size="small"
+									label={`Updated: ${new Date(automation.updated_at).toLocaleString()}`}
+								/>
+							</Stack>
+						</Paper>
+						<Paper className="rounded-xl p-4 shadow-sm">
+							<Typography
+								className="text-sm font-medium"
+								color="text.secondary"
+							>
+								Graph payload
+							</Typography>
+							<Typography
+								className="mt-2 text-sm"
+								color="text.secondary"
+							>
+								{loading
+									? 'Loading graph schema...'
+									: `${prettyGraph(graphJson).length.toLocaleString()} characters`}
+							</Typography>
+						</Paper>
+					</Stack>
+				) : (
+					<Box
+						sx={{
+							minHeight: 520,
+							p: 2,
+							borderRadius: 1,
+							border: (theme) => `1px solid ${theme.vars.palette.divider}`,
+							whiteSpace: 'pre-wrap',
+							overflow: 'auto',
+							fontFamily: 'monospace',
+							fontSize: 12
+						}}
+					>
+						{loading ? 'Loading graph schema...' : prettyGraph(graphJson)}
+					</Box>
+				)}
+
+				{lastRunId ? (
+					<Alert
+						severity="success"
+						sx={{ mt: 2 }}
+					>
+						Automation run started: {lastRunId}
+					</Alert>
+				) : null}
+			</div>
+		</div>
+	);
+}
+
 export default function AutomationsView() {
+	const isMobile = useThemeMediaQuery((theme) => theme.breakpoints.down('lg'));
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [lastRunId, setLastRunId] = useState<string | null>(null);
-	const [tabValue, setTabValue] = useState('details');
+	const [tabValue, setTabValue] = useState<'details' | 'graph'>('details');
+	const [searchText, setSearchText] = useState('');
+	const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
 
 	const listQ = useQuery({
 		queryKey: ['automations', 'page'],
 		queryFn: listAutomations
 	});
 
+	const automations = useMemo(() => {
+		const q = searchText.trim().toLowerCase();
+		return [...(listQ.data ?? [])]
+			.filter((automation) => {
+				if (!q) return true;
+
+				return (
+					automation.name.toLowerCase().includes(q) ||
+					(automation.description ?? '').toLowerCase().includes(q)
+				);
+			})
+			.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+	}, [listQ.data, searchText]);
+
 	useEffect(() => {
-		if (!selectedId && listQ.data?.length) {
-			setSelectedId(listQ.data[0].id);
+		if (!automations.length) {
+			setSelectedId(null);
+			return;
 		}
-	}, [listQ.data, selectedId]);
+
+		if (!selectedId || !automations.some((automation) => automation.id === selectedId)) {
+			setSelectedId(automations[0].id);
+		}
+	}, [automations, selectedId]);
+
+	useEffect(() => {
+		setRightSidebarOpen(!isMobile && Boolean(selectedId));
+	}, [isMobile, selectedId]);
 
 	const selectedQ = useQuery({
 		queryKey: ['automation', selectedId, 'page'],
 		queryFn: () => {
 			if (!selectedId) return Promise.resolve(null);
+
 			return getAutomation(selectedId);
 		},
 		enabled: !!selectedId
@@ -114,87 +323,54 @@ export default function AutomationsView() {
 	});
 
 	const selectedAutomation = useMemo(
-		() => (listQ.data ?? []).find((automation) => automation.id === selectedId) ?? null,
-		[listQ.data, selectedId]
+		() => automations.find((automation) => automation.id === selectedId) ?? null,
+		[automations, selectedId]
 	);
 
 	const content = (
-		<div className="w-full pt-4 sm:pt-6">
-			<div className="flex w-full flex-col justify-between gap-2 px-4 sm:flex-row sm:items-center md:px-8">
-				<Tabs value={tabValue} onChange={(_event, value: string) => setTabValue(value)}>
-					<Tab value="details" label="Details" />
-					<Tab value="graph" label="Graph JSON" />
-				</Tabs>
-			</div>
-
-			<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-[320px,1fr] md:px-8">
-				<Paper className="overflow-hidden rounded-xl shadow-sm">
-					<Typography className="px-5 pt-5 text-lg font-semibold">Library</Typography>
-					<Divider className="mt-4" />
-					<List className="divide-y py-0">
-						{(listQ.data ?? []).length === 0 ? (
-							<ListItemText className="px-5 py-5" primary="No saved automations" />
-						) : (
-							(listQ.data ?? []).map((automation) => (
-								<ListItemButton
-									key={automation.id}
-									selected={automation.id === selectedId}
-									onClick={() => {
-										setSelectedId(automation.id);
-										setLastRunId(null);
-									}}
-								>
-									<ListItemText
-										primary={automation.name}
-										secondary={`Updated ${new Date(automation.updated_at).toLocaleString()}`}
-									/>
-								</ListItemButton>
-							))
-						)}
-					</List>
-				</Paper>
-
-				<Paper className="rounded-xl p-5 shadow-sm">
-					{tabValue === 'details' ? (
-						<>
-							<Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={1.5}>
-								<Typography className="text-xl font-semibold">{selectedAutomation?.name ?? 'Automation details'}</Typography>
-								<Chip size="small" label={selectedAutomation ? `ID: ${selectedAutomation.id}` : 'No selection'} />
-							</Stack>
-							<Typography className="mt-2" color="text.secondary">
-								{selectedAutomation?.description || 'Select an automation from the left list to inspect details.'}
-							</Typography>
-
-							<Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} className="mt-4" useFlexGap flexWrap="wrap">
-								<Chip size="small" label={`Created: ${selectedAutomation ? new Date(selectedAutomation.created_at).toLocaleString() : '-'}`} />
-								<Chip size="small" label={`Updated: ${selectedAutomation ? new Date(selectedAutomation.updated_at).toLocaleString() : '-'}`} />
-							</Stack>
-
-							<Divider className="my-4" />
-							<Typography className="text-sm font-medium" color="text.secondary">Automation payload</Typography>
-							<Box sx={{ mt: 1.5, p: 1.5, borderRadius: 1, border: (theme) => `1px solid ${theme.vars.palette.divider}`, whiteSpace: 'pre-wrap', maxHeight: 420, overflow: 'auto', fontFamily: 'monospace', fontSize: 12 }}>
-								{prettyGraph(selectedQ.data?.graph_json)}
-							</Box>
-						</>
-					) : (
-						<>
-							<Typography className="text-xl font-semibold">Graph JSON</Typography>
-							<Typography className="mt-1" color="text.secondary">Raw graph schema for the selected automation.</Typography>
-							<Box sx={{ mt: 2, minHeight: 520, p: 2, borderRadius: 1, border: (theme) => `1px solid ${theme.vars.palette.divider}`, whiteSpace: 'pre-wrap', overflow: 'auto', fontFamily: 'monospace', fontSize: 12 }}>
-								{prettyGraph(selectedQ.data?.graph_json)}
-							</Box>
-						</>
-					)}
-				</Paper>
-			</div>
-
-			{lastRunId ? (
-				<Alert severity="success" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
-					Automation run started: {lastRunId}
-				</Alert>
-			) : null}
+		<div className="flex w-full flex-col p-4 md:p-6">
+			<Paper className="overflow-hidden rounded-xl shadow-sm">
+				<List className="divide-y py-0">
+					{listQ.isLoading ? (
+						<ListItem>
+							<ListItemText primary="Loading automations..." />
+						</ListItem>
+					) : null}
+					{!listQ.isLoading && automations.length === 0 ? (
+						<ListItem>
+							<ListItemText
+								primary="No automations found"
+								secondary="Try a different search query."
+							/>
+						</ListItem>
+					) : null}
+					{automations.map((automation) => (
+						<ListItemButton
+							key={automation.id}
+							selected={automation.id === selectedId}
+							onClick={() => {
+								setSelectedId(automation.id);
+								setLastRunId(null);
+								setRightSidebarOpen(true);
+							}}
+						>
+							<ListItemText
+								primary={automation.name}
+								secondary={
+									automation.description
+										? `${automation.description} · Updated ${new Date(automation.updated_at).toLocaleString()}`
+										: `Updated ${new Date(automation.updated_at).toLocaleString()}`
+								}
+							/>
+						</ListItemButton>
+					))}
+				</List>
+			</Paper>
 			{listQ.isError || selectedQ.isError || runM.isError ? (
-				<Alert severity="error" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
+				<Alert
+					severity="error"
+					sx={{ mt: 2 }}
+				>
 					{String(listQ.error ?? selectedQ.error ?? runM.error)}
 				</Alert>
 			) : null}
@@ -205,15 +381,34 @@ export default function AutomationsView() {
 		<Root
 			header={
 				<AutomationsHeader
-					selectedName={selectedAutomation?.name ?? ''}
-					onRun={() => selectedId && runM.mutate(selectedId)}
-					disabled={!selectedId}
-					running={runM.isPending}
 					total={listQ.data?.length ?? 0}
+					selectedName={selectedAutomation?.name ?? ''}
+					searchText={searchText}
+					onSearch={setSearchText}
+					onRun={() => selectedId && runM.mutate(selectedId)}
+					runDisabled={!selectedId}
+					running={runM.isPending}
 				/>
 			}
 			content={content}
-			scroll="content"
+			rightSidebarProps={{
+				content: (
+					<AutomationSidebarContent
+						automation={selectedAutomation}
+						graphJson={selectedQ.data?.graph_json}
+						tabValue={tabValue}
+						onTabChange={setTabValue}
+						onRun={() => selectedId && runM.mutate(selectedId)}
+						running={runM.isPending}
+						lastRunId={lastRunId}
+						loading={selectedQ.isLoading}
+					/>
+				),
+				open: rightSidebarOpen,
+				onClose: () => setRightSidebarOpen(false),
+				width: 460
+			}}
+			scroll={isMobile ? 'page' : 'content'}
 		/>
 	);
 }
