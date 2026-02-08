@@ -1,36 +1,84 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
 	Alert,
 	Box,
 	Button,
-	Card,
-	CardContent,
-	CardHeader,
+	Chip,
 	Divider,
-	Grid,
+	Paper,
 	Stack,
+	Tab,
+	Tabs,
 	TextField,
 	Typography
 } from '@mui/material';
-import { styled } from '@mui/material/styles';
+import { darken, styled } from '@mui/material/styles';
 import FusePageSimple from '@fuse/core/FusePageSimple';
+import { motion } from 'motion/react';
+import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
+import PageBreadcrumb from '@/components/PageBreadcrumb';
 import { getOverviewDoc, updateOverviewDoc } from '@/api/queries';
 
-const Root = styled(FusePageSimple)(({ theme }) => ({
-	'& .FusePageSimple-header': {
-		borderBottom: `1px solid ${theme.vars.palette.divider}`,
-		background: theme.vars.palette.background.paper
-	},
-	'& .FusePageSimple-content': {
-		background: theme.vars.palette.background.default
+const Root = styled(FusePageSimple)(() => ({
+	'& .container': {
+		maxWidth: '100%!important'
 	}
 }));
+
+function DocsHeader({
+	isDirty,
+	saving,
+	onReset,
+	onSave,
+	wordCount
+}: {
+	isDirty: boolean;
+	saving: boolean;
+	onReset: () => void;
+	onSave: () => void;
+	wordCount: number;
+}) {
+	return (
+		<div className="container flex w-full border-b">
+			<div className="flex flex-auto flex-col p-4 md:px-8">
+				<PageBreadcrumb className="mb-2" />
+				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center">
+					<div className="flex flex-auto items-center gap-3">
+						<Box
+							sx={(theme) => ({
+								background: darken(theme.palette.background.default, 0.05),
+								color: theme.vars.palette.text.secondary
+							})}
+							className="flex h-12 w-12 items-center justify-center rounded-full"
+						>
+							<FuseSvgIcon size={20}>lucide:file-text</FuseSvgIcon>
+						</Box>
+						<div className="min-w-0">
+							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">Docs</Typography>
+							<Typography className="text-md mt-1" color="text.secondary">
+								Overview documentation editor · {wordCount} words
+							</Typography>
+						</div>
+					</div>
+
+					<Stack direction="row" spacing={1.5}>
+						<Button variant="outlined" disabled={!isDirty || saving} onClick={onReset}>Reset</Button>
+						<Button variant="contained" disabled={!isDirty || saving} onClick={onSave} startIcon={<FuseSvgIcon>lucide:save</FuseSvgIcon>}>
+							{saving ? 'Saving...' : 'Save'}
+						</Button>
+					</Stack>
+				</div>
+			</div>
+		</div>
+	);
+}
 
 export default function DocsView() {
 	const qc = useQueryClient();
 	const [draft, setDraft] = useState('');
 	const [isDirty, setIsDirty] = useState(false);
+	const [tabValue, setTabValue] = useState('editor');
 
 	const docQ = useQuery({
 		queryKey: ['docs', 'overview'],
@@ -51,48 +99,40 @@ export default function DocsView() {
 		}
 	});
 
-	const header = (
-		<Box sx={{ width: '100%', px: { xs: 2, md: 3 }, py: 2 }}>
-			<Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }}>
-				<Box>
-					<Typography variant="overline" color="text.secondary">
-						Fuse Workspace
-					</Typography>
-					<Typography variant="h4" sx={{ fontWeight: 600, lineHeight: 1.1 }}>
-						Docs
-					</Typography>
-					<Typography variant="body2" color="text.secondary">
-						Каноничный overview-документ платформы.
-					</Typography>
-				</Box>
+	const wordCount = useMemo(() => {
+		const words = draft.replace(/<[^>]*>/g, ' ').trim().split(/\s+/).filter(Boolean);
+		return words.length;
+	}, [draft]);
 
-				<Stack direction="row" spacing={1.5}>
-					<Button
-						variant="outlined"
-						disabled={!isDirty || saveM.isPending}
-						onClick={() => {
-							setDraft(docQ.data?.content ?? '');
-							setIsDirty(false);
-						}}
-					>
-						Отменить
-					</Button>
-					<Button variant="contained" disabled={!isDirty || saveM.isPending} onClick={() => saveM.mutate()}>
-						{saveM.isPending ? 'Сохранение...' : 'Сохранить'}
-					</Button>
-				</Stack>
-			</Stack>
-		</Box>
-	);
+	const charCount = draft.length;
 
 	const content = (
-		<Box sx={{ width: '100%', px: { xs: 2, md: 3 }, py: 2.5 }}>
-			<Grid container spacing={2}>
-				<Grid size={{ xs: 12, lg: 7 }}>
-					<Card variant="outlined" sx={{ height: '100%' }}>
-						<CardHeader title="Editor" subheader="Текст хранится в /docs/overview" />
-						<Divider />
-						<CardContent>
+		<div className="w-full pt-4 sm:pt-6">
+			<div className="flex w-full flex-col justify-between gap-2 px-4 sm:flex-row sm:items-center md:px-8">
+				<Tabs value={tabValue} onChange={(_event, value: string) => setTabValue(value)}>
+					<Tab value="editor" label="Editor" />
+					<Tab value="preview" label="Preview" />
+				</Tabs>
+			</div>
+
+			<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 lg:grid-cols-[320px,1fr] md:px-8">
+				<Paper className="rounded-xl p-5 shadow-sm">
+					<Typography className="text-lg font-semibold">Document Status</Typography>
+					<Stack spacing={1.5} className="mt-4">
+						<Chip size="small" label={`Words: ${wordCount}`} />
+						<Chip size="small" label={`Characters: ${charCount}`} />
+						<Chip size="small" color={isDirty ? 'warning' : 'success'} label={isDirty ? 'Unsaved changes' : 'Saved'} />
+					</Stack>
+					<Divider className="my-4" />
+					<Typography className="text-sm" color="text.secondary">
+						Use this page as the single source of truth for your product overview, operating rules, and delivery workflow.
+					</Typography>
+				</Paper>
+
+				<motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}>
+					{tabValue === 'editor' ? (
+						<Paper className="rounded-xl p-5 shadow-sm">
+							<Typography className="text-lg font-semibold">Overview Editor</Typography>
 							<TextField
 								fullWidth
 								multiline
@@ -102,52 +142,53 @@ export default function DocsView() {
 									setDraft(event.target.value);
 									setIsDirty(true);
 								}}
-								placeholder="Добавьте обзор продукта, правила и рабочие процессы..."
+								sx={{ mt: 2 }}
+								placeholder="Write your workspace overview, conventions and workflows..."
 							/>
-						</CardContent>
-					</Card>
-				</Grid>
-
-				<Grid size={{ xs: 12, lg: 5 }}>
-					<Card variant="outlined" sx={{ height: '100%' }}>
-						<CardHeader title="Preview" subheader="Быстрый просмотр текущего текста" />
-						<Divider />
-						<CardContent sx={{ display: 'grid', gap: 1.5 }}>
-							<Typography variant="caption" color="text.secondary">
-								Символов: {draft.length}
-							</Typography>
-							<Box
-								sx={{
-									minHeight: 420,
-									maxHeight: 640,
-									overflow: 'auto',
-									borderRadius: 1,
-									border: (theme) => `1px solid ${theme.vars.palette.divider}`,
-									p: 1.5,
-									whiteSpace: 'pre-wrap'
-								}}
-							>
-								<Typography variant="body2" color={draft.trim() ? 'text.primary' : 'text.secondary'}>
-									{draft.trim() ? draft : 'Документ пока пуст.'}
+						</Paper>
+					) : (
+						<Paper className="rounded-xl p-5 shadow-sm">
+							<Typography className="text-lg font-semibold">Preview</Typography>
+							<Divider className="my-4" />
+							<Box sx={{ minHeight: 480, whiteSpace: 'pre-wrap' }}>
+								<Typography color={draft.trim() ? 'text.primary' : 'text.secondary'}>
+									{draft.trim() ? draft : 'Document is empty.'}
 								</Typography>
 							</Box>
-						</CardContent>
-					</Card>
-				</Grid>
-			</Grid>
+						</Paper>
+					)}
+				</motion.div>
+			</div>
 
 			{saveM.isSuccess ? (
-				<Alert severity="success" sx={{ mt: 2 }}>
-					Документ сохранен.
+				<Alert severity="success" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
+					Overview document saved.
 				</Alert>
 			) : null}
 			{docQ.isError || saveM.isError ? (
-				<Alert severity="error" sx={{ mt: 2 }}>
+				<Alert severity="error" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
 					{String(docQ.error ?? saveM.error)}
 				</Alert>
 			) : null}
-		</Box>
+		</div>
 	);
 
-	return <Root header={header} content={content} scroll="content" />;
+	return (
+		<Root
+			header={
+				<DocsHeader
+					isDirty={isDirty}
+					saving={saveM.isPending}
+					onReset={() => {
+						setDraft(docQ.data?.content ?? '');
+						setIsDirty(false);
+					}}
+					onSave={() => saveM.mutate()}
+					wordCount={wordCount}
+				/>
+			}
+			content={content}
+			scroll="content"
+		/>
+	);
 }

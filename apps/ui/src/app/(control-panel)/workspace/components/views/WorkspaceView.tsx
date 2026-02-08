@@ -2,28 +2,32 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
 	Alert,
-	Box,
+	Avatar,
 	Button,
 	Card,
 	CardContent,
-	CardHeader,
 	Chip,
 	Divider,
 	FormControl,
-	Grid,
 	InputLabel,
 	List,
 	ListItemButton,
 	ListItemText,
 	MenuItem,
+	Paper,
 	Select,
 	Stack,
+	Tab,
+	Tabs,
 	TextField,
 	Typography
 } from '@mui/material';
-import { styled } from '@mui/material/styles';
+import { darken, styled } from '@mui/material/styles';
 import { useLocation, useNavigate } from 'react-router';
+import { motion } from 'motion/react';
 import FusePageSimple from '@fuse/core/FusePageSimple';
+import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
+import PageBreadcrumb from '@/components/PageBreadcrumb';
 import {
 	approveApproval,
 	createTask,
@@ -34,15 +38,11 @@ import {
 	listTasks,
 	rejectApproval
 } from '@/api/queries';
-import type { Approval, Task, TaskStatus } from '@/api/types';
+import type { Approval, Section, Task, TaskStatus } from '@/api/types';
 
-const Root = styled(FusePageSimple)(({ theme }) => ({
-	'& .FusePageSimple-header': {
-		borderBottom: `1px solid ${theme.vars.palette.divider}`,
-		background: theme.vars.palette.background.paper
-	},
-	'& .FusePageSimple-content': {
-		background: theme.vars.palette.background.default
+const Root = styled(FusePageSimple)(() => ({
+	'& .container': {
+		maxWidth: '100%!important'
 	}
 }));
 
@@ -69,11 +69,103 @@ function severityByStatus(status: TaskStatus): 'default' | 'info' | 'warning' | 
 	return 'default';
 }
 
+function WorkspaceHeader({
+	projectId,
+	projects,
+	capture,
+	onSetCapture,
+	onSelectProject,
+	onCreateTask,
+	creating
+}: {
+	projectId: string | null;
+	projects: Array<{ id: string; name: string }>;
+	capture: string;
+	onSetCapture: (value: string) => void;
+	onSelectProject: (id: string) => void;
+	onCreateTask: () => void;
+	creating: boolean;
+}) {
+	return (
+		<div className="container flex w-full border-b">
+			<div className="flex flex-auto flex-col p-4 md:px-8">
+				<PageBreadcrumb className="mb-2" />
+				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center">
+					<div className="flex flex-auto items-center gap-3">
+						<Avatar
+							sx={(theme) => ({
+								background: darken(theme.palette.background.default, 0.05),
+								color: theme.vars.palette.text.secondary
+							})}
+							className="h-12 w-12 shrink-0"
+						>
+							<FuseSvgIcon size={20}>lucide:layout-dashboard</FuseSvgIcon>
+						</Avatar>
+						<div className="min-w-0">
+							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">Workspace Dashboard</Typography>
+							<Typography className="text-md mt-1" color="text.secondary">
+								Control panel for tasks, approvals and run health
+							</Typography>
+						</div>
+					</div>
+
+					<div className="flex flex-col items-start gap-2 md:flex-row md:items-center">
+						<FormControl size="small" sx={{ minWidth: { xs: 230, md: 250 } }}>
+							<InputLabel id="workspace-project-label">Project</InputLabel>
+							<Select
+								labelId="workspace-project-label"
+								label="Project"
+								value={projectId ?? ''}
+								onChange={(event) => onSelectProject(String(event.target.value))}
+							>
+								{projects.map((project) => (
+									<MenuItem key={project.id} value={project.id}>{project.name}</MenuItem>
+								))}
+							</Select>
+						</FormControl>
+
+						<TextField
+							size="small"
+							label="Quick capture"
+							value={capture}
+							onChange={(event) => onSetCapture(event.target.value)}
+							onKeyDown={(event) => {
+								if (event.key === 'Enter' && capture.trim()) {
+									event.preventDefault();
+									onCreateTask();
+								}
+							}}
+							sx={{ minWidth: { xs: 230, md: 280 } }}
+						/>
+
+						<Button variant="contained" disabled={!capture.trim() || !projectId || creating} onClick={onCreateTask} startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>}>
+							{creating ? 'Adding...' : 'Add'}
+						</Button>
+					</div>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function StatCard({ title, value, icon }: { title: string; value: number; icon: string }) {
+	return (
+		<Paper className="flex flex-auto flex-col overflow-hidden rounded-xl p-4 shadow-sm">
+			<Stack direction="row" justifyContent="space-between" alignItems="center">
+				<Typography className="text-md" color="text.secondary">{title}</Typography>
+				<FuseSvgIcon size={18} color="action">{icon}</FuseSvgIcon>
+			</Stack>
+			<Typography className="mt-3 text-4xl leading-none font-bold tracking-tight">{value}</Typography>
+		</Paper>
+	);
+}
+
 export default function WorkspaceView() {
 	const location = useLocation();
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const [capture, setCapture] = useState('');
+	const [tabValue, setTabValue] = useState('overview');
 
 	const params = new URLSearchParams(location.search);
 	const projectId = params.get('projectId');
@@ -84,7 +176,7 @@ export default function WorkspaceView() {
 	const sectionsQ = useQuery({
 		queryKey: ['sections', projectId, 'workspace'],
 		queryFn: () => {
-			if (!projectId) return Promise.resolve([] as any[]);
+			if (!projectId) return Promise.resolve([] as Section[]);
 			return listSections(projectId);
 		},
 		enabled: !!projectId
@@ -160,7 +252,6 @@ export default function WorkspaceView() {
 	const approvals = approvalsQ.data ?? [];
 	const failed24h = useMemo(() => (failedQ.data ?? []).filter((run) => withinLastHours(run.created_at, 24)), [failedQ.data]);
 
-	const statusOrder: TaskStatus[] = ['ideas', 'todo', 'doing', 'review', 'release', 'done', 'archived'];
 	const statusCounts = useMemo(() => {
 		const output: Record<TaskStatus, number> = {
 			ideas: 0,
@@ -176,7 +267,7 @@ export default function WorkspaceView() {
 	}, [tasks]);
 
 	const recentTasks = useMemo(
-		() => [...tasks].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, 8),
+		() => [...tasks].sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at)).slice(0, 12),
 		[tasks]
 	);
 
@@ -195,200 +286,142 @@ export default function WorkspaceView() {
 		navigate(`/workspace?${next.toString()}`);
 	};
 
-	const header = (
-		<Box className="container" sx={{ width: '100%', px: { xs: 2, md: 3 }, py: 2 }}>
-			<Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} alignItems={{ xs: 'stretch', lg: 'flex-start' }} justifyContent="space-between">
-				<Box>
-					<Typography variant="overline" color="text.secondary">
-						Fuse Workspace
-					</Typography>
-					<Typography variant="h4" sx={{ fontWeight: 600, lineHeight: 1.1 }}>
-						Dashboard
-					</Typography>
-					<Typography variant="body2" color="text.secondary">
-						Все ключевые процессы проекта на одном экране.
-					</Typography>
-				</Box>
-
-				<Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ minWidth: { lg: 520 } }}>
-					<FormControl fullWidth size="small">
-						<InputLabel id="workspace-project-label">Проект</InputLabel>
-						<Select
-							labelId="workspace-project-label"
-							label="Проект"
-							value={projectId ?? ''}
-							onChange={(event) => selectProject(String(event.target.value))}
-						>
-							{(projectsQ.data ?? []).map((project) => (
-								<MenuItem key={project.id} value={project.id}>
-									{project.name}
-								</MenuItem>
-							))}
-						</Select>
-					</FormControl>
-
-					<TextField
-						size="small"
-						fullWidth
-						label="Быстрый захват"
-						value={capture}
-						onChange={(event) => setCapture(event.target.value)}
-						onKeyDown={(event) => {
-							if (event.key === 'Enter' && capture.trim()) {
-								event.preventDefault();
-								createTaskM.mutate(capture.trim());
-							}
-						}}
-					/>
-					<Button
-						variant="contained"
-						disabled={!capture.trim() || !projectId || createTaskM.isPending}
-						onClick={() => createTaskM.mutate(capture.trim())}
-					>
-						Добавить
-					</Button>
-				</Stack>
-			</Stack>
-		</Box>
-	);
+	const container = {
+		show: {
+			transition: {
+				staggerChildren: 0.04
+			}
+		}
+	};
+	const item = { hidden: { opacity: 0, y: 20 }, show: { opacity: 1, y: 0 } };
 
 	const content = (
-		<Box sx={{ width: '100%', px: { xs: 2, md: 3 }, py: 2.5 }}>
-			<Grid container spacing={2}>
-				{statusOrder.map((status) => (
-					<Grid key={status} size={{ xs: 6, sm: 3, md: 12 / 7 }}>
-						<Card variant="outlined">
-							<CardContent sx={{ py: 1.5 }}>
-								<Typography variant="caption" color="text.secondary">
-									{STATUS_LABEL[status]}
-								</Typography>
-								<Typography variant="h5" sx={{ fontWeight: 600, lineHeight: 1.1 }}>
-									{statusCounts[status]}
-								</Typography>
-							</CardContent>
-						</Card>
-					</Grid>
-				))}
-			</Grid>
+		<div className="w-full pt-4 sm:pt-6">
+			<div className="flex w-full flex-col justify-between gap-2 px-4 sm:flex-row sm:items-center md:px-8">
+				<Tabs value={tabValue} onChange={(_event, value: string) => setTabValue(value)}>
+					<Tab value="overview" label="Overview" />
+					<Tab value="approvals" label="Approvals" />
+					<Tab value="health" label="Health" />
+				</Tabs>
+			</div>
 
-			<Grid container spacing={2} sx={{ mt: 0.5 }}>
-				<Grid size={{ xs: 12, lg: 6 }}>
-					<Card variant="outlined" sx={{ height: '100%' }}>
-						<CardHeader title="Recent Tasks" subheader="Последние изменения" />
-						<Divider />
-						<List dense>
-							{recentTasks.length === 0 ? (
-								<ListItemText sx={{ px: 2, py: 2 }} primary="Пока нет задач" />
-							) : (
-								recentTasks.map((task) => (
-									<ListItemButton key={task.id} selected={task.id === selectedTaskId} onClick={() => openTask(task.id)}>
-										<ListItemText
-											primary={task.title}
-											secondary={`${STATUS_LABEL[task.status]} • ${new Date(task.updated_at).toLocaleString()}`}
-										/>
-										<Chip size="small" color={severityByStatus(task.status)} label={STATUS_LABEL[task.status]} />
-									</ListItemButton>
-								))
-							)}
-						</List>
-					</Card>
-				</Grid>
+			{tabValue === 'overview' && (
+				<motion.div className="grid w-full min-w-0 grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-4 md:px-8" variants={container} initial="hidden" animate="show">
+					<motion.div variants={item}><StatCard title="Tasks" value={tasks.length} icon="lucide:list-checks" /></motion.div>
+					<motion.div variants={item}><StatCard title="Approvals" value={approvals.length} icon="lucide:shield-alert" /></motion.div>
+					<motion.div variants={item}><StatCard title="Running" value={stuckQ.data?.length ?? 0} icon="lucide:activity" /></motion.div>
+					<motion.div variants={item}><StatCard title="Failed (24h)" value={failed24h.length} icon="lucide:octagon-alert" /></motion.div>
 
-				<Grid size={{ xs: 12, lg: 6 }}>
-					<Card variant="outlined" sx={{ height: '100%' }}>
-						<CardHeader title="Pending Approvals" subheader="Задачи, требующие решения" />
-						<Divider />
-						<List dense>
-							{approvals.length === 0 ? (
-								<ListItemText sx={{ px: 2, py: 2 }} primary="Нет pending approvals" />
-							) : (
-								approvals.slice(0, 10).map((approval: Approval) => (
-									<Box key={approval.id} sx={{ px: 1.5, py: 1 }}>
-										<Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="space-between">
-											<Box sx={{ minWidth: 0 }}>
-												<Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>
-													{approval.request_title ?? approval.task_title ?? approval.id}
-												</Typography>
-												<Typography variant="caption" color="text.secondary">
-													{new Date(approval.requested_at).toLocaleString()}
-												</Typography>
-											</Box>
-											<Stack direction="row" spacing={1}>
-												<Button
-													size="small"
-													variant="outlined"
-													disabled={approveM.isPending || !approval.task_id}
-													onClick={() => approveM.mutate(approval.id)}
-												>
-													Approve
-												</Button>
-												<Button
-													size="small"
-													color="error"
-													variant="outlined"
-													disabled={rejectM.isPending || !approval.task_id}
-													onClick={() => rejectM.mutate(approval.id)}
-												>
-													Reject
-												</Button>
-											</Stack>
-										</Stack>
-										<Divider sx={{ mt: 1 }} />
-									</Box>
-								))
-							)}
-						</List>
-					</Card>
-				</Grid>
-			</Grid>
+					<motion.div variants={item} className="sm:col-span-2 md:col-span-4 lg:col-span-2">
+						<Paper className="flex h-full flex-auto flex-col overflow-hidden rounded-xl p-6 shadow-sm">
+							<Typography className="text-xl leading-6 font-medium tracking-tight">Recent Tasks</Typography>
+							<List className="mt-2 divide-y py-0">
+								{recentTasks.length === 0 ? (
+									<ListItemText className="px-0 py-4" primary="No tasks yet" />
+								) : (
+									recentTasks.map((task) => (
+										<ListItemButton key={task.id} disableGutters selected={task.id === selectedTaskId} onClick={() => openTask(task.id)}>
+											<ListItemText primary={task.title} secondary={`${STATUS_LABEL[task.status]} · ${new Date(task.updated_at).toLocaleString()}`} />
+											<Chip size="small" color={severityByStatus(task.status)} label={STATUS_LABEL[task.status]} />
+										</ListItemButton>
+									))
+								)}
+							</List>
+						</Paper>
+					</motion.div>
 
-			<Grid container spacing={2} sx={{ mt: 0.5 }}>
-				<Grid size={{ xs: 12, lg: 6 }}>
-					<Card variant="outlined" sx={{ height: '100%' }}>
-						<CardHeader title="Run Health" subheader="Зависшие и упавшие ранны" />
-						<Divider />
-						<CardContent>
-							<Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-								<Chip color="warning" label={`Stuck: ${stuckQ.data?.length ?? 0}`} />
-								<Chip color="error" label={`Failed (24h): ${failed24h.length}`} />
-								<Chip color="info" label={`Sections: ${sectionsQ.data?.length ?? 0}`} />
-							</Stack>
-						</CardContent>
-					</Card>
-				</Grid>
-
-				<Grid size={{ xs: 12, lg: 6 }}>
-					<Card variant="outlined" sx={{ height: '100%' }}>
-						<CardHeader title="Task Focus" subheader="Выбранная задача" />
-						<Divider />
-						<CardContent>
+					<motion.div variants={item} className="sm:col-span-2 md:col-span-4 lg:col-span-2">
+						<Paper className="flex h-full flex-auto flex-col overflow-hidden rounded-xl p-6 shadow-sm">
+							<Typography className="text-xl leading-6 font-medium tracking-tight">Task Focus</Typography>
+							<Divider className="my-4" />
 							{selectedTask ? (
-								<Stack spacing={1}>
-									<Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-										{selectedTask.title}
-									</Typography>
-									<Chip size="small" color={severityByStatus(selectedTask.status)} label={STATUS_LABEL[selectedTask.status]} />
-									<Typography variant="body2" color="text.secondary">
-										Updated: {new Date(selectedTask.updated_at).toLocaleString()}
-									</Typography>
+								<Stack spacing={1.5}>
+									<Typography className="text-lg font-semibold">{selectedTask.title}</Typography>
+									<Chip size="small" color={severityByStatus(selectedTask.status)} label={STATUS_LABEL[selectedTask.status]} sx={{ width: 'fit-content' }} />
+									<Typography className="text-sm" color="text.secondary">Updated: {new Date(selectedTask.updated_at).toLocaleString()}</Typography>
 								</Stack>
 							) : (
-								<Typography variant="body2" color="text.secondary">
-									Выберите задачу из списка слева.
-								</Typography>
+								<Typography color="text.secondary">Select a task from Recent Tasks.</Typography>
 							)}
-						</CardContent>
-					</Card>
-				</Grid>
-			</Grid>
+						</Paper>
+					</motion.div>
+				</motion.div>
+			)}
+
+			{tabValue === 'approvals' && (
+				<Paper className="mx-4 overflow-hidden rounded-xl shadow-sm md:mx-8">
+					<Typography className="px-5 pt-5 text-xl font-semibold">Pending Approvals</Typography>
+					<Divider className="mt-4" />
+					<List className="divide-y py-0">
+						{approvals.length === 0 ? (
+							<ListItemText className="px-5 py-5" primary="No pending approvals" />
+						) : (
+							approvals.slice(0, 14).map((approval: Approval) => (
+								<ListItemButton key={approval.id} className="items-start px-5 py-4" disableGutters>
+									<ListItemText
+										primary={approval.request_title ?? approval.task_title ?? approval.id}
+										secondary={new Date(approval.requested_at).toLocaleString()}
+									/>
+									<Stack direction="row" spacing={1}>
+										<Button size="small" variant="outlined" disabled={approveM.isPending || !approval.task_id} onClick={() => approveM.mutate(approval.id)}>Approve</Button>
+										<Button size="small" color="error" variant="outlined" disabled={rejectM.isPending || !approval.task_id} onClick={() => rejectM.mutate(approval.id)}>Reject</Button>
+									</Stack>
+								</ListItemButton>
+							))
+						)}
+					</List>
+				</Paper>
+			)}
+
+			{tabValue === 'health' && (
+				<div className="grid w-full grid-cols-1 gap-4 px-4 py-4 md:grid-cols-2 md:px-8">
+					<Paper className="rounded-xl p-6 shadow-sm">
+						<Typography className="text-xl leading-6 font-medium tracking-tight">Status Breakdown</Typography>
+						<Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" className="mt-4">
+							{(Object.keys(STATUS_LABEL) as TaskStatus[]).map((status) => (
+								<Chip key={status} size="small" label={`${STATUS_LABEL[status]}: ${statusCounts[status]}`} color={severityByStatus(status)} />
+							))}
+						</Stack>
+					</Paper>
+
+					<Paper className="rounded-xl p-6 shadow-sm">
+						<Typography className="text-xl leading-6 font-medium tracking-tight">Run Health</Typography>
+						<Card className="mt-4 rounded-xl shadow-none" variant="outlined">
+							<CardContent>
+								<Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+									<Chip color="warning" label={`Stuck: ${stuckQ.data?.length ?? 0}`} />
+									<Chip color="error" label={`Failed (24h): ${failed24h.length}`} />
+									<Chip color="info" label={`Sections: ${sectionsQ.data?.length ?? 0}`} />
+								</Stack>
+							</CardContent>
+						</Card>
+					</Paper>
+				</div>
+			)}
 
 			{createTaskM.isError ? (
-				<Alert severity="error" sx={{ mt: 2 }}>
+				<Alert severity="error" sx={{ mx: { xs: 2, md: 4 }, mb: 2 }}>
 					{String(createTaskM.error)}
 				</Alert>
 			) : null}
-		</Box>
+		</div>
 	);
 
-	return <Root header={header} content={content} scroll="content" />;
+	return (
+		<Root
+			header={
+				<WorkspaceHeader
+					projectId={projectId}
+					projects={(projectsQ.data ?? []).map((project) => ({ id: project.id, name: project.name }))}
+					capture={capture}
+					onSetCapture={setCapture}
+					onSelectProject={selectProject}
+					onCreateTask={() => createTaskM.mutate(capture.trim())}
+					creating={createTaskM.isPending}
+				/>
+			}
+			content={content}
+			scroll="content"
+		/>
+	);
 }
