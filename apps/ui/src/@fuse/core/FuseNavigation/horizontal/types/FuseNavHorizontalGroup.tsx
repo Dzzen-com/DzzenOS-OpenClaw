@@ -146,7 +146,7 @@ function FuseNavHorizontalGroup(props: FuseNavHorizontalGroupProps) {
 										zIndex: 999 + nestedLevel
 									}}
 									data-placement={placement}
-									className={clsx('z-999', !opened && 'pointer-events-none')}
+									className={clsx('z-999')}
 								>
 									<Grow
 										in={opened}
