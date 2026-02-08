@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-	Avatar,
 	Button,
 	Divider,
 	FormControl,
 	InputLabel,
 	List,
+	ListItem,
 	ListItemButton,
 	ListItemText,
 	MenuItem,
@@ -16,10 +16,11 @@ import {
 	Tabs,
 	Typography
 } from '@mui/material';
-import { darken, styled } from '@mui/material/styles';
+import { styled } from '@mui/material/styles';
 import FusePageSimple from '@fuse/core/FusePageSimple';
 import { useLocation, useNavigate } from 'react-router';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
+import useThemeMediaQuery from '@fuse/hooks/useThemeMediaQuery';
 import PageBreadcrumb from '@/components/PageBreadcrumb';
 import { listApprovals, listProjects, listRuns, listSections, listTasks } from '@/api/queries';
 import type { Section, Task, TaskStatus } from '@/api/types';
@@ -34,9 +35,15 @@ import {
 	type ScheduleEntry
 } from '@/components/fuse-demo/widgets/ProjectDashboardWidgets';
 
-const Root = styled(FusePageSimple)(() => ({
+const Root = styled(FusePageSimple)(({ theme }) => ({
 	'& .container': {
 		maxWidth: '100%!important'
+	},
+	'& .FusePageSimple-contentWrapper': {
+		paddingTop: 2
+	},
+	'& .FusePageSimple-content': {
+		boxShadow: theme.vars.shadows[2]
 	}
 }));
 
@@ -62,10 +69,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 function inRange(iso: string, range: DashboardRange): boolean {
 	const time = Date.parse(iso);
+
 	if (!Number.isFinite(time)) return false;
+
 	const now = Date.now();
+
 	if (range === 'today') return time >= now - DAY_MS;
+
 	if (range === 'week') return time >= now - 7 * DAY_MS;
+
 	return time >= now - 30 * DAY_MS;
 }
 
@@ -84,10 +96,13 @@ function bucketByLast7Days(items: Array<{ at: string }>): number[] {
 
 	for (const item of items) {
 		const time = Date.parse(item.at);
+
 		if (!Number.isFinite(time)) continue;
+
 		const d = new Date(time);
 		const startItemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 		const dayDiff = Math.floor((startToday - startItemDay) / DAY_MS);
+
 		if (dayDiff >= 0 && dayDiff < 7) {
 			buckets[6 - dayDiff] += 1;
 		}
@@ -113,25 +128,24 @@ function ProjectsHeader({
 		<div className="container flex w-full border-b">
 			<div className="flex flex-auto flex-col p-4 md:px-8">
 				<PageBreadcrumb className="mb-2" />
-				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center">
-					<div className="flex flex-auto items-center gap-3">
-						<Avatar
-							sx={(theme) => ({
-								background: darken(theme.palette.background.default, 0.05),
-								color: theme.vars.palette.text.secondary
-							})}
-							className="h-12 w-12 shrink-0"
+				<div className="flex min-w-0 flex-auto flex-col gap-3 md:flex-row md:items-center md:justify-between">
+					<div className="min-w-0">
+						<Typography className="truncate text-3xl leading-none font-bold tracking-tight md:text-4xl">
+							{projectName}
+						</Typography>
+						<Typography
+							className="text-md mt-1"
+							color="text.secondary"
 						>
-							<FuseSvgIcon size={20}>lucide:kanban-square</FuseSvgIcon>
-						</Avatar>
-						<div className="min-w-0">
-							<Typography className="truncate text-2xl leading-none font-bold tracking-tight md:text-3xl">{projectName}</Typography>
-							<Typography className="text-md mt-1" color="text.secondary">Project dashboard with Fuse demo widgets</Typography>
-						</div>
+							Project dashboard with Fuse components
+						</Typography>
 					</div>
 
 					<div className="flex flex-col items-start gap-2 md:flex-row md:items-center">
-						<FormControl size="small" sx={{ minWidth: { xs: 230, md: 250 } }}>
+						<FormControl
+							size="small"
+							sx={{ minWidth: { xs: 230, md: 250 } }}
+						>
 							<InputLabel id="projects-page-project-label">Project</InputLabel>
 							<Select
 								labelId="projects-page-project-label"
@@ -140,11 +154,21 @@ function ProjectsHeader({
 								onChange={(event) => onSelectProject(String(event.target.value))}
 							>
 								{projects.map((project) => (
-									<MenuItem key={project.id} value={project.id}>{project.name}</MenuItem>
+									<MenuItem
+										key={project.id}
+										value={project.id}
+									>
+										{project.name}
+									</MenuItem>
 								))}
 							</Select>
 						</FormControl>
-						<Button variant="contained" onClick={onOpenWorkspace} startIcon={<FuseSvgIcon>lucide:list-todo</FuseSvgIcon>} disabled={!projectId}>
+						<Button
+							variant="contained"
+							onClick={onOpenWorkspace}
+							startIcon={<FuseSvgIcon>lucide:list-todo</FuseSvgIcon>}
+							disabled={!projectId}
+						>
 							Open Workspace
 						</Button>
 					</div>
@@ -155,17 +179,22 @@ function ProjectsHeader({
 }
 
 export default function ProjectsView() {
+	const isMobile = useThemeMediaQuery((theme) => theme.breakpoints.down('lg'));
 	const location = useLocation();
 	const navigate = useNavigate();
 	const [tabValue, setTabValue] = useState('overview');
 	const params = new URLSearchParams(location.search);
 	const projectId = params.get('projectId');
 
-	const projectsQ = useQuery({ queryKey: ['projects', 'projects-page'], queryFn: () => listProjects({ archived: 'active' }) });
+	const projectsQ = useQuery({
+		queryKey: ['projects', 'projects-page'],
+		queryFn: () => listProjects({ archived: 'active' })
+	});
 	const sectionsQ = useQuery({
 		queryKey: ['sections', projectId, 'projects-page'],
 		queryFn: () => {
 			if (!projectId) return Promise.resolve([] as Section[]);
+
 			return listSections(projectId);
 		},
 		enabled: !!projectId
@@ -174,6 +203,7 @@ export default function ProjectsView() {
 		queryKey: ['tasks', projectId, 'projects-page'],
 		queryFn: () => {
 			if (!projectId) return Promise.resolve([] as Task[]);
+
 			return listTasks({ projectId });
 		},
 		enabled: !!projectId
@@ -205,7 +235,10 @@ export default function ProjectsView() {
 	const runningRuns = useMemo(() => runningQ.data ?? [], [runningQ.data]);
 	const failedRuns = useMemo(() => failedQ.data ?? [], [failedQ.data]);
 
-	const selectedProject = useMemo(() => (projectsQ.data ?? []).find((project) => project.id === projectId) ?? null, [projectId, projectsQ.data]);
+	const selectedProject = useMemo(
+		() => (projectsQ.data ?? []).find((project) => project.id === projectId) ?? null,
+		[projectId, projectsQ.data]
+	);
 
 	const summaryCounts = useMemo(() => {
 		const out: Record<string, number> = {};
@@ -218,12 +251,19 @@ export default function ProjectsView() {
 	const summaryExtra = useMemo(() => {
 		const out: Record<string, number> = {};
 		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
-			out[key] = tasks.filter((task) => inRange(task.updated_at, key) && (task.status === 'doing' || task.status === 'review' || task.status === 'release')).length;
+			out[key] = tasks.filter(
+				(task) =>
+					inRange(task.updated_at, key) &&
+					(task.status === 'doing' || task.status === 'review' || task.status === 'release')
+			).length;
 		}
 		return out;
 	}, [tasks]);
 
-	const overdueCount = useMemo(() => tasks.filter((task) => task.status === 'review' || task.status === 'release').length, [tasks]);
+	const overdueCount = useMemo(
+		() => tasks.filter((task) => task.status === 'review' || task.status === 'release').length,
+		[tasks]
+	);
 	const issuesCount = failedRuns.length;
 	const featuresCount = sections.length;
 	const completedCount = useMemo(() => tasks.filter((task) => task.status === 'done').length, [tasks]);
@@ -234,8 +274,16 @@ export default function ProjectsView() {
 		const out: Record<string, Array<{ name: string; type?: 'line' | 'bar'; data: number[] }>> = {};
 		for (const key of Object.keys(DASHBOARD_RANGES) as DashboardRange[]) {
 			const scoped = tasks.filter((task) => inRange(task.updated_at, key));
-			const newData = bucketByLast7Days(scoped.filter((task) => task.status === 'ideas' || task.status === 'todo').map((task) => ({ at: task.updated_at })));
-			const closedData = bucketByLast7Days(scoped.filter((task) => task.status === 'done' || task.status === 'archived').map((task) => ({ at: task.updated_at })));
+			const newData = bucketByLast7Days(
+				scoped
+					.filter((task) => task.status === 'ideas' || task.status === 'todo')
+					.map((task) => ({ at: task.updated_at }))
+			);
+			const closedData = bucketByLast7Days(
+				scoped
+					.filter((task) => task.status === 'done' || task.status === 'archived')
+					.map((task) => ({ at: task.updated_at }))
+			);
 			out[key] = [
 				{ name: 'New', type: 'line', data: newData },
 				{ name: 'Closed', type: 'bar', data: closedData }
@@ -296,7 +344,10 @@ export default function ProjectsView() {
 				.slice(0, 4)
 				.map((approval) => ({
 					title: approval.request_title ?? approval.task_title ?? 'Pending approval',
-					time: new Date(approval.requested_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+					time: new Date(approval.requested_at).toLocaleTimeString([], {
+						hour: '2-digit',
+						minute: '2-digit'
+					}),
 					location: 'Approvals'
 				}));
 			const taskEntries = tasks
@@ -322,23 +373,65 @@ export default function ProjectsView() {
 	}, [sections, tasks]);
 
 	const content = (
-		<div className="w-full pt-4 sm:pt-6">
-			<div className="flex w-full flex-col justify-between gap-2 px-4 sm:flex-row sm:items-center md:px-8">
-				<Tabs value={tabValue} onChange={(_event, value: string) => setTabValue(value)}>
-					<Tab value="overview" label="Overview" />
-					<Tab value="sections" label="Sections" />
-					<Tab value="health" label="Health" />
+		<div className="flex w-full flex-col p-4 md:p-6">
+			<div className="flex w-full flex-col justify-between gap-2 sm:flex-row sm:items-center">
+				<Tabs
+					value={tabValue}
+					onChange={(_event, value: string) => setTabValue(value)}
+				>
+					<Tab
+						value="overview"
+						label="Overview"
+					/>
+					<Tab
+						value="sections"
+						label="Sections"
+					/>
+					<Tab
+						value="health"
+						label="Health"
+					/>
 				</Tabs>
 			</div>
 
 			{tabValue === 'overview' ? (
-				<div className="grid w-full min-w-0 grid-cols-1 gap-4 px-4 py-4 sm:grid-cols-2 md:grid-cols-4 md:px-8">
-					<SummaryWidget ranges={DASHBOARD_RANGES} counts={summaryCounts} extraCounts={summaryExtra} name="Tasks" extraName="Active" />
-					<MetricWidget title="Overdue" value={overdueCount} name="Need review" extraName="Pending approvals" extraCount={approvals.length} />
-					<MetricWidget title="Issues" value={issuesCount} name="Failed runs" extraName="Running" extraCount={runningRuns.length} />
-					<MetricWidget title="Features" value={featuresCount} name="Sections" extraName="Completed tasks" extraCount={completedCount} />
+				<div className="grid w-full min-w-0 grid-cols-1 gap-4 py-4 sm:grid-cols-2 md:grid-cols-4">
+					<SummaryWidget
+						ranges={DASHBOARD_RANGES}
+						counts={summaryCounts}
+						extraCounts={summaryExtra}
+						name="Tasks"
+						extraName="Active"
+					/>
+					<MetricWidget
+						title="Overdue"
+						value={overdueCount}
+						name="Need review"
+						extraName="Pending approvals"
+						extraCount={approvals.length}
+					/>
+					<MetricWidget
+						title="Issues"
+						value={issuesCount}
+						name="Failed runs"
+						extraName="Running"
+						extraCount={runningRuns.length}
+					/>
+					<MetricWidget
+						title="Features"
+						value={featuresCount}
+						name="Sections"
+						extraName="Completed tasks"
+						extraCount={completedCount}
+					/>
 					<div className="sm:col-span-2 md:col-span-4">
-						<GithubIssuesWidget ranges={DASHBOARD_RANGES} labels={labels} series={githubSeries} overview={githubOverview} title="Project Execution Summary" />
+						<GithubIssuesWidget
+							ranges={DASHBOARD_RANGES}
+							labels={labels}
+							series={githubSeries}
+							overview={githubOverview}
+							title="Project Execution Summary"
+						/>
 					</div>
 					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
 						<TaskDistributionWidget
@@ -349,21 +442,32 @@ export default function ProjectsView() {
 						/>
 					</div>
 					<div className="sm:col-span-2 md:col-span-4 lg:col-span-2">
-						<ScheduleWidget ranges={DASHBOARD_RANGES} series={scheduleSeries} />
+						<ScheduleWidget
+							ranges={DASHBOARD_RANGES}
+							series={scheduleSeries}
+						/>
 					</div>
 				</div>
 			) : null}
 
 			{tabValue === 'sections' ? (
-				<Paper className="mx-4 overflow-hidden rounded-xl shadow-sm md:mx-8">
+				<Paper className="overflow-hidden rounded-xl shadow-sm">
 					<Typography className="px-5 pt-5 text-xl font-semibold">Sections</Typography>
 					<Divider className="mt-4" />
 					<List className="divide-y py-0">
 						{sectionRows.length === 0 ? (
-							<ListItemText className="px-5 py-5" primary="No sections in project" />
+							<ListItem>
+								<ListItemText primary="No sections in project" />
+							</ListItem>
 						) : (
 							sectionRows.map((section) => (
-								<ListItemButton key={section.id} className="px-5 py-4" onClick={() => navigate(`/workspace?projectId=${encodeURIComponent(section.project_id)}`)}>
+								<ListItemButton
+									key={section.id}
+									className="px-5 py-4"
+									onClick={() =>
+										navigate(`/workspace?projectId=${encodeURIComponent(section.project_id)}`)
+									}
+								>
 									<ListItemText
 										primary={section.name}
 										secondary={`${section.section_kind === 'inbox' ? 'Inbox' : section.view_mode} · ${section.taskCount} tasks`}
@@ -376,14 +480,26 @@ export default function ProjectsView() {
 			) : null}
 
 			{tabValue === 'health' ? (
-				<Paper className="mx-4 overflow-hidden rounded-xl shadow-sm md:mx-8">
+				<Paper className="overflow-hidden rounded-xl shadow-sm">
 					<Typography className="px-5 pt-5 text-xl font-semibold">Run Health</Typography>
 					<Divider className="mt-4" />
 					<List className="divide-y py-0">
-						<ListItemText className="px-5 py-4" primary={`Running runs: ${runningRuns.length}`} />
-						<ListItemText className="px-5 py-4" primary={`Failed runs: ${failedRuns.length}`} />
-						<ListItemText className="px-5 py-4" primary={`Pending approvals: ${approvals.length}`} />
-						<ListItemText className="px-5 py-4" primary={`Sections: ${sections.length}`} />
+						<ListItemText
+							className="px-5 py-4"
+							primary={`Running runs: ${runningRuns.length}`}
+						/>
+						<ListItemText
+							className="px-5 py-4"
+							primary={`Failed runs: ${failedRuns.length}`}
+						/>
+						<ListItemText
+							className="px-5 py-4"
+							primary={`Pending approvals: ${approvals.length}`}
+						/>
+						<ListItemText
+							className="px-5 py-4"
+							primary={`Sections: ${sections.length}`}
+						/>
 					</List>
 				</Paper>
 			) : null}
@@ -402,11 +518,13 @@ export default function ProjectsView() {
 						next.set('projectId', id);
 						navigate(`/projects?${next.toString()}`);
 					}}
-					onOpenWorkspace={() => projectId && navigate(`/workspace?projectId=${encodeURIComponent(projectId)}`)}
+					onOpenWorkspace={() =>
+						projectId && navigate(`/workspace?projectId=${encodeURIComponent(projectId)}`)
+					}
 				/>
 			}
 			content={content}
-			scroll="content"
+			scroll={isMobile ? 'page' : 'content'}
 		/>
 	);
 }
